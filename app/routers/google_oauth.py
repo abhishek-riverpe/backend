@@ -76,8 +76,9 @@ async def google_callback(request: Request):
             }
         )
 
-    # Issue JWT using existing function
-    access_token = auth.create_access_token(data={"sub": email})
+    # Issue JWTs using new helpers (sub = user id)
+    access_token = auth.create_access_token(data={"sub": user.id, "type": "access"})
+    refresh_token = auth.create_refresh_token(data={"sub": user.id, "type": "refresh"})
 
     # Redirect back to React app with token and basic profile info
     query = urlencode({
@@ -86,4 +87,14 @@ async def google_callback(request: Request):
         "lastName": last_name or "",
     })
     redirect_to = f"{settings.frontend_url}/oauth/callback?{query}"
-    return RedirectResponse(url=redirect_to, status_code=302)
+    resp = RedirectResponse(url=redirect_to, status_code=302)
+    resp.set_cookie(
+        key="rp_refresh",
+        value=refresh_token,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        max_age=30 * 24 * 60 * 60,
+        path="/",
+    )
+    return resp
