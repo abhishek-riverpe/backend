@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
+echo "[start] prisma generate (runtime)"
+python -m prisma generate || true
+
 echo "[start] prisma py fetch (runtime)"
 python -m prisma py fetch || true
 
@@ -24,8 +27,19 @@ def find_one(patterns):
                         return os.path.join(dirpath, name)
     return None
 
-query = find_one(["*query-engine*", "prisma-query-engine-*"])
-schema = find_one(["*schema-engine*", "schema-engine-*"])
+# cover both naming styles seen in different bundles
+QUERY_PATTERNS = [
+    "*query-engine*",
+    "prisma-query-engine-*",
+    "libquery_engine-*",
+]
+SCHEMA_PATTERNS = [
+    "*schema-engine*",
+    "schema-engine-*",
+]
+
+query = find_one(QUERY_PATTERNS)
+schema = find_one(SCHEMA_PATTERNS)
 
 def make_exec(path):
     if not path or not os.path.exists(path):
@@ -33,22 +47,26 @@ def make_exec(path):
     st = os.stat(path)
     os.chmod(path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
+exports = []
 if query:
     make_exec(query)
+    exports.append(("PRISMA_QUERY_ENGINE_BINARY", query))
     print("[engine] query:", query)
-    print(f'::export::PRISMA_QUERY_ENGINE_BINARY={query}')
 else:
-    print("[warn] query engine not found")
+    print("[warn] query engine not found with patterns:", QUERY_PATTERNS)
 
 if schema:
     make_exec(schema)
+    exports.append(("PRISMA_SCHEMA_ENGINE_BINARY", schema))
     print("[engine] schema:", schema)
-    print(f'::export::PRISMA_SCHEMA_ENGINE_BINARY={schema}')
 else:
-    print("[warn] schema engine not found")
+    print("[warn] schema engine not found with patterns:", SCHEMA_PATTERNS)
+
+for k, v in exports:
+    print(f"::export::{k}={v}")
 PY
 
-# Read the "::export::KEY=VALUE" lines and export them
+# capture the ::export:: lines and export them into this shell
 while IFS= read -r line; do
   case "$line" in
     ::export::*)
@@ -66,7 +84,6 @@ ROOTS = [
     "/opt/render/.cache/prisma-python/binaries",
     "/opt/render/project/src",
 ]
-
 def find_one(patterns):
     for root in ROOTS:
         if not os.path.exists(root):
@@ -78,23 +95,22 @@ def find_one(patterns):
                         return os.path.join(dirpath, name)
     return None
 
-def make_exec(path):
-    if not path or not os.path.exists(path):
-        return
-    st = os.stat(path)
-    os.chmod(path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+QUERY_PATTERNS = ["*query-engine*","prisma-query-engine-*","libquery_engine-*"]
+SCHEMA_PATTERNS = ["*schema-engine*","schema-engine-*"]
 
-query = find_one(["*query-engine*", "prisma-query-engine-*"])
-schema = find_one(["*schema-engine*", "schema-engine-*"])
+def make_exec(p):
+    if p and os.path.exists(p):
+        st = os.stat(p)
+        os.chmod(p, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
-if query:
-    make_exec(query)
-    print(f"::export::PRISMA_QUERY_ENGINE_BINARY={query}")
-if schema:
-    make_exec(schema)
-    print(f"::export::PRISMA_SCHEMA_ENGINE_BINARY={schema}")
+q = find_one(QUERY_PATTERNS)
+s = find_one(SCHEMA_PATTERNS)
+if q:
+    make_exec(q); print(f"::export::PRISMA_QUERY_ENGINE_BINARY={q}")
+if s:
+    make_exec(s); print(f"::export::PRISMA_SCHEMA_ENGINE_BINARY={s}")
 PY
 )
 
-echo "[start] launch uvicorn on \$PORT=${PORT}"
+echo "[start] launching uvicorn on \$PORT=${PORT}"
 exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
