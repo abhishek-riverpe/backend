@@ -1,58 +1,46 @@
 #!/usr/bin/env bash
-# Fail on pipeline errors but not on our optional python helper
 set -e
 
-echo "[start] prisma py fetch at runtime (cache-safe)"
+echo "[start] prisma py fetch (runtime)"
 python -m prisma py fetch || true
 
-echo "[start] try to chmod prisma engines (best-effort)"
+echo "[start] locate & chmod prisma engines (recursive)"
 python - <<'PY'
-import os, stat, sys
+import os, stat, fnmatch
 
-def safe_chmod(path: str):
-    try:
-        if path and os.path.exists(path):
-            st = os.stat(path)
-            os.chmod(path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-            print("[chmod] made executable:", path)
-        else:
-            print("[chmod] not found:", path)
-    except Exception as e:
-        print("[chmod] skipping:", e)
-
-# Try the exact paths prisma logs usually reference on Render
-candidates = [
-    "/opt/render/project/src/prisma-query-engine-debian-openssl-3.0.x",
-    "/opt/render/.cache/prisma-python/binaries/5.17.0/393aa359c9ad4a4bb28630fb5613f9c281cde053/prisma-query-engine-debian-openssl-3.0.x",
-    "/opt/render/.cache/prisma-python/binaries/5.17.0/393aa359c9ad4a4bb28630fb5613f9c281cde053/node_modules/prisma/query-engine-debian-openssl-3.0.x",
+roots = [
+    "/opt/render/.cache/prisma-python/binaries",
+    "/opt/render/project/src",  # sometimes engines are symlinked here
 ]
 
-# Also try to introspect paths via prisma internals, but don't fail if it changes
-try:
-    # prisma 0.15.x sometimes exposes this import path in stacktraces
-    from prisma.engine import utils as _utils
-    try:
-        from prisma.engine._query import BINARY_PATHS as _BP
-        candidates.append(getattr(_BP, "query_engine", None))
-        candidates.append(getattr(_BP, "schema_engine", None))
-    except Exception as e:
-        print("[introspect] could not import BINARY_PATHS:", e)
-except Exception as e:
-    print("[introspect] prisma internals not available:", e)
+patterns = [
+    "*query-engine*",
+    "*schema-engine*",
+    "prisma-query-engine-*",
+    "schema-engine-*",
+]
 
-# De-dup while preserving order
-seen = set()
-deduped = []
-for p in candidates:
-    if p and p not in seen:
-        deduped.append(p)
-        seen.add(p)
+found = []
+for root in roots:
+    if not os.path.exists(root):
+        continue
+    for dirpath, _, filenames in os.walk(root):
+        for name in filenames:
+            for pat in patterns:
+                if fnmatch.fnmatch(name, pat):
+                    path = os.path.join(dirpath, name)
+                    try:
+                        st = os.stat(path)
+                        os.chmod(path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                        print("[chmod] +x", path)
+                        found.append(path)
+                    except Exception as e:
+                        print("[chmod] skip", path, "->", e)
+                    break
 
-for p in deduped:
-    safe_chmod(p)
-
-sys.exit(0)
+if not found:
+    print("[warn] no prisma engines found under:", roots)
 PY
 
-echo "[start] launching uvicorn on \$PORT=${PORT}"
-exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT}"
+echo "[start] launch uvicorn on \$PORT=${PORT}"
+exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
