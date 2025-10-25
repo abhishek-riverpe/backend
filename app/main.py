@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -6,6 +7,9 @@ from .database import db
 from .routers import user, account, google_oauth
 from .routers import auth_routes
 from .middleware import RequestSizeLimitMiddleware
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -36,6 +40,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await db.connect()
+    logger.info("Successfully connected to the database")
 
 @app.on_event("shutdown")
 async def shutdown():
