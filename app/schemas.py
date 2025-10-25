@@ -1,11 +1,13 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
-
+class SignInInput(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=1)
+    
 class UserCreate(BaseModel):
-    username: EmailStr
-    password: str = Field(..., min_length=6)
-    firstName: str
-    lastName: str
+    name: str = Field(..., min_length=3, max_length=30)
+    email: EmailStr
+    password: str = Field(..., min_length=12, max_length=128)
 
 class UserLogin(BaseModel):
     username: EmailStr
@@ -19,7 +21,7 @@ class UserUpdate(BaseModel):
 class Token(BaseModel):
     access_token: str
     refresh_token: str
-    token_type: str
+    token_type: str = "bearer"
 
 class TokenData(BaseModel):
     sub: Optional[str] = None  # user id
