@@ -70,3 +70,15 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
+
+async def get_current_entity(token: str = Depends(oauth2_scheme)):
+    # Validate access token and extract entity id (sub)
+    payload = verify_token_type(token, "access")
+    entity_id: Optional[str] = payload.get("sub")
+    if not entity_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+
+    entity = await db.entities.find_unique(where={"entity_id": entity_id})
+    if entity is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
+    return entity
