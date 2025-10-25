@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     backend_url: str | None = None
 
+    # Zynk API settings
+    zynk_base_url: str | None = None
+    zynk_api_key: str | None = None
+    zynk_timeout_s: int = 30
+
     # Max request size in megabytes (used by custom middleware)
     max_request_size_mb: int = 10
 

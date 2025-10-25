@@ -60,6 +60,7 @@ model User {
 
 model entities {
   entity_id          String             @id @default(uuid()) @db.Uuid
+  external_entity_id String?            @unique
   entity_type        EntityTypeEnum     @default(INDIVIDUAL)
   email              String            @unique
   name               String
