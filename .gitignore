@@ -1,0 +1,111 @@
+# ==========================================
+# FASTAPI BACKEND .GITIGNORE
+# ==========================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual Environment ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Environment Variables ---
+.env
+.env.*
+!.env.example  # Keep a sample env file for reference
+
+# --- Logs and Temp Files ---
+*.log
+*.pot
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+*.db-journal
+*.pid
+*.seed
+*.pid.lock
+*.bak
+*.swp
+*~
+tmp/
+temp/
+
+# --- IDE / Editor Config ---
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
+
+# --- Testing ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.cache/
+coverage.xml
+*.cover
+*.py,cover
+
+# --- Build / Distribution ---
+build/
+dist/
+*.egg-info/
+.eggs/
+MANIFEST
+
+# --- Mypy / Pylint / Ruff ---
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+ruff_cache/
+
+# --- Jupyter / Notebooks ---
+.ipynb_checkpoints/
+
+# --- Prisma (Python ORM) ---
+# prisma/migrations/
+# Keep schema.prisma tracked
+!prisma/schema.prisma
+# Optional: if you use generated Prisma client in venv
+*.dbml
+
+# --- Docker ---
+*.pid
+docker-compose.override.yml
+
+# --- SQLite / Local DB ---
+*.sqlite
+*.sqlite3
+local.db
+
+# --- Deployment / Secrets ---
+secrets/
+*.pem
+*.key
+*.crt
+
+# --- Poetry / Pipenv (if used) ---
+poetry.lock
+Pipfile.lock
+Pipfile
+
+# --- Node (if integrated with frontend builds) ---
+node_modules/
+*.tsbuildinfo
+
+# --- Local Files ---
+*.bak
+*.old
+*.tmp

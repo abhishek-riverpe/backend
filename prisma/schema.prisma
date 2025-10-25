@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-py"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --------------------
+// ENUM DEFINITIONS
+// --------------------
+enum EntityStatusEnum {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum EntityTypeEnum {
+  INDIVIDUAL
+  BUSINESS
+}
+
+enum KycStatusEnum {
+  PENDING
+  INITIATED
+  REVIEWING
+  APPROVED
+  ADDITIONAL_INFO_REQUIRED
+  REJECTED
+}
+
+enum WebhookEventCategory {
+  KYC
+  TRANSFER
+  PAYMENT
+  ALM
+  TELEPORT
+}
+
+enum WebhookDeliveryStatusEnum {
+  PENDING
+  SUCCESS
+  FAILED
+  RETRYING
+}
+
+// --------------------
+// MODEL DEFINITIONS
+// --------------------
+
+model User {
+  id            String   @id @default(cuid())
+  username      String   @unique
+  password_hash String
+  first_name    String
+  last_name     String
+}
+
+model entities {
+  entity_id          String             @id @default(uuid()) @db.Uuid
+  external_entity_id String?            @unique
+  entity_type        EntityTypeEnum     @default(INDIVIDUAL)
+  email              String            @unique
+  name               String
+  password           String
+  email_verified     Boolean?           @default(false)
+  last_login_at      DateTime?
+  login_attempts     Int?               @default(0)
+  locked_until       DateTime?
+  encrypted_data     Bytes?
+  encryption_key_id  String?
+  status             EntityStatusEnum   @default(PENDING)
+  created_at         DateTime?          @default(now())
+  updated_at         DateTime?          @default(now())
+  deleted_at         DateTime?
+
+  // Relations
+  kyc_sessions       kyc_sessions[]
+  webhook_events     webhook_events[]
+
+  @@map("entities")
+}
+
+model kyc_sessions {
+  kyc_session_id     String          @id @default(uuid()) @db.Uuid
+  entity_id          String          @db.Uuid
+  routing_id         String?
+  status             KycStatusEnum   @default(PENDING)
+  routing_enabled    Boolean?        @default(false)
+  initiated_at       DateTime?
+  completed_at       DateTime?
+  rejection_reason   String?
+  created_at         DateTime?       @default(now())
+  updated_at         DateTime?       @default(now())
+  deleted_at         DateTime?
+
+  // Relations
+  entity             entities        @relation(fields: [entity_id], references: [entity_id])
+  kyc_documents      kyc_documents[]
+  webhook_events     webhook_events[]
+
+  @@map("kyc_sessions")
+}
+
+model kyc_documents {
+  document_id        String        @id @default(uuid()) @db.Uuid
+  kyc_session_id     String        @db.Uuid
+  document_type      String
+  file_path          String?
+  encrypted_data     Bytes?
+  uploaded_at        DateTime?     @default(now())
+  deleted_at         DateTime?
+
+  // Relations
+  kyc_session        kyc_sessions  @relation(fields: [kyc_session_id], references: [kyc_session_id])
+
+  @@map("kyc_documents")
+}
+
+model webhook_events {
+  event_id           String                    @id @default(uuid()) @db.Uuid
+  event_category     WebhookEventCategory
+  event_type         String
+  event_status       String?
+  entity_id          String?                   @db.Uuid
+  kyc_session_id     String?                   @db.Uuid
+  transfer_id        String?                   @db.Uuid
+  alm_tx_id          String?                   @db.Uuid
+  teleport_id        String?                   @db.Uuid
+  event_payload      Json
+  delivery_status    WebhookDeliveryStatusEnum  @default(PENDING)
+  delivery_attempts  Int?                       @default(0)
+  last_attempt_at    DateTime?
+  next_retry_at      DateTime?
+  http_status_code   Int?
+  response_body      String?
+  created_at         DateTime?                  @default(now())
+
+  // Relations
+  entity             entities?                  @relation(fields: [entity_id], references: [entity_id])
+  kyc_session        kyc_sessions?              @relation(fields: [kyc_session_id], references: [kyc_session_id])
+  // Transfers, alm_transactions, teleport_routes can be added later if models exist
+
+  @@map("webhook_events")
+}
