@@ -75,7 +75,7 @@ ruff_cache/
 .ipynb_checkpoints/
 
 # --- Prisma (Python ORM) ---
-prisma/migrations/
+# prisma/migrations/
 # Keep schema.prisma tracked
 !prisma/schema.prisma
 # Optional: if you use generated Prisma client in venv
