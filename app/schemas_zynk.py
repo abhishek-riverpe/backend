@@ -50,6 +50,16 @@ class ZynkEntitiesData(BaseModel):
     entities: List[ZynkEntityOut]
     paginationData: PaginationData
 
+# Data structure for single entity response
+class ZynkSingleEntityData(BaseModel):
+    message: str
+    entity: ZynkEntityOut
+
+# Response model for get single entity
+class ZynkEntityResponse(BaseModel):
+    success: bool
+    data: ZynkSingleEntityData
+
 # Response model for get all entities
 class ZynkEntitiesResponse(BaseModel):
     success: bool
