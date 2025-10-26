@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from .config import settings
 from .database import db
-from .routers import user, account, google_oauth, auth_routes, zync
+from .routers import user, account, google_oauth, auth_routes, zync, transformer
 from .middleware import RequestSizeLimitMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +52,7 @@ app.include_router(account.router)
 app.include_router(google_oauth.router)
 app.include_router(auth_routes.router)
 app.include_router(zync.router)
+app.include_router(transformer.router)
 
 @app.get("/")
 def read_root():
