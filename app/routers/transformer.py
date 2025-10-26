@@ -135,3 +135,73 @@ async def get_entity_by_id(
         return body
 
     raise HTTPException(status_code=502, detail="Failed to fetch entity from upstream service after multiple attempts")
+
+@router.get("/entity/email/{email}", response_model=ZynkEntityResponse)
+async def get_entity_by_email(
+    email: str,
+    current: Entities = Depends(auth.get_current_entity)
+):
+    """
+    Fetch a single entity by email from ZyncLab via their API.
+    Ensures that users can only access their own entity data based on email for security.
+    Requires authentication and ownership validation in the banking system.
+    """
+    # Ensure the authenticated user's email matches the requested email
+    if current.email != email:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your own entity data.")
+
+    # Ensure the entity has an external_entity_id set (means it's linked to ZyncLab)
+    if not current.external_entity_id:
+        raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
+
+    # Construct the URL using the email for the upstream call
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/email/{email}"
+    headers = {**_auth_header(), "Accept": "application/json"}
+
+    # Make the request to ZyncLab with retry logic
+    for attempt in range(2):  # 1 retry
+        try:
+            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+                resp = await client.get(url, headers=headers)
+        except httpx.RequestError:
+            if attempt == 0:
+                continue
+            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+
+        try:
+            body = resp.json()
+        except ValueError:
+            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+
+        if not (200 <= resp.status_code < 300):
+            # Extract upstream error details for user-friendly messaging
+            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail="Entity not found in external service.")
+            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+
+        if body.get("success") is not True:
+            error_detail = body.get("message", body.get("error", "Request was not successful"))
+            if "not found" in error_detail.lower():
+                raise HTTPException(status_code=404, detail="Entity not found in external service.")
+            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+
+        # Validate that data exists for the response schema
+        data = body.get("data")
+        if data is None or "entity" not in data:
+            raise HTTPException(status_code=502, detail="Upstream service did not provide the expected data structure")
+
+        # Additional validation to ensure entity contains essential fields
+        entity = data["entity"]
+        required_fields = ["entityId", "type", "firstName", "lastName", "email"]
+        for field in required_fields:
+            if field not in entity:
+                raise HTTPException(status_code=502, detail=f"Upstream service response missing required field: {field}")
+
+        # Return the upstream response as it matches our schema
+        return body
+
+    raise HTTPException(status_code=502, detail="Failed to fetch entity from upstream service after multiple attempts")
