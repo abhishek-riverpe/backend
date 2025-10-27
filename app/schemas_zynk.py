@@ -110,6 +110,25 @@ class ZynkKycRequirementsResponse(BaseModel):
     success: bool
     data: ZynkKycRequirementsData
 
+# Model for KYC document
+class ZynkKycDocument(BaseModel):
+    documentId: str
+    fieldId: str
+    fieldName: str
+    status: str
+    submittedAt: Optional[str] = None
+    content: Optional[str] = None  # Base64 or URL
+
+# Data structure for KYC documents response
+class ZynkKycDocumentsData(BaseModel):
+    message: str
+    documents: List[ZynkKycDocument]
+
+# Response model for get KYC documents
+class ZynkKycDocumentsResponse(BaseModel):
+    success: bool
+    data: ZynkKycDocumentsData
+
 # Response model for get all entities
 class ZynkEntitiesResponse(BaseModel):
     success: bool
