@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
@@ -59,6 +60,74 @@ class ZynkSingleEntityData(BaseModel):
 class ZynkEntityResponse(BaseModel):
     success: bool
     data: ZynkSingleEntityData
+
+# Model for KYC fees in the response
+class ZynkKycFees(BaseModel):
+    network: str
+    currency: str
+    tokenAddress: str
+    amount: float
+    toWalletAddress: str
+    paymentReceived: bool
+
+# Model for KYC status item in the response
+class ZynkKycStatusItem(BaseModel):
+    routingId: str
+    supportedRoutes: List[str]
+    kycStatus: str
+    routingEnabled: bool
+    kycFees: ZynkKycFees
+
+# Data structure for KYC response
+class ZynkKycData(BaseModel):
+    message: str
+    status: List[ZynkKycStatusItem]
+
+# Response model for get KYC
+class ZynkKycResponse(BaseModel):
+    success: bool
+    data: ZynkKycData
+
+# Model for KYC requirement field
+class ZynkKycRequirementField(BaseModel):
+    fieldId: str
+    fieldName: str
+    fieldType: str
+    fieldChoices: List[str]
+    fieldRequired: bool
+    fieldDescription: Optional[str] = None
+    fieldDefaultValue: Optional[str] = None
+    isEditable: bool
+    children: Optional[List['ZynkKycRequirementField']] = []
+
+# Data structure for KYC requirements response
+class ZynkKycRequirementsData(BaseModel):
+    message: str
+    kycRequirements: List[ZynkKycRequirementField]
+
+# Response model for get KYC requirements
+class ZynkKycRequirementsResponse(BaseModel):
+    success: bool
+    data: ZynkKycRequirementsData
+
+# Model for KYC document
+class ZynkKycDocument(BaseModel):
+    documentId: str
+    fieldId: str
+    fieldName: str
+    status: str
+    submittedAt: Optional[str] = None
+    content: Optional[str] = None  # Base64 or URL
+
+# Data structure for KYC documents response
+class ZynkKycDocumentsData(BaseModel):
+    message: str
+    documents: List[ZynkKycDocument]
+
+# Response model for get KYC documents
+class ZynkKycDocumentsResponse(BaseModel):
+    success: bool
+    data: ZynkKycDocumentsData
 
 # Response model for get all entities
 class ZynkEntitiesResponse(BaseModel):
