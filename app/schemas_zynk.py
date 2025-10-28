@@ -133,3 +133,22 @@ class ZynkKycDocumentsResponse(BaseModel):
 class ZynkEntitiesResponse(BaseModel):
     success: bool
     data: ZynkEntitiesData
+
+# Model for personal details in KYC upload
+class PersonalDetails(BaseModel):
+    full_name: Optional[str] = None
+    date_of_birth: Optional[str] = None  # ISO 8601 format e.g. 1985-07-15T00:00:00Z
+    identity_document_url: Optional[str] = None  # S3 URL
+    identity_document: Optional[str] = None  # Base64 encoded document data
+
+# Request model for uploading KYC documents
+class KycDocumentUpload(BaseModel):
+    transactionHash: Optional[str] = None
+    base64Signature: Optional[str] = None
+    personal_details: Optional[PersonalDetails] = None
+
+# Response model for KYC upload
+class KycUploadResponse(BaseModel):
+    success: bool
+    message: str
+    data: Optional[Dict[str, Any]] = None
