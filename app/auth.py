@@ -5,11 +5,9 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, ExpiredSignatureError, jwt
 from passlib.context import CryptContext
-from prisma.models import User
 
 from .config import settings
 from .database import db
-from .schemas import TokenData
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin")
@@ -17,9 +15,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE = timedelta(hours=24)
 REFRESH_TOKEN_EXPIRE = timedelta(days=30)
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password):
     return pwd_context.hash(password)
@@ -59,17 +54,6 @@ def verify_token_type(token: str, expected_type: str) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
     return payload
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
-    # Validate access token and extract user id (sub)
-    payload = verify_token_type(token, "access")
-    user_id: Optional[str] = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-
-    user = await db.user.find_unique(where={"id": user_id})
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    return user
 
 async def get_current_entity(token: str = Depends(oauth2_scheme)):
     # Validate access token and extract entity id (sub)

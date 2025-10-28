@@ -28,10 +28,11 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     Create a new entity (user) with username, email, password.
     Returns access & refresh tokens and sets refresh token as HttpOnly cookie.
     """
-    # Normalize inputs
-    name = user_in.name.strip()
+    first_name = user_in.first_name.strip()
+    last_name = user_in.last_name.strip()
     email = normalize_email(user_in.email)
     password = user_in.password
+    print(f"Signup request: first_name={first_name}, last_name={last_name}, email={email}, password={password}")
 
     # Validate semantics
     try:
@@ -63,15 +64,12 @@ async def signup(user_in: schemas.UserCreate, response: Response):
                     # Store the hash. If your model is still `password`, set "password": pwd_hash
                     "password": pwd_hash,
                     # Optionally copy username into display name at first registration
-                    "name": user_in.name,
+                    "first_name": first_name,
+                    "last_name": last_name,
                     # status defaults to PENDING; you can keep it until email verification finishes
                     # created_at/updated_at default to now()
                 }
             )
-
-            # If you also create an account row, do it here.
-            # Guard with try/except or check if `account` model exists.
-            # await tx.account.create(data={"entityId": entity.entity_id, "balance": 0})
 
     except UniqueViolationError:
         # Race condition safety: DB unique constraint fired despite pre-check
@@ -100,7 +98,8 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         "external_entity_id": entity.external_entity_id if hasattr(entity, "external_entity_id") else None,
         "entity_type": str(entity.entity_type) if hasattr(entity, "entity_type") else None,
         "email": entity.email if hasattr(entity, "email") else None,
-        "name": entity.name if hasattr(entity, "name") else None,
+        "first_name": entity.first_name if hasattr(entity, "first_name") else None,
+        "last_name": entity.last_name if hasattr(entity, "last_name") else None,
         "email_verified": entity.email_verified if hasattr(entity, "email_verified") else None,
         "last_login_at": entity.last_login_at.isoformat() if getattr(entity, "last_login_at", None) else None,
         "login_attempts": entity.login_attempts if hasattr(entity, "login_attempts") else None,
@@ -109,6 +108,8 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         "created_at": entity.created_at.isoformat() if getattr(entity, "created_at", None) else None,
         "updated_at": entity.updated_at.isoformat() if getattr(entity, "updated_at", None) else None,
     }
+
+    print(f"Signup response: access_token={access_token}, refresh_token={refresh_token}, user={safe_user}")
 
     return {
         "success": True,
@@ -248,7 +249,8 @@ async def signin(payload: schemas.SignInInput, response: Response):
         "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
-        "name": user.name if hasattr(user, "name") else None,
+        "first_name": user.first_name if hasattr(user, "first_name") else None,
+        "last_name": user.last_name if hasattr(user, "last_name") else None,
         "email_verified": user.email_verified if hasattr(user, "email_verified") else None,
         "last_login_at": user.last_login_at.isoformat() if getattr(user, "last_login_at", None) else None,
         "login_attempts": user.login_attempts if hasattr(user, "login_attempts") else None,
@@ -309,7 +311,8 @@ async def refresh_token(request: Request, response: Response):
         "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
-        "name": user.name if hasattr(user, "name") else None,
+        "first_name": user.first_name if hasattr(user, "first_name") else None,
+        "last_name": user.last_name if hasattr(user, "last_name") else None,
         "email_verified": user.email_verified if hasattr(user, "email_verified") else None,
         "last_login_at": user.last_login_at.isoformat() if getattr(user, "last_login_at", None) else None,
         "login_attempts": user.login_attempts if hasattr(user, "login_attempts") else None,
@@ -344,101 +347,3 @@ async def logout(response: Response):
         "meta": {},
     }
     
-# @router.post("/signup", response_model=schemas.Token)
-# async def signup(user_in: schemas.entities, response: Response):
-    # existing_user = await db.user.find_unique(where={"username": user_in.username})
-    # if existing_user:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_409_CONFLICT,
-    #         detail="Email already registered",
-    #     )
-
-    # hashed_password = auth.get_password_hash(user_in.password)
-
-    # user = await db.user.create(
-    #     data={
-    #         "username": user_in.username,
-    #         "password_hash": hashed_password,
-    #         "first_name": user_in.firstName,
-    #         "last_name": user_in.lastName,
-    #     }
-    # )
-
-    # await db.account.create(
-    #     data={
-    #         "userId": user.id,
-    #         "balance": round(1 + random.random() * 9999, 2)
-    #     }
-    # )
-
-    # access_token = auth.create_access_token(data={"sub": user.id, "type": "access"})
-    # refresh_token = auth.create_refresh_token(data={"sub": user.id, "type": "refresh"})
-    # # HttpOnly cookie for refresh token
-    # response.set_cookie(
-    #     key="rp_refresh",
-    #     value=refresh_token,
-    #     httponly=True,
-    #     samesite="lax",
-    #     secure=False,  # set True in production behind HTTPS
-    #     max_age=30 * 24 * 60 * 60,
-    #     path="/",
-    # )
-    # return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
-
-
-# @router.post("/signin", response_model=schemas.Token)
-# async def signin(credentials: schemas.UserLogin, response: Response):
-#     user = await db.user.find_unique(where={"username": credentials.username})
-#     if not user or not auth.verify_password(credentials.password, user.password_hash):
-#         raise HTTPException(
-#             status_code=status.HTTP_401_UNAUTHORIZED,
-#             detail="Incorrect username or password",
-#             headers={"WWW-Authenticate": "Bearer"},
-#         )
-
-#     access_token = auth.create_access_token({"sub": user.id, "type": "access"})
-#     refresh_token = auth.create_refresh_token({"sub": user.id, "type": "refresh"})
-#     response.set_cookie(
-#         key="rp_refresh",
-#         value=refresh_token,
-#         httponly=True,
-#         samesite="lax",
-#         secure=False,
-#         max_age=30 * 24 * 60 * 60,
-#         path="/",
-#     )
-#     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
-
-
-# @router.post("/refresh", response_model=schemas.Token)
-# async def refresh_token(request: Request, body: schemas.RefreshRequest | None = None, response: Response = None):
-#     # Take refresh token from body or HttpOnly cookie
-#     rt = (body.refresh_token if body else None) or request.cookies.get("rp_refresh")
-#     if not rt:
-#         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
-#     # Validate refresh token type and expiry; no DB lookup
-#     payload = auth.verify_token_type(rt, "refresh")
-#     user_id = payload.get("sub")
-#     if not user_id:
-#         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-
-#     access_token = auth.create_access_token({"sub": user_id, "type": "access"})
-#     refresh_token = auth.create_refresh_token({"sub": user_id, "type": "refresh"})
-#     if response is not None:
-#         response.set_cookie(
-#             key="rp_refresh",
-#             value=refresh_token,
-#             httponly=True,
-#             samesite="lax",
-#             secure=False,
-#             max_age=30 * 24 * 60 * 60,
-#             path="/",
-#         )
-#     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
-
-
-# @router.post("/logout")
-# async def logout(response: Response):
-#     # Clear HttpOnly refresh cookie and instruct client to delete tokens
-#     response.delete_cookie("rp_refresh", path="/")
-#     return {"message": "Logged out. Tokens cleared."}
