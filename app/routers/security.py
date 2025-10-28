@@ -3,10 +3,7 @@ from passlib.context import CryptContext
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,30}$")  # lowercase only for simplicity
-
-def normalize_username(u: str) -> str:
-    return u.strip().lower()
+USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,30}$")  # kept for legacy references (unused)
 
 def normalize_email(e: str) -> str:
     return e.strip()
@@ -18,9 +15,9 @@ def validate_username(u: str) -> None:
         raise ValueError("Username cannot be only digits")
 
 def validate_password(p: str) -> None:
-    # Banking-grade baseline: length >= 12, and character diversity
-    if len(p) < 12:
-        raise ValueError("Password must be at least 12 characters")
+    # Baseline: length >= 8, and character diversity
+    if len(p) < 8:
+        raise ValueError("Password must be at least 8 characters")
     if not re.search(r"[A-Z]", p):
         raise ValueError("Password must include at least one uppercase letter")
     if not re.search(r"[a-z]", p):

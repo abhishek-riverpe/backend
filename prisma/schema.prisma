@@ -50,20 +50,13 @@ enum WebhookDeliveryStatusEnum {
 // MODEL DEFINITIONS
 // --------------------
 
-model User {
-  id            String   @id @default(cuid())
-  username      String   @unique
-  password_hash String
-  first_name    String
-  last_name     String
-}
-
 model entities {
   entity_id          String             @id @default(uuid()) @db.Uuid
   external_entity_id String?            @unique
   entity_type        EntityTypeEnum     @default(INDIVIDUAL)
   email              String            @unique
-  name               String
+  first_name         String
+  last_name          String
   password           String
   email_verified     Boolean?           @default(false)
   last_login_at      DateTime?
