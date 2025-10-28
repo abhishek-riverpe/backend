@@ -7,8 +7,8 @@ from passlib.context import CryptContext
 
 # from prisma.models import entities  # prisma python generates models from schema
 from .security import (
-    normalize_username, normalize_email,
-    validate_username, validate_password,
+    normalize_email,
+    validate_password,
     hash_password,
 )
 
@@ -21,20 +21,20 @@ router = APIRouter(
     tags=["auth"],
 )
 
-@router.post("/signup", response_model=schemas.Token, status_code=status.HTTP_201_CREATED)
+# Return unified response with tokens + user
+@router.post("/signup", response_model=schemas.AuthResponse, status_code=status.HTTP_201_CREATED)
 async def signup(user_in: schemas.UserCreate, response: Response):
     """
     Create a new entity (user) with username, email, password.
     Returns access & refresh tokens and sets refresh token as HttpOnly cookie.
     """
     # Normalize inputs
-    name = normalize_username(user_in.name)
+    name = user_in.name.strip()
     email = normalize_email(user_in.email)
     password = user_in.password
 
     # Validate semantics
     try:
-        validate_username(name)
         validate_password(password)
     except ValueError as ve:
         # 400 for client input that fails our policy
@@ -95,13 +95,35 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     # Optional: include Location header for the created resource
     response.headers["Location"] = f"/api/v1/entities/{entity.entity_id}"
 
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
+    safe_user = {
+        "entity_id": str(entity.entity_id) if hasattr(entity, "entity_id") else None,
+        "external_entity_id": entity.external_entity_id if hasattr(entity, "external_entity_id") else None,
+        "entity_type": str(entity.entity_type) if hasattr(entity, "entity_type") else None,
+        "email": entity.email if hasattr(entity, "email") else None,
+        "name": entity.name if hasattr(entity, "name") else None,
+        "email_verified": entity.email_verified if hasattr(entity, "email_verified") else None,
+        "last_login_at": entity.last_login_at.isoformat() if getattr(entity, "last_login_at", None) else None,
+        "login_attempts": entity.login_attempts if hasattr(entity, "login_attempts") else None,
+        "locked_until": entity.locked_until.isoformat() if getattr(entity, "locked_until", None) else None,
+        "status": str(entity.status) if hasattr(entity, "status") else None,
+        "created_at": entity.created_at.isoformat() if getattr(entity, "created_at", None) else None,
+        "updated_at": entity.updated_at.isoformat() if getattr(entity, "updated_at", None) else None,
     }
 
-@router.post("/signin", response_model=schemas.Token, status_code=status.HTTP_200_OK)
+    return {
+        "success": True,
+        "message": "Signup successful",
+        "data": {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "user": safe_user,
+        },
+        "error": None,
+        "meta": {},
+    }
+
+@router.post("/signin", response_model=schemas.AuthResponse, status_code=status.HTTP_200_OK)
 async def signin(payload: schemas.SignInInput, response: Response):
     """
     Authenticate an entity using email + password.
@@ -221,10 +243,105 @@ async def signin(payload: schemas.SignInInput, response: Response):
         path="/",
     )
 
+    safe_user = {
+        "entity_id": str(user.entity_id) if hasattr(user, "entity_id") else None,
+        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
+        "email": user.email if hasattr(user, "email") else None,
+        "name": user.name if hasattr(user, "name") else None,
+        "email_verified": user.email_verified if hasattr(user, "email_verified") else None,
+        "last_login_at": user.last_login_at.isoformat() if getattr(user, "last_login_at", None) else None,
+        "login_attempts": user.login_attempts if hasattr(user, "login_attempts") else None,
+        "locked_until": user.locked_until.isoformat() if getattr(user, "locked_until", None) else None,
+        "status": str(user.status) if hasattr(user, "status") else None,
+        "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else None,
+        "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
+    }
+
     return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
+        "success": True,
+        "message": "Signin successful",
+        "data": {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "user": safe_user,
+        },
+        "error": None,
+        "meta": {},
+    }
+
+@router.post("/refresh", response_model=schemas.AuthResponse)
+async def refresh_token(request: Request, response: Response):
+    """
+    Issue a new access/refresh token pair using the HttpOnly refresh cookie.
+    Returns unified response; sets a fresh refresh cookie.
+    """
+    rt = request.cookies.get("rp_refresh")
+    if not rt:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
+
+    # Validate refresh token
+    payload = auth.verify_token_type(rt, "refresh")
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+
+    user = await db.entities.find_unique(where={"entity_id": user_id})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
+
+    access_token = auth.create_access_token({"sub": str(user.entity_id), "type": "access"})
+    refresh_token = auth.create_refresh_token({"sub": str(user.entity_id), "type": "refresh"})
+
+    response.set_cookie(
+        key="rp_refresh",
+        value=refresh_token,
+        httponly=True,
+        samesite="strict",
+        secure=True,
+        max_age=24 * 60 * 60,
+        path="/",
+    )
+
+    safe_user = {
+        "entity_id": str(user.entity_id) if hasattr(user, "entity_id") else None,
+        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
+        "email": user.email if hasattr(user, "email") else None,
+        "name": user.name if hasattr(user, "name") else None,
+        "email_verified": user.email_verified if hasattr(user, "email_verified") else None,
+        "last_login_at": user.last_login_at.isoformat() if getattr(user, "last_login_at", None) else None,
+        "login_attempts": user.login_attempts if hasattr(user, "login_attempts") else None,
+        "locked_until": user.locked_until.isoformat() if getattr(user, "locked_until", None) else None,
+        "status": str(user.status) if hasattr(user, "status") else None,
+        "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else None,
+        "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
+    }
+
+    return {
+        "success": True,
+        "message": "Token refreshed",
+        "data": {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "user": safe_user,
+        },
+        "error": None,
+        "meta": {},
+    }
+
+@router.post("/logout", response_model=schemas.ApiResponse)
+async def logout(response: Response):
+    """Clear the refresh cookie and return unified response."""
+    response.delete_cookie("rp_refresh", path="/")
+    return {
+        "success": True,
+        "message": "Logged out",
+        "data": None,
+        "error": None,
+        "meta": {},
     }
     
 # @router.post("/signup", response_model=schemas.Token)
