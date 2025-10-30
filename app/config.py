@@ -10,9 +10,15 @@ class Settings(BaseSettings):
     backend_url: str | None = None
 
     # Zynk API settings
-    zynk_base_url: str | None = None
-    zynk_api_key: str | None = None
+    zynk_base_url: str | None = "https://qaapi.zynklabs.xyz"
+    zynk_api_key: str | None = "2dfdbe8cbdbe7231375c93808d55cc32"
     zynk_timeout_s: int = 30
+
+    # AWS S3 settings
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_region: str | None = None
+    aws_s3_bucket_name: str | None = None
 
     # Max request size in megabytes (used by custom middleware)
     max_request_size_mb: int = 10

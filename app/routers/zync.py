@@ -53,6 +53,40 @@ async def _call_zynk_create_entity(payload: dict) -> str:
 
     raise HTTPException(status_code=502, detail="Failed to create entity upstream after retries")
 
+async def _call_zynk_get_kyc_requirements(entity_id: str, routing_id: str) -> dict:
+    """
+    Call Zynk to fetch KYC requirements for a given entity and routing.
+    Returns parsed JSON body on success, otherwise raises HTTPException.
+    """
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{entity_id}/{routing_id}"
+    headers = {**_auth_header(), "Accept": "application/json"}
+
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+                resp = await client.get(url, headers=headers)
+        except httpx.RequestError:
+            if attempt == 0:
+                continue
+            raise HTTPException(status_code=502, detail="Upstream unreachable")
+
+        try:
+            body = resp.json()
+        except ValueError:
+            raise HTTPException(status_code=502, detail=f"Invalid JSON response from upstream: {resp.text[:200]}")
+
+        if not (200 <= resp.status_code < 300):
+            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
+            raise HTTPException(status_code=502, detail=f"Upstream error: {error_detail}")
+
+        if not isinstance(body, dict) or body.get("success") is not True:
+            error_detail = body.get("message", body.get("error", "Upstream returned unsuccessful response"))
+            raise HTTPException(status_code=502, detail=f"Upstream rejected request: {error_detail}")
+
+        return body.get("data", {})
+
+    raise HTTPException(status_code=502, detail="Failed to fetch KYC requirements after retries")
+
 async def get_current_entity(entity=Depends(auth.get_current_entity)):
     return entity
 
@@ -89,7 +123,37 @@ async def create_external_entity(
     except PrismaError:
         raise HTTPException(status_code=500, detail="Failed to persist external entity link")
 
-    # 5) Return minimal success
+    # 5) Return unified API response
     response.headers["Location"] = f"/api/v1/zynk/entity/{updated.entity_id}"
     response.headers["X-External-Entity-Id"] = upstream_entity_id
-    return {"success": True, "data": {"entityId": upstream_entity_id}}
+    return {
+        "success": True,
+        "message": "Entity created successfully",
+        "data": {"entityId": upstream_entity_id, "status": "ACTIVE"},
+        "error": None,
+        "meta": {},
+    }
+
+
+@router.get("/kyc/requirements/{routing_id}")
+async def get_kyc_requirements(
+    routing_id: str,
+    current: Entities = Depends(get_current_entity),
+):
+    """
+    Fetch KYC requirements for the logged-in user's external entity id and the provided routing id.
+    Returns unified API response.
+    """
+    external_id = getattr(current, "external_entity_id", None)
+    if not external_id:
+        raise HTTPException(status_code=400, detail="External entity id is missing. Complete profile first.")
+
+    data = await _call_zynk_get_kyc_requirements(external_id, routing_id)
+    # Shape: { message, kycRequirements: [...] }
+    return {
+        "success": True,
+        "message": data.get("message", "Fetched requirements"),
+        "data": {"kycRequirements": data.get("kycRequirements", [])},
+        "error": None,
+        "meta": {},
+    }
