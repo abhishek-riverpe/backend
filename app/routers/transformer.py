@@ -3,10 +3,10 @@ import base64
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File
 from prisma.models import entities as Entities
-from ..database import db
-from .. import auth
-from ..config import settings
-from ..schemas_zynk import ZynkEntitiesResponse, ZynkEntityResponse, ZynkKycResponse, ZynkKycRequirementsResponse, ZynkKycDocumentsResponse, KycDocumentUpload, KycUploadResponse
+from ..core.database import db
+from ..core import auth
+from ..core.config import settings
+from ..schemas.zynk import ZynkEntitiesResponse, ZynkEntityResponse, ZynkKycResponse, ZynkKycRequirementsResponse, ZynkKycDocumentsResponse, KycDocumentUpload, KycUploadResponse
 
 router = APIRouter(prefix="/api/v1/transformer", tags=["transformer"])
 

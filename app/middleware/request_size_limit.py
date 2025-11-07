@@ -1,7 +1,7 @@
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .config import settings
+from ..core.config import settings
 
 # Request size limit in bytes
 MAX_REQUEST_SIZE = settings.max_request_size_mb * 1024 * 1024
