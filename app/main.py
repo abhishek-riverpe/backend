@@ -15,14 +15,11 @@ app = FastAPI()
 # ✅ Request size limit (rejects > configured MB)
 app.add_middleware(RequestSizeLimitMiddleware)
 
-# ✅ CORS setup (must include BOTH 5173 & 127.0.0.1 if needed)
+# ✅ CORS setup - Allowing all origins for development
+# For React Native/Expo development, this is the simplest approach
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://www.riverpe.com/",
-    ],
+    allow_origins=["*"],  # Allow all origins in development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
