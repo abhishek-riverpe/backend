@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
+
+echo "[start] openssl version (runtime):"
+if command -v openssl >/dev/null 2>&1; then
+  openssl version || true
+else
+  echo "openssl not found"
+fi
+
+echo "[start] ls /opt/render/.cache/prisma-python/binaries (preview):"
+ls -la /opt/render/.cache/prisma-python/binaries || true
 
 echo "[start] prisma generate (runtime)"
-python -m prisma generate || true
+python -m prisma generate
 
 echo "[start] prisma py fetch (runtime)"
-python -m prisma py fetch || true
+python -m prisma py fetch --force
 
 echo "[start] locate prisma engines & export env vars"
 python - <<'PY'
@@ -27,25 +37,17 @@ def find_one(patterns):
                         return os.path.join(dirpath, name)
     return None
 
-# cover both naming styles seen in different bundles
-QUERY_PATTERNS = [
-    "*query-engine*",
-    "prisma-query-engine-*",
-    "libquery_engine-*",
-]
-SCHEMA_PATTERNS = [
-    "*schema-engine*",
-    "schema-engine-*",
-]
-
-query = find_one(QUERY_PATTERNS)
-schema = find_one(SCHEMA_PATTERNS)
+QUERY_PATTERNS = ["*query-engine*","prisma-query-engine-*","libquery_engine-*"]
+SCHEMA_PATTERNS = ["*schema-engine*","schema-engine-*"]
 
 def make_exec(path):
     if not path or not os.path.exists(path):
         return
     st = os.stat(path)
     os.chmod(path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+query = find_one(QUERY_PATTERNS)
+schema = find_one(SCHEMA_PATTERNS)
 
 exports = []
 if query:
@@ -66,7 +68,7 @@ for k, v in exports:
     print(f"::export::{k}={v}")
 PY
 
-# capture the ::export:: lines and export them into this shell
+# apply exported envs
 while IFS= read -r line; do
   case "$line" in
     ::export::*)
@@ -111,6 +113,12 @@ if s:
     make_exec(s); print(f"::export::PRISMA_SCHEMA_ENGINE_BINARY={s}")
 PY
 )
+
+echo "[start] print env PRISMA_QUERY_ENGINE_BINARY (if set):"
+echo "${PRISMA_QUERY_ENGINE_BINARY:-<not set>}"
+
+echo "[start] enabling prisma debug output"
+export DEBUG="prisma:client"
 
 echo "[start] launching uvicorn on \$PORT=${PORT}"
 exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
