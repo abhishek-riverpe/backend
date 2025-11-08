@@ -16,26 +16,25 @@ echo "[build] clear prisma cache and recreate cache directory"
 rm -rf /opt/render/.cache/prisma-python || true
 mkdir -p /opt/render/.cache/prisma-python
 
-echo "[build] try fetching prisma binaries (prefer python module entrypoint)"
-# Try python module entrypoint first (reliable) and fallback to prisma CLI if present
+echo "[build] try fetching prisma binaries (try python module entrypoint then prisma CLI)"
 if python -m prisma.cli.cli py fetch --force; then
-  echo "[build] prisma py fetch (python module) succeeded"
-elif prisma py fetch --force; then
-  echo "[build] prisma py fetch (prisma CLI) succeeded"
+  echo "[build] prisma py fetch via python module succeeded"
+elif command -v prisma && prisma py fetch --force; then
+  echo "[build] prisma py fetch via prisma CLI succeeded"
 elif python -m prisma py fetch --force; then
-  echo "[build] prisma py fetch (python -m prisma) succeeded"
+  echo "[build] prisma py fetch via python -m prisma succeeded"
 else
   echo "[build][error] prisma py fetch failed" >&2
   exit 1
 fi
 
-echo "[build] generate prisma client"
+echo "[build] generate prisma client (try python module then prisma CLI)"
 if python -m prisma.cli.cli generate; then
-  echo "[build] prisma generate (python module) succeeded"
-elif prisma generate; then
-  echo "[build] prisma generate (prisma CLI) succeeded"
+  echo "[build] prisma generate via python module succeeded"
+elif command -v prisma && prisma generate; then
+  echo "[build] prisma generate via prisma CLI succeeded"
 elif python -m prisma generate; then
-  echo "[build] prisma generate (python -m prisma) succeeded"
+  echo "[build] prisma generate via python -m prisma succeeded"
 else
   echo "[build][error] prisma generate failed" >&2
   exit 1
