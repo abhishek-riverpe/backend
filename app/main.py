@@ -19,11 +19,16 @@ app.add_middleware(RequestSizeLimitMiddleware)
 # For React Native/Expo development, this is the simplest approach
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins in development
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://www.riverpe.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # ✅ Session middleware with secure cookie settings
 app.add_middleware(
