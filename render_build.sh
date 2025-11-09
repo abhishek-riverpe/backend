@@ -9,7 +9,7 @@ echo "[build] python & pip versions"
 python --version || true
 pip --version || true
 
-echo "[build] upgrade pip and install dependencies"
+echo "[build] install/upgrade Python dependencies"
 pip install --no-cache-dir -U pip
 pip install --no-cache-dir -r requirements.txt
 
@@ -21,22 +21,31 @@ rm -rf "$PRISMA_CACHE_DIR" || true
 mkdir -p "$PRISMA_CACHE_DIR"
 echo "[build] PRISMA_PY_CACHE_DIR=$PRISMA_PY_CACHE_DIR"
 
-# ---- Run prisma generate directly via Python ----
-python - <<'PY'
-import os, sys
-os.environ['PRISMA_PY_CACHE_DIR'] = os.environ.get('PRISMA_PY_CACHE_DIR', os.path.join(os.getcwd(), '.prisma-cache'))
-print("[build.py] PRISMA_PY_CACHE_DIR =", os.environ['PRISMA_PY_CACHE_DIR'], file=sys.stderr)
+# Debug: show which prisma binary is on PATH (if any) and its version
+echo "[build] which prisma (if any):"
+if command -v prisma >/dev/null 2>&1; then
+  command -v prisma || true
+  echo "[build] prisma --version output:"
+  prisma --version || true
+else
+  echo "[build] prisma not found on PATH"
+fi
 
-try:
-    from prisma.cli import cli as prisma_cli
-    # Only run generate (fetch is no longer needed)
-    print("[build.py] calling prisma_cli.main(['generate'])", file=sys.stderr)
-    prisma_cli.main(['generate'])
-    print("[build.py] prisma generate succeeded", file=sys.stderr)
-except Exception:
-    import traceback
-    traceback.print_exc(file=sys.stderr)
-    sys.exit(2)
-PY
+# ---- Run prisma generate as a subprocess using the Python module entrypoint ----
+# Use sys.executable -m prisma.cli.cli to guarantee we run the python package's CLI,
+# in a separate process where our PRISMA_PY_CACHE_DIR env var is already set.
+echo "[build] running: python -m prisma.cli.cli generate (subprocess)"
+if python -m prisma.cli.cli generate; then
+  echo "[build] prisma generate (python -m prisma.cli.cli) succeeded"
+else
+  echo "[build] python -m prisma.cli.cli generate failed; trying prisma generate (executable) as fallback" >&2
+  if command -v prisma >/dev/null 2>&1; then
+    PRISMA_PY_CACHE_DIR="$PRISMA_PY_CACHE_DIR" prisma generate
+    echo "[build] prisma generate (prisma CLI) succeeded"
+  else
+    echo "[build][error] prisma generate failed and no prisma CLI found as fallback" >&2
+    exit 1
+  fi
+fi
 
 echo "[build] finished successfully"
