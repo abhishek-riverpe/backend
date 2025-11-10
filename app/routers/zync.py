@@ -4,10 +4,10 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from prisma.errors import PrismaError
 from prisma.models import entities as Entities
-from ..database import db
-from .. import auth
-from ..config import settings
-from ..schemas_zynk import CreateZynkEntityIn
+from ..core.database import db
+from ..core import auth
+from ..core.config import settings
+from ..schemas.zynk import CreateZynkEntityIn
 
 router = APIRouter(prefix="/api/v1/zynk", tags=["zynk"])
 

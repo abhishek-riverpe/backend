@@ -66,3 +66,4 @@ async def get_current_entity(token: str = Depends(oauth2_scheme)):
     if entity is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
     return entity
+

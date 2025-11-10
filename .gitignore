@@ -109,3 +109,8 @@ node_modules/
 *.bak
 *.old
 *.tmp
+
+
+# --- Prisma Generated Files ---
+prisma/__pycache__/
+prisma/generated/
