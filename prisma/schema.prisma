@@ -12,8 +12,8 @@ datasource db {
 // ENUM DEFINITIONS
 // --------------------
 enum EntityStatusEnum {
-  PENDING
-  ACTIVE
+  PENDING // User is created, but not completed profile, zync entity is not created
+  ACTIVE // User is created, profile is completed, zync entity is created
   SUSPENDED
   CLOSED
 }
@@ -24,20 +24,18 @@ enum EntityTypeEnum {
 }
 
 enum KycStatusEnum {
-  PENDING
+  NOT_STARTED
   INITIATED
   REVIEWING
-  APPROVED
   ADDITIONAL_INFO_REQUIRED
   REJECTED
+  APPROVED
 }
 
 enum WebhookEventCategory {
   KYC
   TRANSFER
-  PAYMENT
-  ALM
-  TELEPORT
+  WEBHOOK
 }
 
 enum WebhookDeliveryStatusEnum {
@@ -81,7 +79,8 @@ model kyc_sessions {
   kyc_session_id     String          @id @default(uuid()) @db.Uuid
   entity_id          String          @db.Uuid
   routing_id         String?
-  status             KycStatusEnum   @default(PENDING)
+  status             KycStatusEnum   @default(NOT_STARTED)
+  kyc_link           String?
   routing_enabled    Boolean?        @default(false)
   initiated_at       DateTime?
   completed_at       DateTime?
@@ -120,22 +119,21 @@ model webhook_events {
   event_status       String?
   entity_id          String?                   @db.Uuid
   kyc_session_id     String?                   @db.Uuid
-  transfer_id        String?                   @db.Uuid
-  alm_tx_id          String?                   @db.Uuid
+  // transfer_id        String?                   @db.Uuid
+  // alm_tx_id          String?                   @db.Uuid
   teleport_id        String?                   @db.Uuid
   event_payload      Json
-  delivery_status    WebhookDeliveryStatusEnum  @default(PENDING)
-  delivery_attempts  Int?                       @default(0)
-  last_attempt_at    DateTime?
-  next_retry_at      DateTime?
-  http_status_code   Int?
-  response_body      String?
+  // delivery_status    WebhookDeliveryStatusEnum  @default(PENDING)
+  // delivery_attempts  Int?                       @default(0)
+  // last_attempt_at    DateTime?
+  // next_retry_at      DateTime?
+  // http_status_code   Int?
+  // response_body      String?
   created_at         DateTime?                  @default(now())
 
   // Relations
   entity             entities?                  @relation(fields: [entity_id], references: [entity_id])
   kyc_session        kyc_sessions?              @relation(fields: [kyc_session_id], references: [kyc_session_id])
-  // Transfers, alm_transactions, teleport_routes can be added later if models exist
 
   @@map("webhook_events")
 }
