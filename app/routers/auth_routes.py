@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, status, Response, Request
 from datetime import datetime, timedelta, timezone
-from .. import auth, schemas
-from ..database import db
+from ..core import auth
+from ..core.database import db
+from .. import schemas
 from prisma.errors import UniqueViolationError, PrismaError
 from passlib.context import CryptContext
 

@@ -46,3 +46,4 @@ class ApiResponse(BaseModel):
 
 class AuthResponse(ApiResponse):
     data: AuthData
+

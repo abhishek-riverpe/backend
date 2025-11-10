@@ -5,9 +5,9 @@ from urllib.parse import urlencode
 from starlette.responses import RedirectResponse
 from authlib.integrations.starlette_client import OAuth, OAuthError
 
-from ..config import settings
-from ..database import db
-from .. import auth
+from ..core.config import settings
+from ..core.database import db
+from ..core import auth
 
 router = APIRouter(prefix="/auth", tags=["auth"]) 
 
