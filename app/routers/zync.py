@@ -4,7 +4,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from prisma.errors import PrismaError
 from prisma.models import entities as Entities
-from ..core.database import db
+from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
 from ..schemas.zynk import CreateZynkEntityIn
@@ -121,7 +121,7 @@ async def create_external_entity(
     # 4) Persist: overwrite `external_entity_id` and set status ACTIVE
     now = datetime.now(timezone.utc)
     try:
-        updated = await db.entities.update(
+        updated = await prisma.entities.update(
             where={"entity_id": current.entity_id},  # use your immutable PK to locate the row
             data={
                 "external_entity_id": upstream_entity_id,   # <- overwrite existing field

@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     zynk_base_url: str | None = "https://qaapi.zynklabs.xyz"
     zynk_api_key: str | None = "2dfdbe8cbdbe7231375c93808d55cc32"
     zynk_timeout_s: int = 30
+    zynk_default_routing_id: str = "infrap_f2a15c0b_89cf_4041_83fb_8ba064083706"
 
     # AWS S3 settings
     aws_access_key_id: str | None = None

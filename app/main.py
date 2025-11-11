@@ -3,8 +3,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from .core.config import settings
-from .core.database import db
-from .routers import google_oauth, auth_routes, zync, transformer, webhooks
+from .core.database import prisma
+from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router
 from .middleware import RequestSizeLimitMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -41,13 +41,13 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    await db.connect()
+    await prisma.connect()
     logger.info("Successfully connected to the database")
 
 @app.on_event("shutdown")
 async def shutdown():
-    if db.is_connected():
-        await db.disconnect()
+    if prisma.is_connected():
+        await prisma.disconnect()
 
 # Include routers
 # app.include_router(google_oauth.router)
@@ -55,6 +55,7 @@ app.include_router(auth_routes.router)
 app.include_router(zync.router)
 # app.include_router(transformer.router)
 app.include_router(webhooks.router)
+app.include_router(kyc_router.router)
 
 @app.get("/")
 def read_root():

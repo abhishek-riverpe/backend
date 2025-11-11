@@ -3,7 +3,7 @@ import base64
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File
 from prisma.models import entities as Entities
-from ..core.database import db
+from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
 from ..schemas.zynk import ZynkEntitiesResponse, ZynkEntityResponse, ZynkKycResponse, ZynkKycRequirementsResponse, ZynkKycDocumentsResponse, KycDocumentUpload, KycUploadResponse

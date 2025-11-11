@@ -7,7 +7,7 @@ from jose import JWTError, ExpiredSignatureError, jwt
 from passlib.context import CryptContext
 
 from .config import settings
-from .database import db
+from .database import prisma
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin")
@@ -62,7 +62,7 @@ async def get_current_entity(token: str = Depends(oauth2_scheme)):
     if not entity_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    entity = await db.entities.find_unique(where={"entity_id": entity_id})
+    entity = await prisma.entities.find_unique(where={"entity_id": entity_id})
     if entity is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
     return entity

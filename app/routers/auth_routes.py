@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, status, Response, Request
 from datetime import datetime, timedelta, timezone
 from ..core import auth
-from ..core.database import db
+from ..core.database import prisma
 from .. import schemas
 from prisma.errors import UniqueViolationError, PrismaError
 from passlib.context import CryptContext
@@ -46,18 +46,18 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     pwd_hash = hash_password(password)
 
     # Pre-check for duplicates (nice UX), but still handle race with try/except below
-    # if await db.entities.find_first(where={"OR": [{"username": user_in.name}, {"email": email}]}):
+    # if await prisma.entities.find_first(where={"OR": [{"username": user_in.name}, {"email": email}]}):
         # Distinguish which one collided (not strictly necessary)
-        # existing_username = await db.entities.find_unique(where={"username": name})
+        # existing_username = await prisma.entities.find_unique(where={"username": name})
         # if existing_username:
         #     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already in use")
         # raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-    if await db.entities.find_first(where={"email": email}):
+    if await prisma.entities.find_first(where={"email": email}):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
     # Create user in a transaction to keep things consistent
     try:
-        async with db.tx() as tx:
+        async with prisma.tx() as tx:
             entity = await tx.entities.create(
                 data={
                     # "username": name,
@@ -140,7 +140,7 @@ async def signin(payload: schemas.SignInInput, response: Response):
     password = payload.password
 
     # Fetch entity by exact email match (you chose not to lowercase)
-    user = await db.entities.find_unique(where={"email": email})
+    user = await prisma.entities.find_unique(where={"email": email})
 
     # Uniform error for nonexistent users (avoid user enumeration)
     def invalid_credentials():
@@ -197,7 +197,7 @@ async def signin(payload: schemas.SignInInput, response: Response):
             detail = "Account locked due to multiple failed attempts. Try again later."
 
         try:
-            await db.entities.update(
+            await prisma.entities.update(
                 where={"entity_id": user.entity_id},
                 data={
                     "login_attempts": attempts,
@@ -217,7 +217,7 @@ async def signin(payload: schemas.SignInInput, response: Response):
 
     # Success: reset attempts, clear lock, update last_login_at
     try:
-        await db.entities.update(
+        await prisma.entities.update(
             where={"entity_id": user.entity_id},
             data={
                 "login_attempts": 0,
@@ -290,7 +290,7 @@ async def refresh_token(request: Request, response: Response):
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    user = await db.entities.find_unique(where={"entity_id": user_id})
+    user = await prisma.entities.find_unique(where={"entity_id": user_id})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
 
