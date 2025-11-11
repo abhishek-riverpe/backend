@@ -6,7 +6,7 @@ from starlette.responses import RedirectResponse
 from authlib.integrations.starlette_client import OAuth, OAuthError
 
 from ..core.config import settings
-from ..core.database import db
+from ..core.database import prisma
 from ..core import auth
 
 router = APIRouter(prefix="/auth", tags=["auth"]) 
@@ -54,12 +54,12 @@ async def google_callback(request: Request):
     last_name = userinfo.get("family_name") or ""
 
     # Find or create user
-    user = await db.user.find_unique(where={"username": email})
+    user = await prisma.user.find_unique(where={"username": email})
     if not user:
         # Create a random password since login is via Google
         random_password = secrets.token_urlsafe(16)
         hashed = auth.get_password_hash(random_password)
-        user = await db.user.create(
+        user = await prisma.user.create(
             data={
                 "username": email,
                 "password_hash": hashed,
@@ -69,7 +69,7 @@ async def google_callback(request: Request):
         )
 
         # Also create an account like in signup flow
-        await db.account.create(
+        await prisma.account.create(
             data={
                 "userId": user.id,
                 "balance": round(1 + random.random() * 9999, 2)
