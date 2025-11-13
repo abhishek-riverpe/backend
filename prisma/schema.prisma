@@ -71,6 +71,10 @@ enum LoginMethodEnum {
   PHONE_OTP
   APPLE_ID
 }
+enum AccountStatusEnum {
+  inactive
+  active
+}
 
 // --------------------
 // MODEL DEFINITIONS
@@ -235,3 +239,22 @@ model login_sessions {
   @@map("login_sessions")
 }
 
+model funding_accounts {
+  funding_account_id String             @id @default(uuid()) 
+  entity_id          String             
+  jurisdiction_id    String             
+  provider_id        String
+  status             AccountStatusEnum   @default(inactive)
+  currency           String
+  bank_name          String
+  bank_address       String
+  bank_routing_number String
+  bank_account_number String
+  bank_beneficiary_name String
+  bank_beneficiary_address String
+  payment_rail String
+  created_at         DateTime?          @default(now())
+  updated_at         DateTime?          @default(now())
+  deleted_at         DateTime?
+  @@map("funding_accounts")
+}
