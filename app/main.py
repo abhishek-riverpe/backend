@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from .core.config import settings
 from .core.database import prisma
-from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router
+from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router, otp_router
 from .middleware import RequestSizeLimitMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +56,7 @@ app.include_router(zync.router)
 # app.include_router(transformer.router)
 app.include_router(webhooks.router)
 app.include_router(kyc_router.router)
+app.include_router(otp_router.router)
 
 @app.get("/")
 def read_root():

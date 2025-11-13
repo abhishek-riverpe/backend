@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
+    # SMS/OTP settings
+    sms_provider: str = "mock"  # 'twilio' or 'mock'
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    twilio_phone_number: str | None = None
+
     # Pydantic v2 settings config
     model_config = SettingsConfigDict(
         env_file=".env",
