@@ -45,6 +45,33 @@ enum WebhookDeliveryStatusEnum {
   RETRYING
 }
 
+enum OtpTypeEnum {
+  PHONE_VERIFICATION
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+enum OtpStatusEnum {
+  PENDING
+  VERIFIED
+  EXPIRED
+  FAILED
+}
+
+enum SessionStatusEnum {
+  ACTIVE
+  EXPIRED
+  LOGGED_OUT
+  REVOKED
+}
+
+enum LoginMethodEnum {
+  EMAIL_PASSWORD
+  GOOGLE_OAUTH
+  PHONE_OTP
+  APPLE_ID
+}
+
 // --------------------
 // MODEL DEFINITIONS
 // --------------------
@@ -71,6 +98,7 @@ model entities {
   // Relations
   kyc_sessions       kyc_sessions[]
   webhook_events     webhook_events[]
+  login_sessions     login_sessions[]
 
   @@map("entities")
 }
@@ -137,3 +165,73 @@ model webhook_events {
 
   @@map("webhook_events")
 }
+
+model otp_verifications {
+  otp_id             String        @id @default(uuid()) @db.Uuid
+  phone_number       String
+  country_code       String        @default("+1")
+  otp_code           String
+  otp_type           OtpTypeEnum   @default(PHONE_VERIFICATION)
+  status             OtpStatusEnum @default(PENDING)
+  attempts           Int           @default(0)
+  max_attempts       Int           @default(3)
+  expires_at         DateTime
+  verified_at        DateTime?
+  ip_address         String?       // Track where OTP was requested from
+  user_agent         String?       // Track device/browser
+  created_at         DateTime      @default(now())
+  updated_at         DateTime      @default(now())
+
+  @@index([phone_number, status])
+  @@index([expires_at])
+  @@map("otp_verifications")
+}
+
+model login_sessions {
+  session_id         String              @id @default(uuid()) @db.Uuid
+  entity_id          String              @db.Uuid
+  session_token      String              @unique // JWT token ID or session token
+  login_method       LoginMethodEnum     @default(EMAIL_PASSWORD)
+  status             SessionStatusEnum   @default(ACTIVE)
+  
+  // Authentication details
+  ip_address         String?
+  user_agent         String?
+  device_type        String?             // mobile, desktop, tablet
+  device_name        String?             // iPhone 13, Samsung Galaxy, etc.
+  os_name            String?             // iOS, Android, Windows, macOS
+  os_version         String?
+  browser_name       String?             // Chrome, Safari, Firefox
+  browser_version    String?
+  app_version        String?             // Mobile app version
+  
+  // Location tracking (optional, for security)
+  country            String?
+  city               String?
+  latitude           Float?
+  longitude          Float?
+  
+  // Session timing
+  login_at           DateTime            @default(now())
+  last_activity_at   DateTime            @default(now())
+  logout_at          DateTime?
+  expires_at         DateTime
+  
+  // Security flags
+  is_suspicious      Boolean             @default(false)
+  mfa_verified       Boolean             @default(false)
+  
+  // Metadata
+  created_at         DateTime            @default(now())
+  updated_at         DateTime            @default(now())
+
+  // Relations
+  entity             entities            @relation(fields: [entity_id], references: [entity_id])
+
+  @@index([entity_id, status])
+  @@index([session_token])
+  @@index([expires_at])
+  @@index([login_at])
+  @@map("login_sessions")
+}
+
