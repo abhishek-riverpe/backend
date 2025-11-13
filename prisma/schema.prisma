@@ -45,6 +45,11 @@ enum WebhookDeliveryStatusEnum {
   RETRYING
 }
 
+enum AccountStatusEnum {
+  inactive
+  active
+}
+
 // --------------------
 // MODEL DEFINITIONS
 // --------------------
@@ -136,4 +141,24 @@ model webhook_events {
   kyc_session        kyc_sessions?              @relation(fields: [kyc_session_id], references: [kyc_session_id])
 
   @@map("webhook_events")
+}
+
+model funding_accounts {
+  funding_account_id String             @id @default(uuid()) 
+  entity_id          String             
+  jurisdiction_id    String             
+  provider_id        String
+  status             AccountStatusEnum   @default(inactive)
+  currency           String
+  bank_name          String
+  bank_address       String
+  bank_routing_number String
+  bank_account_number String
+  bank_beneficiary_name String
+  bank_beneficiary_address String
+  payment_rail String
+  created_at         DateTime?          @default(now())
+  updated_at         DateTime?          @default(now())
+  deleted_at         DateTime?
+  @@map("funding_accounts")
 }
