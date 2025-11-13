@@ -14,6 +14,7 @@ from typing import Optional, Tuple
 from app.core.config import settings
 from prisma import Prisma
 from prisma.enums import OtpStatusEnum, OtpTypeEnum
+from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,25 @@ class OTPService:
     def __init__(self, prisma: Prisma):
         self.prisma = prisma
         self.sms_provider = settings.sms_provider  # 'twilio' or 'mock'
+        
+        # Initialize FastMail configuration
+        self.mail_config = None
+        if settings.mail_username and settings.mail_password:
+            self.mail_config = ConnectionConfig(
+                MAIL_USERNAME=settings.mail_username,
+                MAIL_PASSWORD=settings.mail_password,
+                MAIL_FROM=settings.mail_from or settings.mail_username,
+                MAIL_PORT=settings.mail_port,
+                MAIL_SERVER=settings.mail_server,
+                MAIL_FROM_NAME=settings.mail_from_name,
+                MAIL_STARTTLS=settings.mail_starttls,
+                MAIL_SSL_TLS=settings.mail_ssl_tls,
+                USE_CREDENTIALS=settings.use_credentials,
+                VALIDATE_CERTS=settings.validate_certs
+            )
+            self.fast_mail = FastMail(self.mail_config)
+        else:
+            logger.warning("[OTP] Email configuration not found. Email OTP will run in mock mode.")
 
     async def generate_otp(self) -> str:
         """
@@ -206,6 +226,236 @@ class OTPService:
         except Exception as e:
             logger.error(f"[OTP] Error verifying OTP: {str(e)}", exc_info=True)
             return False, "An error occurred while verifying OTP", None
+
+    async def send_email_otp(self, email: str) -> Tuple[bool, str, Optional[dict]]:
+        """
+        Send OTP to email address
+        
+        Args:
+            email: Email address to send OTP to
+            
+        Returns:
+            Tuple of (success, message, data)
+        """
+        try:
+            logger.info(f"[OTP] Sending email OTP to {email}")
+
+            # Check rate limiting - prevent spam
+            recent_otp = await self._check_email_rate_limit(email)
+            if recent_otp:
+                seconds_remaining = (
+                    recent_otp.created_at + timedelta(seconds=self.RATE_LIMIT_SECONDS) - datetime.now(timezone.utc)
+                ).total_seconds()
+                if seconds_remaining > 0:
+                    logger.warning(f"[OTP] Rate limit hit for {email}")
+                    return False, f"Please wait {int(seconds_remaining)} seconds before requesting a new OTP", None
+
+            # Invalidate any existing pending OTPs for this email
+            await self._invalidate_existing_email_otps(email)
+
+            # Generate new OTP
+            otp_code = await self.generate_otp()
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.OTP_EXPIRY_MINUTES)
+
+            # Save OTP to database
+            otp_record = await self.prisma.otp_verifications.create(
+                data={
+                    "email": email,
+                    "otp_code": otp_code,
+                    "otp_type": OtpTypeEnum.EMAIL_VERIFICATION,
+                    "status": OtpStatusEnum.PENDING,
+                    "expires_at": expires_at,
+                    "attempts": 0,
+                    "max_attempts": self.MAX_ATTEMPTS,
+                }
+            )
+
+            logger.info(f"[OTP] Created email OTP record: {otp_record.otp_id}")
+
+            # Send OTP via email
+            email_sent = await self._send_email(email, otp_code)
+            
+            if not email_sent:
+                logger.error(f"[OTP] Failed to send email to {email}")
+                return False, "Failed to send OTP. Please try again.", None
+
+            logger.info(f"[OTP] OTP sent successfully to {email}")
+            
+            return True, "OTP sent successfully", {
+                "otp_id": otp_record.otp_id,
+                "email": email,
+                "expires_at": expires_at.isoformat(),
+                "attempts_remaining": self.MAX_ATTEMPTS,
+                "can_resend": False,
+            }
+
+        except Exception as e:
+            logger.error(f"[OTP] Error sending email OTP: {str(e)}", exc_info=True)
+            return False, "An error occurred while sending OTP", None
+
+    async def verify_email_otp(self, email: str, otp_code: str) -> Tuple[bool, str, Optional[dict]]:
+        """
+        Verify email OTP code
+        
+        Args:
+            email: Email address
+            otp_code: 6-digit OTP to verify
+            
+        Returns:
+            Tuple of (success, message, data)
+        """
+        try:
+            logger.info(f"[OTP] Verifying email OTP for {email}")
+
+            # Find the most recent pending OTP
+            otp_record = await self.prisma.otp_verifications.find_first(
+                where={
+                    "email": email,
+                    "status": OtpStatusEnum.PENDING,
+                    "otp_type": OtpTypeEnum.EMAIL_VERIFICATION,
+                },
+                order={"created_at": "desc"}
+            )
+
+            if not otp_record:
+                logger.warning(f"[OTP] No pending email OTP found for {email}")
+                return False, "No pending OTP found. Please request a new one.", None
+
+            # Check if OTP has expired
+            if datetime.now(timezone.utc) > otp_record.expires_at:
+                logger.warning(f"[OTP] Expired email OTP for {email}")
+                await self.prisma.otp_verifications.update(
+                    where={"otp_id": otp_record.otp_id},
+                    data={"status": OtpStatusEnum.EXPIRED}
+                )
+                return False, "OTP has expired. Please request a new one.", None
+
+            # Check max attempts
+            if otp_record.attempts >= otp_record.max_attempts:
+                logger.warning(f"[OTP] Max attempts exceeded for {email}")
+                await self.prisma.otp_verifications.update(
+                    where={"otp_id": otp_record.otp_id},
+                    data={"status": OtpStatusEnum.FAILED}
+                )
+                return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
+
+            # Increment attempts
+            updated_attempts = otp_record.attempts + 1
+            await self.prisma.otp_verifications.update(
+                where={"otp_id": otp_record.otp_id},
+                data={"attempts": updated_attempts}
+            )
+
+            # Verify OTP code
+            if otp_record.otp_code != otp_code:
+                attempts_remaining = otp_record.max_attempts - updated_attempts
+                logger.warning(f"[OTP] Invalid email OTP for {email}, {attempts_remaining} attempts remaining")
+                
+                if attempts_remaining <= 0:
+                    await self.prisma.otp_verifications.update(
+                        where={"otp_id": otp_record.otp_id},
+                        data={"status": OtpStatusEnum.FAILED}
+                    )
+                    return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
+                
+                return False, f"Invalid OTP. {attempts_remaining} attempts remaining.", None
+
+            # OTP is valid - mark as verified
+            await self.prisma.otp_verifications.update(
+                where={"otp_id": otp_record.otp_id},
+                data={
+                    "status": OtpStatusEnum.VERIFIED,
+                    "verified_at": datetime.now(timezone.utc)
+                }
+            )
+
+            logger.info(f"[OTP] Successfully verified email OTP for {email}")
+            return True, "Email verified successfully", {
+                "verified": True,
+                "email": email,
+            }
+
+        except Exception as e:
+            logger.error(f"[OTP] Error verifying email OTP: {str(e)}", exc_info=True)
+            return False, "An error occurred while verifying OTP", None
+
+    async def _send_email(self, email: str, otp_code: str) -> bool:
+        """
+        Send email via FastMail
+        
+        Args:
+            email: Email address
+            otp_code: OTP code to send
+            
+        Returns:
+            bool: True if sent successfully
+        """
+        try:
+            if not self.mail_config:
+                # Mock mode - just log the OTP
+                logger.info(f"[OTP] MOCK EMAIL - To: {email}, Code: {otp_code}")
+                return True
+
+            # Create email message
+            message = MessageSchema(
+                subject="Your RiverPe Verification Code",
+                recipients=[email],
+                body=f"""
+                <html>
+                    <body style="font-family: Arial, sans-serif; padding: 20px;">
+                        <h2 style="color: #333;">Email Verification</h2>
+                        <p>Your RiverPe verification code is:</p>
+                        <h1 style="color: #4F46E5; font-size: 32px; letter-spacing: 5px;">{otp_code}</h1>
+                        <p>This code will expire in 10 minutes.</p>
+                        <p style="color: #666; font-size: 12px; margin-top: 30px;">
+                            If you didn't request this code, please ignore this email.
+                        </p>
+                    </body>
+                </html>
+                """,
+                subtype=MessageType.html
+            )
+
+            # Send email
+            await self.fast_mail.send_message(message)
+            logger.info(f"[OTP] Email sent successfully to {email}")
+            return True
+
+        except Exception as e:
+            logger.error(f"[OTP] Email sending error: {str(e)}", exc_info=True)
+            return False
+
+    async def _check_email_rate_limit(self, email: str) -> Optional[any]:
+        """
+        Check if rate limit has been hit for email
+        
+        Returns:
+            OTP record if within rate limit window, None otherwise
+        """
+        cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=self.RATE_LIMIT_SECONDS)
+        
+        recent_otp = await self.prisma.otp_verifications.find_first(
+            where={
+                "email": email,
+                "created_at": {"gte": cutoff_time}
+            },
+            order={"created_at": "desc"}
+        )
+        
+        return recent_otp
+
+    async def _invalidate_existing_email_otps(self, email: str) -> None:
+        """
+        Mark all existing pending email OTPs as expired
+        """
+        await self.prisma.otp_verifications.update_many(
+            where={
+                "email": email,
+                "status": OtpStatusEnum.PENDING,
+                "otp_type": OtpTypeEnum.EMAIL_VERIFICATION,
+            },
+            data={"status": OtpStatusEnum.EXPIRED}
+        )
 
     async def _send_sms(self, phone_number: str, otp_code: str) -> bool:
         """

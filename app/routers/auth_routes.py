@@ -22,6 +22,44 @@ router = APIRouter(
     tags=["auth"],
 )
 
+# Check if email is available
+@router.post("/check-email")
+async def check_email(data: dict):
+    """
+    Check if email is already registered.
+    Returns: {"available": true/false, "message": "..."}
+    """
+    email = data.get("email", "").strip()
+    
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email is required"
+        )
+    
+    # Validate email format
+    if not "@" in email or "." not in email.split("@")[1]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email format"
+        )
+    
+    email = normalize_email(email)
+    
+    # Check if email exists
+    existing = await prisma.entities.find_first(where={"email": email})
+    
+    if existing:
+        return {
+            "available": False,
+            "message": "This email is already registered. Please sign in instead."
+        }
+    
+    return {
+        "available": True,
+        "message": "Email is available"
+    }
+
 # Return unified response with tokens + user
 @router.post("/signup", response_model=schemas.AuthResponse, status_code=status.HTTP_201_CREATED)
 async def signup(user_in: schemas.UserCreate, response: Response):

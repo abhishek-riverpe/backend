@@ -168,8 +168,9 @@ model webhook_events {
 
 model otp_verifications {
   otp_id             String        @id @default(uuid()) @db.Uuid
-  phone_number       String
-  country_code       String        @default("+1")
+  phone_number       String?       // Optional - for phone verification
+  email              String?       // Optional - for email verification
+  country_code       String?       @default("+1")
   otp_code           String
   otp_type           OtpTypeEnum   @default(PHONE_VERIFICATION)
   status             OtpStatusEnum @default(PENDING)
@@ -183,6 +184,7 @@ model otp_verifications {
   updated_at         DateTime      @default(now())
 
   @@index([phone_number, status])
+  @@index([email, status])
   @@index([expires_at])
   @@map("otp_verifications")
 }
