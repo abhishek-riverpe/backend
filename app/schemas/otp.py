@@ -4,7 +4,7 @@ OTP Verification Schemas
 Defines the data structures for OTP generation, verification, and responses.
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, EmailStr
 from typing import Optional, Dict, Any
 from datetime import datetime
 
@@ -83,4 +83,25 @@ class OtpData(BaseModel):
     expires_at: datetime
     attempts_remaining: int
     can_resend: bool
+
+
+# Email OTP Schemas
+class EmailOtpSendRequest(BaseModel):
+    """Request payload for sending email OTP"""
+    email: EmailStr = Field(..., description="Email address to send OTP to")
+
+
+class EmailOtpVerifyRequest(BaseModel):
+    """Request payload for verifying email OTP"""
+    email: EmailStr = Field(..., description="Email address that received the OTP")
+    otp_code: str = Field(..., description="6-digit OTP code")
+
+    @validator('otp_code')
+    def validate_otp_code(cls, v):
+        """Validate OTP code format"""
+        if not v.isdigit():
+            raise ValueError('OTP must contain only digits')
+        if len(v) != 6:
+            raise ValueError('OTP must be exactly 6 digits')
+        return v
 
