@@ -34,6 +34,18 @@ class Settings(BaseSettings):
     twilio_auth_token: str | None = None
     twilio_phone_number: str | None = None
 
+    # Email/SMTP settings
+    mail_username: str | None = None
+    mail_password: str | None = None
+    mail_from: str | None = None
+    mail_from_name: str = "RiverPe"
+    mail_port: int = 587
+    mail_server: str = "smtp.gmail.com"
+    mail_starttls: bool = True
+    mail_ssl_tls: bool = False
+    use_credentials: bool = True
+    validate_certs: bool = True
+
     # Pydantic v2 settings config
     model_config = SettingsConfigDict(
         env_file=".env",

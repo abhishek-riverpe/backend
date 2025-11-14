@@ -1,7 +1,10 @@
 from fastapi import APIRouter, HTTPException, status, Response, Request
 from datetime import datetime, timedelta, timezone
+import logging
+import httpx
 from ..core import auth
 from ..core.database import prisma
+from ..core.config import settings
 from .. import schemas
 from prisma.errors import UniqueViolationError, PrismaError
 from passlib.context import CryptContext
@@ -21,6 +24,95 @@ router = APIRouter(
     prefix="/api/v1/auth",
     tags=["auth"],
 )
+
+logger = logging.getLogger(__name__)
+
+
+async def _email_exists_in_zynk(email: str) -> bool:
+    """
+    Check with ZynkLabs API if an entity already exists for the email.
+    Falls back to local DB only when Zynk credentials are not configured.
+    """
+    if not settings.zynk_base_url or not settings.zynk_api_key:
+        logger.warning("[AUTH] Zynk credentials missing, falling back to local DB email lookup.")
+        existing = await prisma.entities.find_first(where={"email": email})
+        return existing is not None
+
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/email/{email}"
+    headers = {
+        "x-api-token": settings.zynk_api_key,
+        "Accept": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+            resp = await client.get(url, headers=headers)
+    except httpx.RequestError as exc:
+        logger.error("[AUTH] Zynk email lookup failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to verify email at the moment. Please try again later.",
+        )
+
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {}
+
+    if resp.status_code == 404:
+        return False
+
+    if 200 <= resp.status_code < 300:
+        # Treat success response as entity existing
+        return True
+
+    error_detail = "Unknown upstream error"
+    if isinstance(body, dict):
+        error_detail = body.get("message") or body.get("error") or error_detail
+
+    logger.error("[AUTH] Zynk email lookup returned %s: %s", resp.status_code, error_detail)
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"Upstream email lookup failed: {error_detail}",
+    )
+
+
+# Check if email is available
+@router.post("/check-email")
+async def check_email(data: dict):
+    """
+    Check if email is already registered.
+    Returns: {"available": true/false, "message": "..."}
+    """
+    email = data.get("email", "").strip()
+    
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email is required"
+        )
+    
+    # Validate email format
+    if not "@" in email or "." not in email.split("@")[1]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email format"
+        )
+    
+    email = normalize_email(email)
+    
+    email_exists = await _email_exists_in_zynk(email)
+    
+    if email_exists:
+        return {
+            "available": False,
+            "message": "This email is already registered. Please sign in instead."
+        }
+    
+    return {
+        "available": True,
+        "message": "Email is available"
+    }
 
 # Return unified response with tokens + user
 @router.post("/signup", response_model=schemas.AuthResponse, status_code=status.HTTP_201_CREATED)
