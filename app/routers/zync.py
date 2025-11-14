@@ -19,8 +19,14 @@ def _auth_header():
     }
 
 async def _call_zynk_create_entity(payload: dict) -> str:
+    import logging
+    logger = logging.getLogger(__name__)
+    
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/create"
     headers = {**_auth_header(), "Content-Type": "application/json", "Accept": "application/json"}
+    
+    # Log the payload being sent for debugging
+    logger.info(f"Sending payload to Zynk API: {payload}")
 
     for attempt in range(2):  # 1 retry
         try:
@@ -37,8 +43,11 @@ async def _call_zynk_create_entity(payload: dict) -> str:
             raise HTTPException(status_code=502, detail=f"Invalid JSON response from upstream: {resp.text[:200]}")
 
         if not (200 <= resp.status_code < 300):
-            # Include upstream error details
+            # Include upstream error details with full response body for debugging
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Zynk API error response: {body}")
             raise HTTPException(status_code=502, detail=f"Upstream error: {error_detail}")
 
         if not isinstance(body, dict) or body.get("success") is not True:
