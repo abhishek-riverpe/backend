@@ -25,12 +25,12 @@ async def get_funding_accounts(
     Ensures that users can only access their own funding accounts for security.
     Requires authentication and ownership validation in the banking system.
     """
-    # Ensure the entity has an external_entity_id set (means it's linked to ZyncLab)
-    if not current.external_entity_id:
+    # Ensure the entity has an zynk_entity_id set (means it's linked to ZyncLab)
+    if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
-    # Construct the URL using the external_entity_id for the upstream call
-    url = f"{settings.zynk_base_url}/api/v1/transformer/accounts/{current.external_entity_id}/funding_accounts"
+    # Construct the URL using the zynk_entity_id for the upstream call
+    url = f"{settings.zynk_base_url}/api/v1/transformer/accounts/{current.zynk_entity_id}/funding_accounts"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic

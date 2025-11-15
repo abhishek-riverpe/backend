@@ -203,7 +203,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
                     "nationality": nationality,
                     "phone_number": phone_number,
                     "country_code": country_code,
-                    "external_entity_id": zynk_entity_id,  # Store the Zynk Labs entity ID
+                    "zynk_entity_id": zynk_entity_id,  # Store the Zynk Labs entity ID
                     "status": "ACTIVE",  # Set to ACTIVE since all required info is collected
                     # created_at/updated_at default to now()
                 }
@@ -233,7 +233,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
 
     safe_user = {
         "id": str(entity.id) if hasattr(entity, "id") else None,
-        "external_entity_id": entity.external_entity_id if hasattr(entity, "external_entity_id") else None,
+        "zynk_entity_id": entity.zynk_entity_id if hasattr(entity, "zynk_entity_id") else None,
         "entity_type": str(entity.entity_type) if hasattr(entity, "entity_type") else None,
         "email": entity.email if hasattr(entity, "email") else None,
         "first_name": entity.first_name if hasattr(entity, "first_name") else None,
@@ -384,7 +384,7 @@ async def signin(payload: schemas.SignInInput, response: Response):
 
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "zynk_entity_id": user.zynk_entity_id if hasattr(user, "zynk_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
@@ -446,7 +446,7 @@ async def refresh_token(request: Request, response: Response):
 
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "zynk_entity_id": user.zynk_entity_id if hasattr(user, "zynk_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
