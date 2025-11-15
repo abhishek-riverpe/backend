@@ -15,6 +15,7 @@ from .security import (
     validate_password,
     hash_password,
 )
+from app.routers.transformer import _create_entity_in_zynk
 
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
@@ -125,7 +126,24 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     last_name = user_in.last_name.strip()
     email = normalize_email(user_in.email)
     password = user_in.password
-    print(f"Signup request: first_name={first_name}, last_name={last_name}, email={email}, password={password}")
+    date_of_birth = user_in.date_of_birth.strip()
+    nationality = user_in.nationality.strip()
+    phone_number = user_in.phone_number.strip()
+    country_code = user_in.country_code.strip()
+    # Extract phone prefix (numeric part without +)
+    phone_prefix = country_code.replace('+', '')
+
+    # Convert date from MM/DD/YYYY to YYYY-MM-DD format for Zynk Labs
+    if date_of_birth:
+        try:
+            month, day, year = date_of_birth.split('/')
+            zynk_date_of_birth = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Please use MM/DD/YYYY format.")
+    else:
+        zynk_date_of_birth = date_of_birth
+
+    print(f"Signup request: first_name={first_name}, last_name={last_name}, email={email}, date_of_birth={date_of_birth}, nationality={nationality}, phone={country_code}{phone_number}")
 
     # Validate semantics
     try:
@@ -149,6 +167,28 @@ async def signup(user_in: schemas.UserCreate, response: Response):
 
     # Create user in a transaction to keep things consistent
     try:
+        # First create entity in Zynk Labs
+        zynk_payload = {
+            "firstName": first_name,
+            "lastName": last_name,
+            "email": email,
+            "dateOfBirth": zynk_date_of_birth,
+            "nationality": nationality,
+            "phoneNumber": phone_number,
+            "phoneNumberPrefix": phone_prefix,
+            "countryCode": country_code,
+            "type": "individual"
+        }
+
+        print(f"[SIGNUP] Creating entity in Zynk Labs with payload: {zynk_payload}")
+        zynk_response = await _create_entity_in_zynk(zynk_payload)
+        zynk_entity_id = zynk_response.get("data", {}).get("entityId")
+
+        if not zynk_entity_id:
+            raise HTTPException(status_code=502, detail="Failed to get entity ID from Zynk Labs")
+
+        print(f"[SIGNUP] Zynk Labs entity created with ID: {zynk_entity_id}")
+
         async with prisma.tx() as tx:
             entity = await tx.entities.create(
                 data={
@@ -159,7 +199,12 @@ async def signup(user_in: schemas.UserCreate, response: Response):
                     # Optionally copy username into display name at first registration
                     "first_name": first_name,
                     "last_name": last_name,
-                    # status defaults to PENDING; you can keep it until email verification finishes
+                    "date_of_birth": date_of_birth,
+                    "nationality": nationality,
+                    "phone_number": phone_number,
+                    "country_code": country_code,
+                    "external_entity_id": zynk_entity_id,  # Store the Zynk Labs entity ID
+                    "status": "ACTIVE",  # Set to ACTIVE since all required info is collected
                     # created_at/updated_at default to now()
                 }
             )

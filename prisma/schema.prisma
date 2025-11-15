@@ -88,6 +88,10 @@ model entities {
   first_name         String
   last_name          String
   password           String
+  date_of_birth      String?            // DOB in MM/DD/YYYY format
+  nationality        String?            // Country code like 'US', 'IN'
+  phone_number       String?            // Phone number without country code
+  country_code       String?            // Country code like '+1', '+91'
   email_verified     Boolean?           @default(false)
   last_login_at      DateTime?
   login_attempts     Int?               @default(0)
