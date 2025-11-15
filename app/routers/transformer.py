@@ -43,6 +43,42 @@ async def _upload_to_s3(file: UploadFile, file_name: str) -> str:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file to S3: {str(e)}")
 
+async def _create_entity_in_zynk(payload: dict) -> dict:
+    """
+    Create an entity in ZynkLabs API.
+    """
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/create"
+    headers = {**_auth_header(), "Content-Type": "application/json"}
+
+    for attempt in range(2):  # 1 retry
+        try:
+            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+        except httpx.RequestError:
+            if attempt == 0:
+                continue
+            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+
+        try:
+            body = resp.json()
+        except ValueError:
+            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+
+        if not (200 <= resp.status_code < 300):
+            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
+            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+
+        if body.get("success") is not True:
+            error_detail = body.get("message", body.get("error", "Request was not successful"))
+            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+
+        return body
+
+    raise HTTPException(status_code=502, detail="Failed to create entity in upstream service after multiple attempts")
+
 async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) -> dict:
     """
     Submit KYC documents to ZynkLabs API.

@@ -71,6 +71,10 @@ enum LoginMethodEnum {
   PHONE_OTP
   APPLE_ID
 }
+enum AccountStatusEnum {
+  inactive
+  active
+}
 
 // --------------------
 // MODEL DEFINITIONS
@@ -84,6 +88,10 @@ model entities {
   first_name         String
   last_name          String
   password           String
+  date_of_birth      String?            // DOB in MM/DD/YYYY format
+  nationality        String?            // Country code like 'US', 'IN'
+  phone_number       String?            // Phone number without country code
+  country_code       String?            // Country code like '+1', '+91'
   email_verified     Boolean?           @default(false)
   last_login_at      DateTime?
   login_attempts     Int?               @default(0)
@@ -167,7 +175,7 @@ model webhook_events {
 }
 
 model otp_verifications {
-  otp_id             String        @id @default(uuid()) @db.Uuid
+  id                 String        @id @default(uuid()) @db.Uuid
   phone_number       String?       // Optional - for phone verification
   email              String?       // Optional - for email verification
   country_code       String?       @default("+1")
@@ -237,3 +245,22 @@ model login_sessions {
   @@map("login_sessions")
 }
 
+model funding_accounts {
+  funding_account_id String             @id @default(uuid()) 
+  entity_id          String             
+  jurisdiction_id    String             
+  provider_id        String
+  status             AccountStatusEnum   @default(inactive)
+  currency           String
+  bank_name          String
+  bank_address       String
+  bank_routing_number String
+  bank_account_number String
+  bank_beneficiary_name String
+  bank_beneficiary_address String
+  payment_rail String
+  created_at         DateTime?          @default(now())
+  updated_at         DateTime?          @default(now())
+  deleted_at         DateTime?
+  @@map("funding_accounts")
+}
