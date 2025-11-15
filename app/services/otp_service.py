@@ -109,7 +109,7 @@ class OTPService:
                 }
             )
 
-            logger.info(f"[OTP] Created OTP record: {otp_record.otp_id}")
+            logger.info(f"[OTP] Created OTP record: {otp_record.id}")
 
             # Send OTP via SMS
             sms_sent = await self._send_sms(full_phone, otp_code)
@@ -121,7 +121,7 @@ class OTPService:
             logger.info(f"[OTP] OTP sent successfully to {full_phone}")
             
             return True, "OTP sent successfully", {
-                "otp_id": otp_record.otp_id,
+                "id": otp_record.id,
                 "phone_number": phone_number,
                 "country_code": country_code,
                 "expires_at": expires_at.isoformat(),
@@ -172,7 +172,7 @@ class OTPService:
             if datetime.now(timezone.utc) > otp_record.expires_at:
                 logger.warning(f"[OTP] Expired OTP for {full_phone}")
                 await self.prisma.otp_verifications.update(
-                    where={"otp_id": otp_record.otp_id},
+                    where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.EXPIRED}
                 )
                 return False, "OTP has expired. Please request a new one.", None
@@ -181,7 +181,7 @@ class OTPService:
             if otp_record.attempts >= otp_record.max_attempts:
                 logger.warning(f"[OTP] Max attempts exceeded for {full_phone}")
                 await self.prisma.otp_verifications.update(
-                    where={"otp_id": otp_record.otp_id},
+                    where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.FAILED}
                 )
                 return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
@@ -189,7 +189,7 @@ class OTPService:
             # Increment attempts
             updated_attempts = otp_record.attempts + 1
             await self.prisma.otp_verifications.update(
-                where={"otp_id": otp_record.otp_id},
+                where={"id": otp_record.id},
                 data={"attempts": updated_attempts}
             )
 
@@ -200,7 +200,7 @@ class OTPService:
                 
                 if attempts_remaining <= 0:
                     await self.prisma.otp_verifications.update(
-                        where={"otp_id": otp_record.otp_id},
+                        where={"id": otp_record.id},
                         data={"status": OtpStatusEnum.FAILED}
                     )
                     return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
@@ -209,7 +209,7 @@ class OTPService:
 
             # OTP is valid - mark as verified
             await self.prisma.otp_verifications.update(
-                where={"otp_id": otp_record.otp_id},
+                where={"id": otp_record.id},
                 data={
                     "status": OtpStatusEnum.VERIFIED,
                     "verified_at": datetime.now(timezone.utc)
@@ -270,7 +270,7 @@ class OTPService:
                 }
             )
 
-            logger.info(f"[OTP] Created email OTP record: {otp_record.otp_id}")
+            logger.info(f"[OTP] Created email OTP record: {otp_record.id}")
 
             # Send OTP via email
             email_sent = await self._send_email(email, otp_code)
@@ -282,7 +282,7 @@ class OTPService:
             logger.info(f"[OTP] OTP sent successfully to {email}")
             
             return True, "OTP sent successfully", {
-                "otp_id": otp_record.otp_id,
+                "id": otp_record.id,
                 "email": email,
                 "expires_at": expires_at.isoformat(),
                 "attempts_remaining": self.MAX_ATTEMPTS,
@@ -325,7 +325,7 @@ class OTPService:
             if datetime.now(timezone.utc) > otp_record.expires_at:
                 logger.warning(f"[OTP] Expired email OTP for {email}")
                 await self.prisma.otp_verifications.update(
-                    where={"otp_id": otp_record.otp_id},
+                    where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.EXPIRED}
                 )
                 return False, "OTP has expired. Please request a new one.", None
@@ -334,7 +334,7 @@ class OTPService:
             if otp_record.attempts >= otp_record.max_attempts:
                 logger.warning(f"[OTP] Max attempts exceeded for {email}")
                 await self.prisma.otp_verifications.update(
-                    where={"otp_id": otp_record.otp_id},
+                    where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.FAILED}
                 )
                 return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
@@ -342,7 +342,7 @@ class OTPService:
             # Increment attempts
             updated_attempts = otp_record.attempts + 1
             await self.prisma.otp_verifications.update(
-                where={"otp_id": otp_record.otp_id},
+                where={"id": otp_record.id},
                 data={"attempts": updated_attempts}
             )
 
@@ -353,7 +353,7 @@ class OTPService:
                 
                 if attempts_remaining <= 0:
                     await self.prisma.otp_verifications.update(
-                        where={"otp_id": otp_record.otp_id},
+                        where={"id": otp_record.id},
                         data={"status": OtpStatusEnum.FAILED}
                     )
                     return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
@@ -362,7 +362,7 @@ class OTPService:
 
             # OTP is valid - mark as verified
             await self.prisma.otp_verifications.update(
-                where={"otp_id": otp_record.otp_id},
+                where={"id": otp_record.id},
                 data={
                     "status": OtpStatusEnum.VERIFIED,
                     "verified_at": datetime.now(timezone.utc)

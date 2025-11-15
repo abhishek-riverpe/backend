@@ -122,7 +122,7 @@ async def create_external_entity(
     now = datetime.now(timezone.utc)
     try:
         updated = await prisma.entities.update(
-            where={"entity_id": current.entity_id},  # use your immutable PK to locate the row
+            where={"id": current.id},  # use your immutable PK to locate the row
             data={
                 "external_entity_id": upstream_entity_id,   # <- overwrite existing field
                 "status": "ACTIVE",               # ensure enum has ACTIVE
@@ -133,7 +133,7 @@ async def create_external_entity(
         raise HTTPException(status_code=500, detail="Failed to persist external entity link")
 
     # 5) Return unified API response
-    response.headers["Location"] = f"/api/v1/zynk/entity/{updated.entity_id}"
+    response.headers["Location"] = f"/api/v1/zynk/entity/{updated.id}"
     response.headers["X-External-Entity-Id"] = upstream_entity_id
     return {
         "success": True,

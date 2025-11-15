@@ -81,7 +81,7 @@ enum AccountStatusEnum {
 // --------------------
 
 model entities {
-  entity_id          String             @id @default(uuid()) @db.Uuid
+  id                  String             @id @default(uuid()) @db.Uuid
   external_entity_id String?            @unique
   entity_type        EntityTypeEnum     @default(INDIVIDUAL)
   email              String            @unique
@@ -108,7 +108,7 @@ model entities {
 }
 
 model kyc_sessions {
-  kyc_session_id     String          @id @default(uuid()) @db.Uuid
+  id                  String          @id @default(uuid()) @db.Uuid
   entity_id          String          @db.Uuid
   routing_id         String?
   status             KycStatusEnum   @default(NOT_STARTED)
@@ -122,7 +122,7 @@ model kyc_sessions {
   deleted_at         DateTime?
 
   // Relations
-  entity             entities        @relation(fields: [entity_id], references: [entity_id])
+  entity             entities        @relation(fields: [entity_id], references: [id])
   kyc_documents      kyc_documents[]
   webhook_events     webhook_events[]
 
@@ -130,7 +130,7 @@ model kyc_sessions {
 }
 
 model kyc_documents {
-  document_id        String        @id @default(uuid()) @db.Uuid
+  id                  String        @id @default(uuid()) @db.Uuid
   kyc_session_id     String        @db.Uuid
   document_type      String
   file_path          String?
@@ -139,39 +139,30 @@ model kyc_documents {
   deleted_at         DateTime?
 
   // Relations
-  kyc_session        kyc_sessions  @relation(fields: [kyc_session_id], references: [kyc_session_id])
+  kyc_session        kyc_sessions  @relation(fields: [kyc_session_id], references: [id])
 
   @@map("kyc_documents")
 }
 
 model webhook_events {
-  event_id           String                    @id @default(uuid()) @db.Uuid
+  id                  String                    @id @default(uuid()) @db.Uuid
   event_category     WebhookEventCategory
   event_type         String
   event_status       String?
   entity_id          String?                   @db.Uuid
   kyc_session_id     String?                   @db.Uuid
-  // transfer_id        String?                   @db.Uuid
-  // alm_tx_id          String?                   @db.Uuid
   teleport_id        String?                   @db.Uuid
   event_payload      Json
-  // delivery_status    WebhookDeliveryStatusEnum  @default(PENDING)
-  // delivery_attempts  Int?                       @default(0)
-  // last_attempt_at    DateTime?
-  // next_retry_at      DateTime?
-  // http_status_code   Int?
-  // response_body      String?
   created_at         DateTime?                  @default(now())
-
   // Relations
-  entity             entities?                  @relation(fields: [entity_id], references: [entity_id])
-  kyc_session        kyc_sessions?              @relation(fields: [kyc_session_id], references: [kyc_session_id])
+  entity             entities?                  @relation(fields: [entity_id], references: [id])
+  kyc_session        kyc_sessions?              @relation(fields: [kyc_session_id], references: [id])
 
   @@map("webhook_events")
 }
 
 model otp_verifications {
-  otp_id             String        @id @default(uuid()) @db.Uuid
+  id                  String        @id @default(uuid()) @db.Uuid
   phone_number       String?       // Optional - for phone verification
   email              String?       // Optional - for email verification
   country_code       String?       @default("+1")
@@ -194,7 +185,7 @@ model otp_verifications {
 }
 
 model login_sessions {
-  session_id         String              @id @default(uuid()) @db.Uuid
+  id                  String              @id @default(uuid()) @db.Uuid
   entity_id          String              @db.Uuid
   session_token      String              @unique // JWT token ID or session token
   login_method       LoginMethodEnum     @default(EMAIL_PASSWORD)
@@ -232,7 +223,7 @@ model login_sessions {
   updated_at         DateTime            @default(now())
 
   // Relations
-  entity             entities            @relation(fields: [entity_id], references: [entity_id])
+  entity             entities            @relation(fields: [entity_id], references: [id])
 
   @@index([entity_id, status])
   @@index([session_token])
@@ -242,7 +233,7 @@ model login_sessions {
 }
 
 model funding_accounts {
-  funding_account_id String             @id @default(uuid()) 
+  id                  String             @id @default(uuid()) 
   entity_id          String             
   jurisdiction_id    String             
   provider_id        String
