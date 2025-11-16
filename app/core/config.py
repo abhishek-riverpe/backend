@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     hibp_enabled: bool = True
     hibp_timeout_s: int = 5
 
+    # Session inactivity timeout (minutes)
+    inactivity_timeout_minutes: int = 20
+
+    # Concurrent session controls
+    max_active_sessions: int = 3  # 0 or negative disables limiting
+
     # Pydantic v2 settings config
     model_config = SettingsConfigDict(
         env_file=".env",

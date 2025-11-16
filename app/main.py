@@ -5,7 +5,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .core.config import settings
 from .core.database import prisma
 from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router, funding_account_router, otp_router
-from .middleware import RequestSizeLimitMiddleware
+from .middleware import RequestSizeLimitMiddleware, ActivityTimeoutMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,6 +14,9 @@ app = FastAPI()
 
 # ✅ Request size limit (rejects > configured MB)
 app.add_middleware(RequestSizeLimitMiddleware)
+
+# ✅ Session inactivity timeout enforcement for authenticated requests
+app.add_middleware(ActivityTimeoutMiddleware)
 
 # ✅ CORS setup - Allowing all origins for development
 # For React Native/Expo development, this is the simplest approach

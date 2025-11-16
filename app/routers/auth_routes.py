@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Response, Request
+from fastapi import APIRouter, HTTPException, status, Response, Request, Depends
 from datetime import datetime, timedelta, timezone
 import logging
 import httpx
@@ -7,8 +7,11 @@ from ..core.database import prisma
 from ..core.config import settings
 from .. import schemas
 from prisma.errors import UniqueViolationError, PrismaError
+from prisma.enums import LoginMethodEnum
 from passlib.context import CryptContext
 from app.services.otp_service import OTPService
+from app.services.otp_service import OTPService
+from app.services.session_service import SessionService
 
 # from prisma.models import entities  # prisma python generates models from schema
 from .security import (
@@ -17,6 +20,7 @@ from .security import (
     hash_password,
 )
 from app.routers.transformer import _create_entity_in_zynk
+from app.core.auth import get_current_entity
 
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
@@ -204,7 +208,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
                     "nationality": nationality,
                     "phone_number": phone_number,
                     "country_code": country_code,
-                    "zynk_entity_id": zynk_entity_id,  # Store the Zynk Labs entity ID
+                    "external_entity_id": zynk_entity_id,  # Store the Zynk Labs entity ID
                     "status": "ACTIVE",  # Set to ACTIVE since all required info is collected
                     # created_at/updated_at default to now()
                 }
@@ -234,7 +238,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
 
     safe_user = {
         "id": str(entity.id) if hasattr(entity, "id") else None,
-        "zynk_entity_id": entity.zynk_entity_id if hasattr(entity, "zynk_entity_id") else None,
+        "external_entity_id": entity.external_entity_id if hasattr(entity, "external_entity_id") else None,
         "entity_type": str(entity.entity_type) if hasattr(entity, "entity_type") else None,
         "email": entity.email if hasattr(entity, "email") else None,
         "first_name": entity.first_name if hasattr(entity, "first_name") else None,
@@ -264,7 +268,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     }
 
 @router.post("/signin", response_model=schemas.AuthResponse, status_code=status.HTTP_200_OK)
-async def signin(payload: schemas.SignInInput, response: Response):
+async def signin(payload: schemas.SignInInput, request: Request, response: Response):
     """
     Authenticate an entity using email + password.
     - Returns access & refresh tokens.
@@ -383,9 +387,22 @@ async def signin(payload: schemas.SignInInput, response: Response):
         path="/",
     )
 
+    # Create login session for access token (used for inactivity tracking)
+    try:
+        session_service = SessionService(prisma)
+        await session_service.create_session(
+            entity_id=str(user.id),
+            session_token=access_token,
+            login_method=LoginMethodEnum.EMAIL_PASSWORD,
+            ip_address=getattr(request.client, "host", None),
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as e:
+        logger.warning(f"[AUTH] Failed to create login session: {e}")
+
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "zynk_entity_id": user.zynk_entity_id if hasattr(user, "zynk_entity_id") else None,
+        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
@@ -537,9 +554,22 @@ async def refresh_token(request: Request, response: Response):
         path="/",
     )
 
+    # Create a new login session for the new access token
+    try:
+        session_service = SessionService(prisma)
+        await session_service.create_session(
+            entity_id=str(user.id),
+            session_token=access_token,
+            login_method=LoginMethodEnum.EMAIL_PASSWORD,
+            ip_address=getattr(request.client, "host", None),
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as e:
+        logger.warning(f"[AUTH] Failed to create login session on refresh: {e}")
+
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "zynk_entity_id": user.zynk_entity_id if hasattr(user, "zynk_entity_id") else None,
+        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
@@ -578,3 +608,39 @@ async def logout(response: Response):
         "meta": {},
     }
     
+@router.get("/ping")
+async def auth_ping(request: Request):
+    """
+    Simple authenticated ping to exercise middleware/session activity updates.
+    Requires Authorization: Bearer <access_token> header.
+    """
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+    token = auth_header.split(" ", 1)[1].strip()
+    # Validate token type
+    auth.verify_token_type(token, "access")
+    return {"success": True, "message": "pong", "data": {"time": datetime.now(timezone.utc).isoformat()}}
+
+@router.post("/logout-all", response_model=schemas.ApiResponse)
+async def logout_all_devices(request: Request, response: Response, current_user=Depends(get_current_entity)):
+    """
+    Revoke all active sessions for the current user and clear refresh cookie.
+    Note: Existing refresh tokens on other devices will be cleared only when they refresh the page;
+    server will not issue new access tokens for expired/idle sessions, but refresh JWTs are not tracked server-side.
+    """
+    try:
+        session_service = SessionService(prisma)
+        revoked = await session_service.revoke_all_sessions(entity_id=str(current_user.id))
+        # Clear current refresh cookie
+        response.delete_cookie("rp_refresh", path="/")
+        return {
+            "success": True,
+            "message": f"Logged out from all devices ({revoked} sessions revoked)",
+            "data": {"revoked": revoked},
+            "error": None,
+            "meta": {},
+        }
+    except Exception as e:
+        logger.error(f"[AUTH] Logout all devices failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to logout from all devices")

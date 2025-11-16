@@ -623,35 +623,35 @@ class OTPService:
             bool: True if sent successfully
         """
         try:
-            # Twilio API integration
-            account_sid = settings.twilio_account_sid
-            auth_token = settings.twilio_auth_token
-            from_number = settings.twilio_phone_number
+            # Mock mode for development/testing: do not call Twilio, just log and succeed
+            logger.info(f"[OTP] MOCK SMS (Twilio disabled) - To: {phone_number}, Code: {otp_code}")
+            return True
 
-            if not all([account_sid, auth_token, from_number]):
-                logger.error("[OTP] Twilio credentials not configured")
-                return False
-
-            url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    url,
-                    auth=(account_sid, auth_token),
-                    data={
-                        "To": phone_number,
-                        "From": from_number,
-                        "Body": f"Your RiverPe verification code is: {otp_code}. Valid for 10 minutes."
-                    },
-                    timeout=10.0
-                )
-                
-                if response.status_code == 201:
-                    logger.info(f"[OTP] Twilio SMS sent successfully to {phone_number}")
-                    return True
-                else:
-                    logger.error(f"[OTP] Twilio error: {response.status_code} - {response.text}")
-                    return False
+            # Real Twilio integration (disabled/commented for now):
+            # account_sid = settings.twilio_account_sid
+            # auth_token = settings.twilio_auth_token
+            # from_number = settings.twilio_phone_number
+            # if not all([account_sid, auth_token, from_number]):
+            #     logger.error("[OTP] Twilio credentials not configured")
+            #     return False
+            # url = f\"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json\"
+            # async with httpx.AsyncClient() as client:
+            #     response = await client.post(
+            #         url,
+            #         auth=(account_sid, auth_token),
+            #         data={
+            #             \"To\": phone_number,
+            #             \"From\": from_number,
+            #             \"Body\": f\"Your RiverPe verification code is: {otp_code}. Valid for 10 minutes.\"
+            #         },
+            #         timeout=10.0
+            #     )
+            #     if response.status_code == 201:
+            #         logger.info(f\"[OTP] Twilio SMS sent successfully to {phone_number}\")
+            #         return True
+            #     else:
+            #         logger.error(f\"[OTP] Twilio error: {response.status_code} - {response.text}\")
+            #         return False
 
         except Exception as e:
             logger.error(f"[OTP] Twilio sending error: {str(e)}", exc_info=True)
