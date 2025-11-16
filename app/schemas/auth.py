@@ -15,6 +15,15 @@ class UserCreate(BaseModel):
     phone_number: str = Field(..., min_length=1)
     country_code: str = Field(..., min_length=1)
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordConfirm(BaseModel):
+    email: EmailStr
+    otp_code: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
 
 # -----------------------------
 # Unified API response schemas

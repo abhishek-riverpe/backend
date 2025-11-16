@@ -8,6 +8,7 @@ from ..core.config import settings
 from .. import schemas
 from prisma.errors import UniqueViolationError, PrismaError
 from passlib.context import CryptContext
+from app.services.otp_service import OTPService
 
 # from prisma.models import entities  # prisma python generates models from schema
 from .security import (
@@ -221,10 +222,10 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
-        httponly=True,
+        httponly=True,       # ✅ HttpOnly set to True for security
         samesite="strict",   # stricter than lax for banking
         secure=True,         # must be True in production (HTTPS)
-        max_age=24 * 60 * 60,  # 24 hours
+        max_age=30 * 24 * 60 * 60,  # 30 days to match refresh token expiry
         path="/",
     )
 
@@ -375,10 +376,10 @@ async def signin(payload: schemas.SignInInput, response: Response):
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
-        httponly=True,
+        httponly=True,               # ✅ HttpOnly set to True for security
         samesite="strict",
         secure=True,                 # keep True in prod (HTTPS)
-        max_age=24 * 60 * 60,        # 24h, align with your refresh TTL policy
+        max_age=30 * 24 * 60 * 60,   # 30 days to match refresh token expiry
         path="/",
     )
 
@@ -411,6 +412,98 @@ async def signin(payload: schemas.SignInInput, response: Response):
         "meta": {},
     }
 
+
+@router.post("/forgot-password/request", response_model=schemas.ApiResponse)
+async def request_password_reset(payload: schemas.ForgotPasswordRequest):
+    """
+    Initiate password reset by sending an OTP to the user's email.
+    Always responds with success to avoid leaking account existence.
+    """
+    email = normalize_email(payload.email)
+    user = await prisma.entities.find_unique(where={"email": email})
+
+    if not user:
+        return {
+            "success": True,
+            "message": "If that email exists, a reset code has been sent.",
+            "data": None,
+            "error": None,
+            "meta": {},
+        }
+
+    otp_service = OTPService(prisma)
+    success, message, data = await otp_service.send_password_reset_otp(email=email)
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=message,
+        )
+
+    return {
+        "success": True,
+        "message": message,
+        "data": data,
+        "error": None,
+        "meta": {},
+    }
+
+
+@router.post("/forgot-password/confirm", response_model=schemas.ApiResponse)
+async def confirm_password_reset(payload: schemas.ForgotPasswordConfirm):
+    """
+    Verify the password reset OTP and set a new password.
+    """
+    email = normalize_email(payload.email)
+    otp_service = OTPService(prisma)
+
+    success, message, _ = await otp_service.verify_password_reset_otp(
+        email=email,
+        otp_code=payload.otp_code,
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=message,
+        )
+
+    try:
+        validate_password(payload.new_password)
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(ve),
+        )
+
+    pwd_hash = hash_password(payload.new_password)
+    now = datetime.now(timezone.utc)
+
+    try:
+        await prisma.entities.update(
+            where={"email": email},
+            data={
+                "password": pwd_hash,
+                "login_attempts": 0,
+                "locked_until": None,
+                "updated_at": now,
+            },
+        )
+    except PrismaError as exc:
+        logger.error("[AUTH] Failed to reset password: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to reset password. Please try again later.",
+        )
+
+    return {
+        "success": True,
+        "message": "Password reset successfully",
+        "data": {"email": email},
+        "error": None,
+        "meta": {},
+    }
+
 @router.post("/refresh", response_model=schemas.AuthResponse)
 async def refresh_token(request: Request, response: Response):
     """
@@ -437,10 +530,10 @@ async def refresh_token(request: Request, response: Response):
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
-        httponly=True,
+        httponly=True,               # ✅ HttpOnly set to True for security
         samesite="strict",
         secure=True,
-        max_age=24 * 60 * 60,
+        max_age=30 * 24 * 60 * 60,   # 30 days to match refresh token expiry
         path="/",
     )
 

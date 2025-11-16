@@ -13,7 +13,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin")
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE = timedelta(hours=24)
+ACCESS_TOKEN_EXPIRE = timedelta(minutes=15)
 REFRESH_TOKEN_EXPIRE = timedelta(days=30)
 
 def get_password_hash(password):

@@ -1,5 +1,6 @@
 import re
 from passlib.context import CryptContext
+from app.core.password_blacklist import is_common_password
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -26,7 +27,9 @@ def validate_password(p: str) -> None:
         raise ValueError("Password must include at least one digit")
     if not re.search(r"[^\w\s]", p):
         raise ValueError("Password must include at least one special character")
-    # Optional: deny common weak patterns, repeated chars, etc.
+
+    if is_common_password(p):
+        raise ValueError("Password is too common. Please choose a more unique password.")
 
 def hash_password(p: str) -> str:
     return pwd_context.hash(p)

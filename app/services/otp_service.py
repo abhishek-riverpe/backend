@@ -251,7 +251,7 @@ class OTPService:
                     return False, f"Please wait {int(seconds_remaining)} seconds before requesting a new OTP", None
 
             # Invalidate any existing pending OTPs for this email
-            await self._invalidate_existing_email_otps(email)
+            await self._invalidate_existing_email_otps(email, OtpTypeEnum.EMAIL_VERIFICATION)
 
             # Generate new OTP
             otp_code = await self.generate_otp()
@@ -444,7 +444,139 @@ class OTPService:
         
         return recent_otp
 
-    async def _invalidate_existing_email_otps(self, email: str) -> None:
+    async def send_password_reset_otp(self, email: str) -> Tuple[bool, str, Optional[dict]]:
+        """
+        Send password reset OTP to email address
+        
+        Args:
+            email: Email address to send OTP to
+            
+        Returns:
+            Tuple of (success, message, data)
+        """
+        try:
+            logger.info(f"[OTP] Sending password reset OTP to {email}")
+
+            # Check rate limiting
+            recent_otp = await self._check_email_rate_limit(email)
+            if recent_otp:
+                seconds_remaining = (
+                    recent_otp.created_at + timedelta(seconds=self.RATE_LIMIT_SECONDS) - datetime.now(timezone.utc)
+                ).total_seconds()
+                if seconds_remaining > 0:
+                    logger.warning(f"[OTP] Password reset rate limit hit for {email}")
+                    return False, f"Please wait {int(seconds_remaining)} seconds before requesting another code", None
+
+            await self._invalidate_existing_email_otps(email, OtpTypeEnum.PASSWORD_RESET)
+
+            otp_code = await self.generate_otp()
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.OTP_EXPIRY_MINUTES)
+
+            otp_record = await self.prisma.otp_verifications.create(
+                data={
+                    "email": email,
+                    "otp_code": otp_code,
+                    "otp_type": OtpTypeEnum.PASSWORD_RESET,
+                    "status": OtpStatusEnum.PENDING,
+                    "expires_at": expires_at,
+                    "attempts": 0,
+                    "max_attempts": self.MAX_ATTEMPTS,
+                }
+            )
+
+            logger.info(f"[OTP] Created password reset OTP record: {otp_record.id}")
+
+            email_sent = await self._send_email(email, otp_code)
+
+            if not email_sent:
+                logger.error(f"[OTP] Failed to send password reset email to {email}")
+                return False, "Failed to send password reset code. Please try again.", None
+
+            return True, "Password reset code sent successfully", {
+                "id": otp_record.id,
+                "email": email,
+                "expires_at": expires_at.isoformat(),
+                "attempts_remaining": self.MAX_ATTEMPTS,
+            }
+
+        except Exception as e:
+            logger.error(f"[OTP] Error sending password reset OTP: {str(e)}", exc_info=True)
+            return False, "An error occurred while sending reset code", None
+
+    async def verify_password_reset_otp(self, email: str, otp_code: str) -> Tuple[bool, str, Optional[dict]]:
+        """
+        Verify password reset OTP code
+        """
+        try:
+            logger.info(f"[OTP] Verifying password reset OTP for {email}")
+
+            otp_record = await self.prisma.otp_verifications.find_first(
+                where={
+                    "email": email,
+                    "status": OtpStatusEnum.PENDING,
+                    "otp_type": OtpTypeEnum.PASSWORD_RESET,
+                },
+                order={"created_at": "desc"}
+            )
+
+            if not otp_record:
+                logger.warning(f"[OTP] No pending password reset OTP found for {email}")
+                return False, "No pending password reset request found. Please request a new code.", None
+
+            if datetime.now(timezone.utc) > otp_record.expires_at:
+                logger.warning(f"[OTP] Expired password reset OTP for {email}")
+                await self.prisma.otp_verifications.update(
+                    where={"id": otp_record.id},
+                    data={"status": OtpStatusEnum.EXPIRED}
+                )
+                return False, "Password reset code has expired. Please request a new one.", None
+
+            if otp_record.attempts >= otp_record.max_attempts:
+                logger.warning(f"[OTP] Max password reset attempts exceeded for {email}")
+                await self.prisma.otp_verifications.update(
+                    where={"id": otp_record.id},
+                    data={"status": OtpStatusEnum.FAILED}
+                )
+                return False, "Maximum attempts exceeded. Please request a new password reset code.", None
+
+            updated_attempts = otp_record.attempts + 1
+            await self.prisma.otp_verifications.update(
+                where={"id": otp_record.id},
+                data={"attempts": updated_attempts}
+            )
+
+            if otp_record.otp_code != otp_code:
+                attempts_remaining = otp_record.max_attempts - updated_attempts
+                logger.warning(f"[OTP] Invalid password reset OTP for {email}, {attempts_remaining} attempts remaining")
+
+                if attempts_remaining <= 0:
+                    await self.prisma.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={"status": OtpStatusEnum.FAILED}
+                    )
+                    return False, "Maximum attempts exceeded. Please request a new password reset code.", None
+
+                return False, f"Invalid code. {attempts_remaining} attempts remaining.", None
+
+            await self.prisma.otp_verifications.update(
+                where={"id": otp_record.id},
+                data={
+                    "status": OtpStatusEnum.VERIFIED,
+                    "verified_at": datetime.now(timezone.utc)
+                }
+            )
+
+            logger.info(f"[OTP] Successfully verified password reset OTP for {email}")
+            return True, "Password reset code verified", {
+                "verified": True,
+                "email": email,
+            }
+
+        except Exception as e:
+            logger.error(f"[OTP] Error verifying password reset OTP: {str(e)}", exc_info=True)
+            return False, "An error occurred while verifying reset code", None
+
+    async def _invalidate_existing_email_otps(self, email: str, otp_type: OtpTypeEnum) -> None:
         """
         Mark all existing pending email OTPs as expired
         """
@@ -452,7 +584,7 @@ class OTPService:
             where={
                 "email": email,
                 "status": OtpStatusEnum.PENDING,
-                "otp_type": OtpTypeEnum.EMAIL_VERIFICATION,
+                "otp_type": otp_type,
             },
             data={"status": OtpStatusEnum.EXPIRED}
         )
