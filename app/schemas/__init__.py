@@ -2,6 +2,8 @@
 from .auth import (
     SignInInput,
     UserCreate,
+    ForgotPasswordRequest,
+    ForgotPasswordConfirm,
     UserOut,
     AuthData,
     ApiResponse,
@@ -11,6 +13,8 @@ from .auth import (
 __all__ = [
     "SignInInput",
     "UserCreate",
+    "ForgotPasswordRequest",
+    "ForgotPasswordConfirm",
     "UserOut",
     "AuthData",
     "ApiResponse",

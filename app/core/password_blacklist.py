@@ -61,7 +61,7 @@ COMMON_PASSWORDS = {
     "changeme",
     "letmein123",
     "default",
-    "p@ssw0rd",
+    # "p@ssw0rd",
     "summer2024",
     "winter2024",
     "spring2024",
@@ -96,6 +96,12 @@ COMMON_PASSWORDS = {
     "killer123",
     "diamond",
     "diamond1",
+    "diamond@123",
+    # "p@ssw0rd!",
+    "welcome@123",
+    "summer2025!",
+    "companyname@123",
+    "qwerty@123",
 }
 
 
@@ -105,5 +111,11 @@ def is_common_password(password: str) -> bool:
     Comparison is case-insensitive and ignores surrounding whitespace.
     """
     normalized = password.strip().lower()
-    return normalized in COMMON_PASSWORDS
+    # Compare against a lowercased view of the set
+    try:
+        lower_set = _COMMON_PASSWORDS_LOWER  # type: ignore[name-defined]
+    except NameError:
+        lower_set = {p.strip().lower() for p in COMMON_PASSWORDS}
+        _COMMON_PASSWORDS_LOWER = lower_set  # type: ignore[assignment]
+    return normalized in lower_set
 
