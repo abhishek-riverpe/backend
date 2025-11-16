@@ -1,5 +1,5 @@
 generator client {
-  provider = "prisma-client-py"
+  provider      = "prisma-client-py"
   binaryTargets = ["native", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
 }
 
@@ -71,9 +71,10 @@ enum LoginMethodEnum {
   PHONE_OTP
   APPLE_ID
 }
+
 enum AccountStatusEnum {
-  inactive
-  active
+  INACTIVE
+  ACTIVE
 }
 
 // --------------------
@@ -81,115 +82,111 @@ enum AccountStatusEnum {
 // --------------------
 
 model entities {
-  entity_id          String             @id @default(uuid()) @db.Uuid
-  external_entity_id String?            @unique
-  entity_type        EntityTypeEnum     @default(INDIVIDUAL)
-  email              String            @unique
-  first_name         String
-  last_name          String
-  password           String
-  date_of_birth      String?            // DOB in MM/DD/YYYY format
-  nationality        String?            // Country code like 'US', 'IN'
-  phone_number       String?            // Phone number without country code
-  country_code       String?            // Country code like '+1', '+91'
-  email_verified     Boolean?           @default(false)
-  last_login_at      DateTime?
-  login_attempts     Int?               @default(0)
-  locked_until       DateTime?
-  encrypted_data     Bytes?
-  encryption_key_id  String?
-  status             EntityStatusEnum   @default(PENDING)
-  created_at         DateTime?          @default(now())
-  updated_at         DateTime?          @default(now())
-  deleted_at         DateTime?
+  id                String           @id @default(uuid()) @db.Uuid
+  zynk_entity_id    String?          @unique
+  entity_type       EntityTypeEnum   @default(INDIVIDUAL)
+  email             String           @unique
+  first_name        String
+  last_name         String
+  password          String
+  date_of_birth     DateTime? // DOB in MM/DD/YYYY format
+  nationality       String? // Country code like 'US', 'IN'
+  phone_number      String? // Phone number without country code
+  country_code      String? // Country code like '+1', '+91'
+  email_verified    Boolean?         @default(false)
+  last_login_at     DateTime?
+  login_attempts    Int?             @default(0)
+  locked_until      DateTime?
+  encrypted_data    Bytes?
+  encryption_key_id String?
+  status            EntityStatusEnum @default(PENDING)
+  created_at        DateTime         @default(now())
+  updated_at        DateTime         @updatedAt
+  deleted_at        DateTime?
 
   // Relations
-  kyc_sessions       kyc_sessions[]
-  webhook_events     webhook_events[]
-  login_sessions     login_sessions[]
+  kyc_sessions   kyc_sessions[]
+  webhook_events webhook_events[]
+  login_sessions login_sessions[]
+
+  // Relations
+  funding_accounts funding_accounts[]
 
   @@map("entities")
 }
 
 model kyc_sessions {
-  kyc_session_id     String          @id @default(uuid()) @db.Uuid
-  entity_id          String          @db.Uuid
-  routing_id         String?
-  status             KycStatusEnum   @default(NOT_STARTED)
-  kyc_link           String?
-  routing_enabled    Boolean?        @default(false)
-  initiated_at       DateTime?
-  completed_at       DateTime?
-  rejection_reason   String?
-  created_at         DateTime?       @default(now())
-  updated_at         DateTime?       @default(now())
-  deleted_at         DateTime?
+  id               String        @id @default(uuid()) @db.Uuid
+  entity_id        String        @db.Uuid
+  routing_id       String?
+  status           KycStatusEnum @default(NOT_STARTED)
+  kyc_link         String?
+  routing_enabled  Boolean?      @default(false)
+  initiated_at     DateTime?
+  completed_at     DateTime?
+  rejection_reason String?
+  created_at       DateTime      @default(now())
+  updated_at       DateTime      @updatedAt
+  deleted_at       DateTime?
 
   // Relations
-  entity             entities        @relation(fields: [entity_id], references: [entity_id])
-  kyc_documents      kyc_documents[]
-  webhook_events     webhook_events[]
+  entity         entities         @relation(fields: [entity_id], references: [id])
+  kyc_documents  kyc_documents[]
+  webhook_events webhook_events[]
 
   @@map("kyc_sessions")
 }
 
 model kyc_documents {
-  document_id        String        @id @default(uuid()) @db.Uuid
-  kyc_session_id     String        @db.Uuid
-  document_type      String
-  file_path          String?
-  encrypted_data     Bytes?
-  uploaded_at        DateTime?     @default(now())
-  deleted_at         DateTime?
+  id             String    @id @default(uuid()) @db.Uuid
+  kyc_session_id String    @db.Uuid
+  document_type  String
+  file_path      String?
+  encrypted_data Bytes?
+  uploaded_at    DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+  deleted_at     DateTime?
 
   // Relations
-  kyc_session        kyc_sessions  @relation(fields: [kyc_session_id], references: [kyc_session_id])
+  kyc_session kyc_sessions @relation(fields: [kyc_session_id], references: [id])
 
   @@map("kyc_documents")
 }
 
 model webhook_events {
-  event_id           String                    @id @default(uuid()) @db.Uuid
-  event_category     WebhookEventCategory
-  event_type         String
-  event_status       String?
-  entity_id          String?                   @db.Uuid
-  kyc_session_id     String?                   @db.Uuid
-  // transfer_id        String?                   @db.Uuid
-  // alm_tx_id          String?                   @db.Uuid
-  teleport_id        String?                   @db.Uuid
-  event_payload      Json
-  // delivery_status    WebhookDeliveryStatusEnum  @default(PENDING)
-  // delivery_attempts  Int?                       @default(0)
-  // last_attempt_at    DateTime?
-  // next_retry_at      DateTime?
-  // http_status_code   Int?
-  // response_body      String?
-  created_at         DateTime?                  @default(now())
-
+  id             String               @id @default(uuid()) @db.Uuid
+  event_category WebhookEventCategory
+  event_type     String
+  event_status   String?
+  entity_id      String?              @db.Uuid
+  kyc_session_id String?              @db.Uuid
+  teleport_id    String?              @db.Uuid
+  event_payload  Json
+  created_at     DateTime             @default(now())
+  updated_at     DateTime             @updatedAt
   // Relations
-  entity             entities?                  @relation(fields: [entity_id], references: [entity_id])
-  kyc_session        kyc_sessions?              @relation(fields: [kyc_session_id], references: [kyc_session_id])
+  entity         entities?            @relation(fields: [entity_id], references: [id])
+  kyc_session    kyc_sessions?        @relation(fields: [kyc_session_id], references: [id])
 
   @@map("webhook_events")
 }
 
 model otp_verifications {
-  id                 String        @id @default(uuid()) @db.Uuid
-  phone_number       String?       // Optional - for phone verification
-  email              String?       // Optional - for email verification
-  country_code       String?       @default("+1")
-  otp_code           String
-  otp_type           OtpTypeEnum   @default(PHONE_VERIFICATION)
-  status             OtpStatusEnum @default(PENDING)
-  attempts           Int           @default(0)
-  max_attempts       Int           @default(3)
-  expires_at         DateTime
-  verified_at        DateTime?
-  ip_address         String?       // Track where OTP was requested from
-  user_agent         String?       // Track device/browser
-  created_at         DateTime      @default(now())
-  updated_at         DateTime      @default(now())
+  id           String        @id @default(uuid()) @db.Uuid
+  phone_number String? // Optional - for phone verification
+  email        String? // Optional - for email verification
+  country_code String?       @default("+1")
+  otp_code     String
+  otp_type     OtpTypeEnum   @default(PHONE_VERIFICATION)
+  status       OtpStatusEnum @default(PENDING)
+  attempts     Int           @default(0)
+  max_attempts Int           @default(3)
+  expires_at   DateTime
+  verified_at  DateTime?
+  ip_address   String? // Track where OTP was requested from
+  user_agent   String? // Track device/browser
+  created_at   DateTime      @default(now())
+  updated_at   DateTime      @updatedAt
 
   @@index([phone_number, status])
   @@index([email, status])
@@ -198,45 +195,45 @@ model otp_verifications {
 }
 
 model login_sessions {
-  session_id         String              @id @default(uuid()) @db.Uuid
-  entity_id          String              @db.Uuid
-  session_token      String              @unique // JWT token ID or session token
-  login_method       LoginMethodEnum     @default(EMAIL_PASSWORD)
-  status             SessionStatusEnum   @default(ACTIVE)
-  
+  id            String            @id @default(uuid()) @db.Uuid
+  entity_id     String            @db.Uuid
+  session_token String            @unique // JWT token ID or session token
+  login_method  LoginMethodEnum   @default(EMAIL_PASSWORD)
+  status        SessionStatusEnum @default(ACTIVE)
+
   // Authentication details
-  ip_address         String?
-  user_agent         String?
-  device_type        String?             // mobile, desktop, tablet
-  device_name        String?             // iPhone 13, Samsung Galaxy, etc.
-  os_name            String?             // iOS, Android, Windows, macOS
-  os_version         String?
-  browser_name       String?             // Chrome, Safari, Firefox
-  browser_version    String?
-  app_version        String?             // Mobile app version
-  
+  ip_address      String?
+  user_agent      String?
+  device_type     String? // mobile, desktop, tablet
+  device_name     String? // iPhone 13, Samsung Galaxy, etc.
+  os_name         String? // iOS, Android, Windows, macOS
+  os_version      String?
+  browser_name    String? // Chrome, Safari, Firefox
+  browser_version String?
+  app_version     String? // Mobile app version
+
   // Location tracking (optional, for security)
-  country            String?
-  city               String?
-  latitude           Float?
-  longitude          Float?
-  
+  country   String?
+  city      String?
+  latitude  Float?
+  longitude Float?
+
   // Session timing
-  login_at           DateTime            @default(now())
-  last_activity_at   DateTime            @default(now())
-  logout_at          DateTime?
-  expires_at         DateTime
-  
+  login_at         DateTime  @default(now())
+  last_activity_at DateTime  @default(now())
+  logout_at        DateTime?
+  expires_at       DateTime
+
   // Security flags
-  is_suspicious      Boolean             @default(false)
-  mfa_verified       Boolean             @default(false)
-  
+  is_suspicious Boolean @default(false)
+  mfa_verified  Boolean @default(false)
+
   // Metadata
-  created_at         DateTime            @default(now())
-  updated_at         DateTime            @default(now())
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   // Relations
-  entity             entities            @relation(fields: [entity_id], references: [entity_id])
+  entity entities @relation(fields: [entity_id], references: [id], onDelete: Cascade)
 
   @@index([entity_id, status])
   @@index([session_token])
@@ -246,21 +243,24 @@ model login_sessions {
 }
 
 model funding_accounts {
-  funding_account_id String             @id @default(uuid()) 
-  entity_id          String             
-  jurisdiction_id    String             
-  provider_id        String
-  status             AccountStatusEnum   @default(inactive)
-  currency           String
-  bank_name          String
-  bank_address       String
-  bank_routing_number String
-  bank_account_number String
-  bank_beneficiary_name String
+  id                       String            @id @default(uuid()) @db.Uuid
+  entity_id                String            @db.Uuid
+  jurisdiction_id          String
+  provider_id              String
+  status                   AccountStatusEnum @default(INACTIVE)
+  currency                 String
+  bank_name                String
+  bank_address             String
+  bank_routing_number      String
+  bank_account_number      String
+  bank_beneficiary_name    String
   bank_beneficiary_address String
-  payment_rail String
-  created_at         DateTime?          @default(now())
-  updated_at         DateTime?          @default(now())
-  deleted_at         DateTime?
+  payment_rail             String
+  created_at               DateTime          @default(now())
+  updated_at               DateTime          @updatedAt
+  deleted_at               DateTime?
+  // Relations
+  entity                   entities          @relation(fields: [entity_id], references: [id], onDelete: Cascade)
+
   @@map("funding_accounts")
 }

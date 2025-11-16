@@ -53,21 +53,21 @@ async def get_kyc_link(
     Get KYC verification link for the authenticated user.
     
     This endpoint:
-    1. Checks if user has external_entity_id (linked to ZyncLabs)
+    1. Checks if user has zynk_entity_id (linked to ZyncLabs)
     2. Finds or creates a KYC session
     3. Returns existing KYC link or generates a new one from ZyncLabs
     
     Returns KYC link, TOS link, and their respective statuses.
     """
     logger.info(
-        f"[KYC] KYC link request received - entity_id={current_entity.entity_id}, "
-        f"email={current_entity.email}, external_entity_id={current_entity.external_entity_id}"
+        f"[KYC] KYC link request received - id={current_entity.id}, "
+        f"email={current_entity.email}, zynk_entity_id={current_entity.zynk_entity_id}"
     )
     
     # Ensure entity is linked to ZyncLabs
-    if not current_entity.external_entity_id:
+    if not current_entity.zynk_entity_id:
         logger.warning(
-            f"[KYC] Entity {current_entity.entity_id} not linked to ZyncLabs. "
+            f"[KYC] Entity {current_entity.id} not linked to ZyncLabs. "
             f"User must complete profile setup first."
         )
         raise _build_error_response(
@@ -76,10 +76,10 @@ async def get_kyc_link(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    external_entity_id = current_entity.external_entity_id
-    entity_id = current_entity.entity_id
+    zynk_entity_id = current_entity.zynk_entity_id
+    entity_id = current_entity.id
     
-    logger.info(f"[KYC] Using external_entity_id={external_entity_id} for ZyncLabs API")
+    logger.info(f"[KYC] Using zynk_entity_id={zynk_entity_id} for ZyncLabs API")
 
     # Find or create KYC session
     try:
@@ -98,7 +98,7 @@ async def get_kyc_link(
     if kyc_session.kyc_link:
         logger.info(
             f"[KYC] Returning existing KYC link - entity_id={entity_id}, "
-            f"session_id={kyc_session.kyc_session_id}, status={kyc_session.status}"
+            f"session_id={kyc_session.id}, status={kyc_session.status}"
         )
         return KycLinkResponse(
             success=True,
@@ -118,12 +118,12 @@ async def get_kyc_link(
     
     logger.info(
         f"[KYC] No existing KYC link found. Generating new link from ZyncLabs - "
-        f"external_entity_id={external_entity_id}, routing_id={routing_id}"
+        f"zynk_entity_id={zynk_entity_id}, routing_id={routing_id}"
     )
     
     try:
         kyc_data = await _generate_kyc_link_from_upstream(
-            external_entity_id, 
+            zynk_entity_id, 
             routing_id
         )
         
@@ -131,13 +131,13 @@ async def get_kyc_link(
         
         # Update KYC session with new link and routing_id
         await prisma.kyc_sessions.update(
-            where={"kyc_session_id": kyc_session.kyc_session_id},
+            where={"id": kyc_session.id},
             data={
                 "kyc_link": kyc_data["kycLink"],
                 "routing_id": routing_id,  # Save routing_id for future use
             },
         )
-        logger.info(f"[KYC] Updated KYC session {kyc_session.kyc_session_id} with new link and routing_id")
+        logger.info(f"[KYC] Updated KYC session {kyc_session.id} with new link and routing_id")
         
         return KycLinkResponse(
             success=True,
@@ -154,7 +154,7 @@ async def get_kyc_link(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"[KYC] Failed to generate KYC link for external_entity_id={external_entity_id}", exc_info=exc)
+        logger.error(f"[KYC] Failed to generate KYC link for zynk_entity_id={zynk_entity_id}", exc_info=exc)
         raise _build_error_response(
             "Failed to generate KYC link. Please try again later.",
             code="INTERNAL_ERROR",
@@ -176,7 +176,7 @@ async def _get_or_create_kyc_session(entity_id: str):
         
         if kyc_session:
             logger.info(
-                f"[KYC] Found existing KYC session: session_id={kyc_session.kyc_session_id}, "
+                f"[KYC] Found existing KYC session: session_id={kyc_session.id}, "
                 f"status={kyc_session.status}, has_link={bool(kyc_session.kyc_link)}"
             )
             return kyc_session
@@ -192,7 +192,7 @@ async def _get_or_create_kyc_session(entity_id: str):
         logger.info(f"[KYC] Create data: {create_data}")
         
         kyc_session = await prisma.kyc_sessions.create(data=create_data)
-        logger.info(f"[KYC] Successfully created KYC session: session_id={kyc_session.kyc_session_id}")
+        logger.info(f"[KYC] Successfully created KYC session: session_id={kyc_session.id}")
         return kyc_session
         
     except DataError as exc:
@@ -208,7 +208,7 @@ async def _get_or_create_kyc_session(entity_id: str):
 
 
 async def _generate_kyc_link_from_upstream(
-    external_entity_id: str, 
+    zynk_entity_id: str, 
     routing_id: str
 ) -> Dict[str, Any]:
     """
@@ -217,7 +217,7 @@ async def _generate_kyc_link_from_upstream(
     Returns dict with kycLink, tosLink, kycStatus, tosStatus
     """
     # Always include routing_id in the URL
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{external_entity_id}/{routing_id}"
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{zynk_entity_id}/{routing_id}"
     
     logger.info(f"[KYC] Calling ZyncLabs API: POST {url}")
     
@@ -296,7 +296,7 @@ async def _generate_kyc_link_from_upstream(
             )
 
         logger.info(
-            f"[KYC] Successfully generated KYC link for entity {external_entity_id}. "
+            f"[KYC] Successfully generated KYC link for entity {zynk_entity_id}. "
             f"Response contains: {list(data.keys())}"
         )
         return data

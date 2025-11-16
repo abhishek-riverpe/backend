@@ -22,7 +22,7 @@ class UserCreate(BaseModel):
 
 class UserOut(BaseModel):
     entity_id: Optional[str] = None
-    external_entity_id: Optional[str] = None
+    zynk_entity_id: Optional[str] = None
     entity_type: Optional[str] = None
     email: Optional[EmailStr] = None
     first_name: Optional[str] = None

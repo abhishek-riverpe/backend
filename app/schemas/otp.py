@@ -77,7 +77,7 @@ class OtpVerifyResponse(BaseModel):
 
 class OtpData(BaseModel):
     """OTP session data"""
-    otp_id: str
+    id: str
     phone_number: str
     country_code: str
     expires_at: datetime

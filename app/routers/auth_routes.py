@@ -203,7 +203,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
                     "nationality": nationality,
                     "phone_number": phone_number,
                     "country_code": country_code,
-                    "external_entity_id": zynk_entity_id,  # Store the Zynk Labs entity ID
+                    "zynk_entity_id": zynk_entity_id,  # Store the Zynk Labs entity ID
                     "status": "ACTIVE",  # Set to ACTIVE since all required info is collected
                     # created_at/updated_at default to now()
                 }
@@ -214,8 +214,8 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
 
     # Tokens (subject should be a stable unique id)
-    access_token = auth.create_access_token(data={"sub": str(entity.entity_id), "type": "access"})
-    refresh_token = auth.create_refresh_token(data={"sub": str(entity.entity_id), "type": "refresh"})
+    access_token = auth.create_access_token(data={"sub": str(entity.id), "type": "access"})
+    refresh_token = auth.create_refresh_token(data={"sub": str(entity.id), "type": "refresh"})
 
     # Set refresh cookie: secure defaults for banking
     response.set_cookie(
@@ -229,11 +229,11 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     )
 
     # Optional: include Location header for the created resource
-    response.headers["Location"] = f"/api/v1/entities/{entity.entity_id}"
+    response.headers["Location"] = f"/api/v1/entities/{entity.id}"
 
     safe_user = {
-        "entity_id": str(entity.entity_id) if hasattr(entity, "entity_id") else None,
-        "external_entity_id": entity.external_entity_id if hasattr(entity, "external_entity_id") else None,
+        "id": str(entity.id) if hasattr(entity, "id") else None,
+        "zynk_entity_id": entity.zynk_entity_id if hasattr(entity, "zynk_entity_id") else None,
         "entity_type": str(entity.entity_type) if hasattr(entity, "entity_type") else None,
         "email": entity.email if hasattr(entity, "email") else None,
         "first_name": entity.first_name if hasattr(entity, "first_name") else None,
@@ -335,7 +335,7 @@ async def signin(payload: schemas.SignInInput, response: Response):
 
         try:
             await prisma.entities.update(
-                where={"entity_id": user.entity_id},
+                where={"id": user.id},
                 data={
                     "login_attempts": attempts,
                     "locked_until": lock_until,
@@ -355,7 +355,7 @@ async def signin(payload: schemas.SignInInput, response: Response):
     # Success: reset attempts, clear lock, update last_login_at
     try:
         await prisma.entities.update(
-            where={"entity_id": user.entity_id},
+            where={"id": user.id},
             data={
                 "login_attempts": 0,
                 "locked_until": None,
@@ -368,8 +368,8 @@ async def signin(payload: schemas.SignInInput, response: Response):
         pass
 
     # Issue tokens
-    access_token = auth.create_access_token(data={"sub": str(user.entity_id), "type": "access"})
-    refresh_token = auth.create_refresh_token(data={"sub": str(user.entity_id), "type": "refresh"})
+    access_token = auth.create_access_token(data={"sub": str(user.id), "type": "access"})
+    refresh_token = auth.create_refresh_token(data={"sub": str(user.id), "type": "refresh"})
 
     # Set refresh cookie (banking defaults)
     response.set_cookie(
@@ -383,8 +383,8 @@ async def signin(payload: schemas.SignInInput, response: Response):
     )
 
     safe_user = {
-        "entity_id": str(user.entity_id) if hasattr(user, "entity_id") else None,
-        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "id": str(user.id) if hasattr(user, "id") else None,
+        "zynk_entity_id": user.zynk_entity_id if hasattr(user, "zynk_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
@@ -427,12 +427,12 @@ async def refresh_token(request: Request, response: Response):
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    user = await prisma.entities.find_unique(where={"entity_id": user_id})
+    user = await prisma.entities.find_unique(where={"id": user_id})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
 
-    access_token = auth.create_access_token({"sub": str(user.entity_id), "type": "access"})
-    refresh_token = auth.create_refresh_token({"sub": str(user.entity_id), "type": "refresh"})
+    access_token = auth.create_access_token({"sub": str(user.id), "type": "access"})
+    refresh_token = auth.create_refresh_token({"sub": str(user.id), "type": "refresh"})
 
     response.set_cookie(
         key="rp_refresh",
@@ -445,8 +445,8 @@ async def refresh_token(request: Request, response: Response):
     )
 
     safe_user = {
-        "entity_id": str(user.entity_id) if hasattr(user, "entity_id") else None,
-        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "id": str(user.id) if hasattr(user, "id") else None,
+        "zynk_entity_id": user.zynk_entity_id if hasattr(user, "zynk_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,

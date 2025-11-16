@@ -96,10 +96,10 @@ class SessionService:
                 }
             )
             
-            logger.info(f"[SESSION] Created session {session.session_id} for entity {entity_id}")
+            logger.info(f"[SESSION] Created session {session.id} for entity {entity_id}")
             
             return {
-                "session_id": session.session_id,
+                "id": session.id,
                 "expires_at": expires_at.isoformat(),
                 "is_suspicious": is_suspicious,
             }
@@ -164,7 +164,7 @@ class SessionService:
         """
         try:
             await self.prisma.login_sessions.update(
-                where={"session_id": session_id},
+                where={"id": session_id},
                 data={"status": SessionStatusEnum.REVOKED}
             )
             logger.info(f"[SESSION] Revoked session {session_id}")
@@ -195,7 +195,7 @@ class SessionService:
             
             return [
                 {
-                    "session_id": s.session_id,
+                    "id": s.id,
                     "device_type": s.device_type,
                     "device_name": s.device_name,
                     "os_name": s.os_name,
@@ -237,7 +237,7 @@ class SessionService:
             
             return [
                 {
-                    "session_id": s.session_id,
+                    "id": s.id,
                     "status": s.status,
                     "login_method": s.login_method,
                     "device_info": f"{s.device_name or s.device_type or 'Unknown'} - {s.os_name or 'Unknown OS'}",

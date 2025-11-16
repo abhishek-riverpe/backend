@@ -171,17 +171,17 @@ async def get_entity_by_id(
     Ensures that users can only access their own entity data for security.
     Requires authentication and ownership validation in the banking system.
     """
-    # Ensure the entity has an external_entity_id set (means it's linked to ZyncLab)
-    if not current.external_entity_id:
+    # Ensure the entity has an zynk_entity_id set (means it's linked to ZyncLab)
+    if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     # Security check: Ensure the requested entity belongs to the authenticated user
-    if current.external_entity_id != entity_id:
+    if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own entity data.")
 
 
-    # Construct the URL using the external_entity_id for the upstream call
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.external_entity_id}"
+    # Construct the URL using the zynk_entity_id for the upstream call
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.zynk_entity_id}"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic
@@ -247,12 +247,12 @@ async def upload_kyc_documents(
     Upload KYC documents to S3 and submit to ZynkLabs API.
     Requires authentication and ownership validation for security.
     """
-    # Ensure the entity has an external_entity_id set
-    if not current.external_entity_id:
+    # Ensure the entity has an zynk_entity_id set
+    if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     # Security check: Ensure the requested entity belongs to the authenticated user
-    if current.external_entity_id != entity_id:
+    if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only upload KYC documents for your own entity.")
 
     # Validate file type (basic security)
@@ -309,16 +309,16 @@ async def get_entity_kyc_status(
     Ensures that users can only access their own KYC data for security.
     Requires authentication and ownership validation in the banking system.
     """
-    # Ensure the entity has an external_entity_id set (means it's linked to ZyncLab)
-    if not current.external_entity_id:
+    # Ensure the entity has an zynk_entity_id set (means it's linked to ZyncLab)
+    if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     # Security check: Ensure the requested entity belongs to the authenticated user
-    if current.external_entity_id != entity_id:
+    if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC data.")
 
-    # Construct the URL using the external_entity_id for the upstream call
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{current.external_entity_id}"
+    # Construct the URL using the zynk_entity_id for the upstream call
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{current.zynk_entity_id}"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic
@@ -380,16 +380,16 @@ async def get_entity_kyc_requirements(
     Ensures that users can only access their own KYC requirements for security.
     Requires authentication and ownership validation in the banking system.
     """
-    # Ensure the entity has an external_entity_id set (means it's linked to ZyncLab)
-    if not current.external_entity_id:
+    # Ensure the entity has an zynk_entity_id set (means it's linked to ZyncLab)
+    if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     # Security check: Ensure the requested entity belongs to the authenticated user
-    if current.external_entity_id != entity_id:
+    if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC requirements.")
 
-    # Construct the URL using the external_entity_id and routing_id for the upstream call
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{current.external_entity_id}/{routing_id}"
+    # Construct the URL using the zynk_entity_id and routing_id for the upstream call
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{current.zynk_entity_id}/{routing_id}"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic
@@ -448,16 +448,16 @@ async def get_entity_kyc_documents(
     Ensures that users can only access their own KYC documents for security.
     Requires authentication and ownership validation in the banking system.
     """
-    # Ensure the entity has an external_entity_id set (means it's linked to ZyncLab)
-    if not current.external_entity_id:
+    # Ensure the entity has an zynk_entity_id set (means it's linked to ZyncLab)
+    if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     # Security check: Ensure the requested entity belongs to the authenticated user
-    if current.external_entity_id != entity_id:
+    if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC documents.")
 
-    # Construct the URL using the external_entity_id for the upstream call
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.external_entity_id}/kyc/documents"
+    # Construct the URL using the zynk_entity_id for the upstream call
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.zynk_entity_id}/kyc/documents"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic
@@ -520,8 +520,8 @@ async def get_entity_by_email(
     if current.email != email:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own entity data.")
 
-    # Ensure the entity has an external_entity_id set (means it's linked to ZyncLab)
-    if not current.external_entity_id:
+    # Ensure the entity has an zynk_entity_id set (means it's linked to ZyncLab)
+    if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     # Construct the URL using the email for the upstream call

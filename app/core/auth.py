@@ -62,7 +62,7 @@ async def get_current_entity(token: str = Depends(oauth2_scheme)):
     if not entity_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    entity = await prisma.entities.find_unique(where={"entity_id": entity_id})
+    entity = await prisma.entities.find_unique(where={"id": entity_id})
     if entity is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
     return entity

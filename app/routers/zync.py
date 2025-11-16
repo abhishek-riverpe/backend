@@ -118,13 +118,13 @@ async def create_external_entity(
     # 3) Call Zynk
     upstream_entity_id = await _call_zynk_create_entity(payload.dict())
 
-    # 4) Persist: overwrite `external_entity_id` and set status ACTIVE
+    # 4) Persist: overwrite `zynk_entity_id` and set status ACTIVE
     now = datetime.now(timezone.utc)
     try:
         updated = await prisma.entities.update(
-            where={"entity_id": current.entity_id},  # use your immutable PK to locate the row
+            where={"id": current.id},  # use your immutable PK to locate the row
             data={
-                "external_entity_id": upstream_entity_id,   # <- overwrite existing field
+                "zynk_entity_id": upstream_entity_id,   # <- overwrite existing field
                 "status": "ACTIVE",               # ensure enum has ACTIVE
                 "updated_at": now,
             },
@@ -133,7 +133,7 @@ async def create_external_entity(
         raise HTTPException(status_code=500, detail="Failed to persist external entity link")
 
     # 5) Return unified API response
-    response.headers["Location"] = f"/api/v1/zynk/entity/{updated.entity_id}"
+    response.headers["Location"] = f"/api/v1/zynk/entity/{updated.id}"
     response.headers["X-External-Entity-Id"] = upstream_entity_id
     return {
         "success": True,
@@ -153,7 +153,7 @@ async def get_kyc_requirements(
     Fetch KYC requirements for the logged-in user's external entity id and the provided routing id.
     Returns unified API response.
     """
-    external_id = getattr(current, "external_entity_id", None)
+    external_id = getattr(current, "zynk_entity_id", None)
     if not external_id:
         raise HTTPException(status_code=400, detail="External entity id is missing. Complete profile first.")
 

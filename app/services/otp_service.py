@@ -121,7 +121,7 @@ class OTPService:
             logger.info(f"[OTP] OTP sent successfully to {full_phone}")
             
             return True, "OTP sent successfully", {
-                "otp_id": otp_record.id,
+                "id": otp_record.id,
                 "phone_number": phone_number,
                 "country_code": country_code,
                 "expires_at": expires_at.isoformat(),
@@ -282,7 +282,7 @@ class OTPService:
             logger.info(f"[OTP] OTP sent successfully to {email}")
             
             return True, "OTP sent successfully", {
-                "otp_id": otp_record.id,
+                "id": otp_record.id,
                 "email": email,
                 "expires_at": expires_at.isoformat(),
                 "attempts_remaining": self.MAX_ATTEMPTS,
