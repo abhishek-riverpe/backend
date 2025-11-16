@@ -1,0 +1,121 @@
+"""
+Common password blacklist
+
+Contains a curated list of passwords that should always be rejected
+regardless of other strength checks.
+"""
+
+COMMON_PASSWORDS = {
+    "password",
+    "password1",
+    "password123",
+    "passw0rd",
+    "123456",
+    "1234567",
+    "12345678",
+    "123456789",
+    "1234567890",
+    "12345",
+    "qwerty",
+    "qwerty123",
+    "letmein",
+    "admin",
+    "welcome",
+    "iloveyou",
+    "dragon",
+    "monkey",
+    "football",
+    "baseball",
+    "trustno1",
+    "sunshine",
+    "princess",
+    "master",
+    "hello",
+    "freedom",
+    "whatever",
+    "qazwsx",
+    "superman",
+    "batman",
+    "1q2w3e4r",
+    "654321",
+    "111111",
+    "222222",
+    "333333",
+    "444444",
+    "555555",
+    "666666",
+    "777777",
+    "888888",
+    "999999",
+    "abc123",
+    "abcd1234",
+    "password!",
+    "pass123",
+    "admin123",
+    "welcome1",
+    "zaq12wsx",
+    "qwertyuiop",
+    "asdfghjkl",
+    "1qaz2wsx",
+    "temp123",
+    "changeme",
+    "letmein123",
+    "default",
+    # "p@ssw0rd",
+    "summer2024",
+    "winter2024",
+    "spring2024",
+    "autumn2024",
+    "football1",
+    "baseball1",
+    "halloween",
+    "newyear2024",
+    "welcome123",
+    "adminadmin",
+    "passw0rd1",
+    "mypassword",
+    "secret",
+    "secret123",
+    "godzilla",
+    "pokemon",
+    "naruto",
+    "starwars",
+    "matrix",
+    "thunder",
+    "charlie",
+    "anthony",
+    "jennifer",
+    "michael",
+    "michelle",
+    "pepper",
+    "pepper123",
+    "ginger",
+    "cookie",
+    "shadow",
+    "killer",
+    "killer123",
+    "diamond",
+    "diamond1",
+    "diamond@123",
+    # "p@ssw0rd!",
+    "welcome@123",
+    "summer2025!",
+    "companyname@123",
+    "qwerty@123",
+}
+
+
+def is_common_password(password: str) -> bool:
+    """
+    Return True if the password appears in the blacklist.
+    Comparison is case-insensitive and ignores surrounding whitespace.
+    """
+    normalized = password.strip().lower()
+    # Compare against a lowercased view of the set
+    try:
+        lower_set = _COMMON_PASSWORDS_LOWER  # type: ignore[name-defined]
+    except NameError:
+        lower_set = {p.strip().lower() for p in COMMON_PASSWORDS}
+        _COMMON_PASSWORDS_LOWER = lower_set  # type: ignore[assignment]
+    return normalized in lower_set
+

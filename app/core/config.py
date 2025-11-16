@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     use_credentials: bool = True
     validate_certs: bool = True
 
+    # Password breach check (Have I Been Pwned)
+    hibp_enabled: bool = True
+    hibp_timeout_s: int = 5
+
     # Pydantic v2 settings config
     model_config = SettingsConfigDict(
         env_file=".env",
