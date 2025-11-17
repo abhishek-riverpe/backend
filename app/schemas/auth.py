@@ -4,6 +4,8 @@ from typing import Optional, Any, Dict
 class SignInInput(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=1)
+    captcha_id: Optional[str] = Field(None, description="CAPTCHA identifier (required if login_attempts >= 3)")
+    captcha_code: Optional[str] = Field(None, min_length=5, max_length=5, description="CAPTCHA code entered by user (required if login_attempts >= 3)")
     
 class UserCreate(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=60)
@@ -36,6 +38,11 @@ class CaptchaGenerateResponse(BaseModel):
 class CaptchaValidateRequest(BaseModel):
     captcha_id: str
     captcha_code: str = Field(..., min_length=5, max_length=5)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, description="Current password")
+    new_password: str = Field(..., min_length=8, max_length=128, description="New password")
 
 
 # -----------------------------
