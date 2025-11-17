@@ -177,13 +177,16 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     # Extract phone prefix (numeric part without +)
     phone_prefix = country_code.replace('+', '')
 
-    # Convert date from MM/DD/YYYY to YYYY-MM-DD format for Zynk Labs
+    # Convert date from MM/DD/YYYY to YYYY-MM-DD format for Zynk Labs and DateTime for Prisma
+    prisma_date_of_birth = None
     if date_of_birth:
         try:
             month, day, year = date_of_birth.split('/')
             zynk_date_of_birth = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid date format. Please use MM/DD/YYYY format.")
+            # Convert to DateTime for Prisma (ISO-8601 format)
+            prisma_date_of_birth = datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid date format. Please use MM/DD/YYYY format. Error: {str(e)}")
     else:
         zynk_date_of_birth = date_of_birth
 
@@ -259,7 +262,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
                     # Optionally copy username into display name at first registration
                     "first_name": first_name,
                     "last_name": last_name,
-                    "date_of_birth": date_of_birth,
+                    "date_of_birth": prisma_date_of_birth,
                     "nationality": nationality,
                     "phone_number": phone_number,
                     "country_code": country_code,
