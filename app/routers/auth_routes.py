@@ -12,6 +12,7 @@ from passlib.context import CryptContext
 from app.services.otp_service import OTPService
 from app.services.otp_service import OTPService
 from app.services.session_service import SessionService
+from app.services.captcha_service import captcha_service
 from app.utils.device_parser import parse_device_from_headers
 from app.utils.location_service import get_location_from_client
 
@@ -151,6 +152,22 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         zynk_date_of_birth = date_of_birth
 
     print(f"Signup request: first_name={first_name}, last_name={last_name}, email={email}, date_of_birth={date_of_birth}, nationality={nationality}, phone={country_code}{phone_number}")
+
+    # Validate CAPTCHA first
+    captcha_id = user_in.captcha_id.strip()
+    captcha_code = user_in.captcha_code.strip()
+    
+    is_valid, error_message = captcha_service.validate_captcha(
+        captcha_id=captcha_id,
+        user_input=captcha_code,
+    )
+    
+    if not is_valid:
+        logger.warning(f"[AUTH] Signup blocked: Invalid CAPTCHA for email {email}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_message or "Invalid CAPTCHA code. Please try again.",
+        )
 
     # Validate semantics
     try:

@@ -14,6 +14,8 @@ class UserCreate(BaseModel):
     nationality: str = Field(..., min_length=1, max_length=3)  # Country code like 'US', 'IN'
     phone_number: str = Field(..., min_length=1)
     country_code: str = Field(..., min_length=1)
+    captcha_id: str = Field(..., description="CAPTCHA identifier")
+    captcha_code: str = Field(..., min_length=5, max_length=5, description="CAPTCHA code entered by user")
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -23,6 +25,17 @@ class ForgotPasswordConfirm(BaseModel):
     email: EmailStr
     otp_code: str = Field(..., min_length=6, max_length=6)
     new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class CaptchaGenerateResponse(BaseModel):
+    captcha_id: str
+    captcha_code: str
+    expires_in_seconds: int
+
+
+class CaptchaValidateRequest(BaseModel):
+    captcha_id: str
+    captcha_code: str = Field(..., min_length=5, max_length=5)
 
 
 # -----------------------------
