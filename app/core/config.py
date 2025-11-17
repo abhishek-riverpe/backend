@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Add these to match your .env so they are NOT "extra"
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
+    access_token_expire_minutes: int = 15
 
     # SMS/OTP settings
     sms_provider: str = "mock"  # 'twilio' or 'mock'

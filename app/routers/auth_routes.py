@@ -12,6 +12,10 @@ from passlib.context import CryptContext
 from app.services.otp_service import OTPService
 from app.services.otp_service import OTPService
 from app.services.session_service import SessionService
+from app.services.captcha_service import captcha_service
+from app.services.email_service import email_service
+from app.utils.device_parser import parse_device_from_headers
+from app.utils.location_service import get_location_from_client
 
 # from prisma.models import entities  # prisma python generates models from schema
 from .security import (
@@ -24,6 +28,7 @@ from app.core.auth import get_current_entity
 
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+CAPTCHA_REQUIRED_ATTEMPTS = 3  # Require CAPTCHA after 3 failed attempts
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 router = APIRouter(
@@ -81,6 +86,40 @@ async def _email_exists_in_zynk(email: str) -> bool:
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"Upstream email lookup failed: {error_detail}",
     )
+
+
+# Check if CAPTCHA is required for login (based on failed attempts)
+@router.post("/check-captcha-required")
+async def check_captcha_required(data: dict):
+    """
+    Check if CAPTCHA is required for a given email.
+    Returns: {"captcha_required": true/false, "login_attempts": int}
+    """
+    email = data.get("email", "").strip()
+    
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email is required"
+        )
+    
+    email = normalize_email(email)
+    user = await prisma.entities.find_unique(where={"email": email})
+    
+    # Don't reveal if email exists - return captcha_required: false for non-existent emails
+    if not user:
+        return {
+            "captcha_required": False,
+            "login_attempts": 0,
+        }
+    
+    current_attempts = user.login_attempts or 0
+    captcha_required = current_attempts >= CAPTCHA_REQUIRED_ATTEMPTS
+    
+    return {
+        "captcha_required": captcha_required,
+        "login_attempts": current_attempts,
+    }
 
 
 # Check if email is available
@@ -152,6 +191,22 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         zynk_date_of_birth = date_of_birth
 
     print(f"Signup request: first_name={first_name}, last_name={last_name}, email={email}, date_of_birth={date_of_birth}, nationality={nationality}, phone={country_code}{phone_number}")
+
+    # Validate CAPTCHA first
+    captcha_id = user_in.captcha_id.strip()
+    captcha_code = user_in.captcha_code.strip()
+    
+    is_valid, error_message = captcha_service.validate_captcha(
+        captcha_id=captcha_id,
+        user_input=captcha_code,
+    )
+    
+    if not is_valid:
+        logger.warning(f"[AUTH] Signup blocked: Invalid CAPTCHA for email {email}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_message or "Invalid CAPTCHA code. Please try again.",
+        )
 
     # Validate semantics
     try:
@@ -232,7 +287,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         httponly=True,       # ✅ HttpOnly set to True for security
         samesite="strict",   # stricter than lax for banking
         secure=True,         # must be True in production (HTTPS)
-        max_age=30 * 24 * 60 * 60,  # 30 days to match refresh token expiry
+        max_age=7 * 24 * 60 * 60,  # 7 days to match refresh token expiry
         path="/",
     )
 
@@ -324,6 +379,33 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     #         detail="Account is not allowed to sign in",
     #     )
 
+    # Check if CAPTCHA is required (after 3 failed attempts)
+    current_attempts = user.login_attempts or 0
+    captcha_required = current_attempts >= CAPTCHA_REQUIRED_ATTEMPTS
+    
+    if captcha_required:
+        # CAPTCHA is required - validate it before password check
+        if not payload.captcha_id or not payload.captcha_code:
+            response.headers["X-CAPTCHA-Required"] = "true"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CAPTCHA verification required after multiple failed attempts. Please complete the CAPTCHA and try again.",
+            )
+        
+        # Validate CAPTCHA
+        is_valid, error_message = captcha_service.validate_captcha(
+            captcha_id=payload.captcha_id.strip(),
+            user_input=payload.captcha_code.strip(),
+        )
+        
+        if not is_valid:
+            logger.warning(f"[AUTH] Signin blocked: Invalid CAPTCHA for email {email} (attempts: {current_attempts})")
+            response.headers["X-CAPTCHA-Required"] = "true"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_message or "Invalid CAPTCHA code. Please try again.",
+            )
+
     # Verify password (your `password` column stores the hash)
     try:
         ok = pwd_context.verify(password, user.password)
@@ -354,9 +436,45 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
             # Do not leak DB errors; still respond with auth error
             pass
 
+        # Send email notification when attempts reach 3 (CAPTCHA required threshold)
+        if attempts == CAPTCHA_REQUIRED_ATTEMPTS:
+            try:
+                # Extract device and location information
+                user_agent = request.headers.get("user-agent")
+                ip_address = getattr(request.client, "host", None)
+                
+                # Parse device information
+                device_info = parse_device_from_headers(request)
+                
+                # Get location information
+                location_info = await get_location_from_client(request)
+                
+                # Get user's full name
+                user_name = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
+                
+                # Send email notification
+                await email_service.send_failed_login_notification(
+                    email=user.email,
+                    user_name=user_name,
+                    failed_attempts=attempts,
+                    device_info=device_info,
+                    location_info=location_info,
+                    ip_address=ip_address,
+                    timestamp=now
+                )
+                logger.info(f"[AUTH] Failed login notification email sent to {user.email} after {attempts} attempts")
+            except Exception as e:
+                logger.warning(f"[AUTH] Failed to send failed login notification email: {e}")
+                # Don't fail login if email fails
+
         if lock_until:
             response.headers["X-Account-Unlock-In"] = str(int((lock_until - now).total_seconds()))
             raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail)
+
+        # If attempts >= 3, indicate CAPTCHA is required for next attempt
+        if attempts >= CAPTCHA_REQUIRED_ATTEMPTS:
+            response.headers["X-CAPTCHA-Required"] = "true"
+            response.headers["X-Login-Attempts"] = str(attempts)
 
         invalid_credentials()
 
@@ -386,19 +504,31 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         httponly=True,               # ✅ HttpOnly set to True for security
         samesite="strict",
         secure=True,                 # keep True in prod (HTTPS)
-        max_age=30 * 24 * 60 * 60,   # 30 days to match refresh token expiry
+        max_age=7 * 24 * 60 * 60,   # 7 days to match refresh token expiry
         path="/",
     )
 
     # Create login session for access token (used for inactivity tracking)
     try:
+        # Extract device and location information
+        user_agent = request.headers.get("user-agent")
+        ip_address = getattr(request.client, "host", None)
+        
+        # Parse device information (from custom headers for mobile app, or user-agent for web)
+        device_info = parse_device_from_headers(request)
+        
+        # Get location information (from client headers or IP geolocation)
+        location_info = await get_location_from_client(request)
+        
         session_service = SessionService(prisma)
         await session_service.create_session(
             entity_id=str(user.id),
             session_token=access_token,
             login_method=LoginMethodEnum.EMAIL_PASSWORD,
-            ip_address=getattr(request.client, "host", None),
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
+            device_info=device_info,
+            location_info=location_info,
         )
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session: {e}")
@@ -553,19 +683,31 @@ async def refresh_token(request: Request, response: Response):
         httponly=True,               # ✅ HttpOnly set to True for security
         samesite="strict",
         secure=True,
-        max_age=30 * 24 * 60 * 60,   # 30 days to match refresh token expiry
+        max_age=7 * 24 * 60 * 60,   # 7 days to match refresh token expiry
         path="/",
     )
 
     # Create a new login session for the new access token
     try:
+        # Extract device and location information
+        user_agent = request.headers.get("user-agent")
+        ip_address = getattr(request.client, "host", None)
+        
+        # Parse device information (from custom headers for mobile app, or user-agent for web)
+        device_info = parse_device_from_headers(request)
+        
+        # Get location information (from client headers or IP geolocation)
+        location_info = await get_location_from_client(request)
+        
         session_service = SessionService(prisma)
         await session_service.create_session(
             entity_id=str(user.id),
             session_token=access_token,
             login_method=LoginMethodEnum.EMAIL_PASSWORD,
-            ip_address=getattr(request.client, "host", None),
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
+            device_info=device_info,
+            location_info=location_info,
         )
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session on refresh: {e}")
@@ -600,9 +742,32 @@ async def refresh_token(request: Request, response: Response):
     }
 
 @router.post("/logout", response_model=schemas.ApiResponse)
-async def logout(response: Response):
-    """Clear the refresh cookie and return unified response."""
+async def logout(request: Request, response: Response):
+    """
+    Logout the current session.
+    - Updates session logout_at timestamp
+    - Marks session as LOGGED_OUT
+    - Clears refresh cookie
+    """
+    # Extract access token from Authorization header to update session
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    session_token = None
+    
+    if auth_header and auth_header.lower().startswith("bearer "):
+        session_token = auth_header.split(" ", 1)[1].strip()
+        
+        # Update session logout_at and status
+        try:
+            session_service = SessionService(prisma)
+            await session_service.logout_session(session_token=session_token)
+            logger.info(f"[AUTH] Session logged out: {session_token[:16]}...")
+        except Exception as e:
+            # Log error but don't fail logout (token might be expired/invalid)
+            logger.warning(f"[AUTH] Failed to update session on logout: {e}")
+    
+    # Clear refresh cookie
     response.delete_cookie("rp_refresh", path="/")
+    
     return {
         "success": True,
         "message": "Logged out",
@@ -611,6 +776,130 @@ async def logout(response: Response):
         "meta": {},
     }
     
+@router.post("/change-password", response_model=schemas.ApiResponse)
+async def change_password(
+    payload: schemas.ChangePasswordRequest,
+    request: Request,
+    current_user = Depends(get_current_entity)
+):
+    """
+    Change password for authenticated user.
+    - Validates current password
+    - Updates to new password
+    - Revokes all other sessions (keeps current session active)
+    - Sends email notification with security details
+    """
+    now = datetime.now(timezone.utc)
+    
+    # Validate current password
+    try:
+        password_valid = pwd_context.verify(payload.current_password, current_user.password)
+    except Exception:
+        password_valid = False
+    
+    if not password_valid:
+        logger.warning(f"[AUTH] Change password failed: Invalid current password for user {current_user.email}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect",
+        )
+    
+    # Validate new password
+    if payload.current_password == payload.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from current password",
+        )
+    
+    try:
+        validate_password(payload.new_password)
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(ve),
+        )
+    
+    # Hash new password
+    new_password_hash = hash_password(payload.new_password)
+    
+    # Update password in database
+    try:
+        await prisma.entities.update(
+            where={"id": current_user.id},
+            data={
+                "password": new_password_hash,
+                "login_attempts": 0,  # Reset login attempts on password change
+                "locked_until": None,  # Clear any lockouts
+                "updated_at": now,
+            },
+        )
+        logger.info(f"[AUTH] Password changed successfully for user {current_user.email}")
+    except PrismaError as exc:
+        logger.error(f"[AUTH] Failed to update password: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to change password. Please try again later.",
+        )
+    
+    # Revoke all other sessions (except current session)
+    try:
+        # Get current session token from Authorization header
+        auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+        current_session_token = None
+        if auth_header and auth_header.lower().startswith("bearer "):
+            current_session_token = auth_header.split(" ", 1)[1].strip()
+        
+        session_service = SessionService(prisma)
+        revoked_count = await session_service.revoke_all_sessions(
+            entity_id=str(current_user.id),
+            except_token=current_session_token
+        )
+        logger.info(f"[AUTH] Revoked {revoked_count} sessions after password change for user {current_user.email}")
+    except Exception as e:
+        logger.warning(f"[AUTH] Failed to revoke sessions after password change: {e}")
+        # Don't fail password change if session revocation fails
+    
+    # Send email notification with security details
+    try:
+        # Extract device and location information
+        user_agent = request.headers.get("user-agent")
+        ip_address = getattr(request.client, "host", None)
+        
+        # Parse device information
+        device_info = parse_device_from_headers(request)
+        
+        # Get location information
+        location_info = await get_location_from_client(request)
+        
+        # Get user's full name
+        user_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email
+        
+        # Send email notification
+        await email_service.send_password_change_notification(
+            email=current_user.email,
+            user_name=user_name,
+            device_info=device_info,
+            location_info=location_info,
+            ip_address=ip_address,
+            timestamp=now
+        )
+        logger.info(f"[AUTH] Password change notification email sent to {current_user.email}")
+    except Exception as e:
+        logger.warning(f"[AUTH] Failed to send password change notification email: {e}")
+        # Don't fail password change if email fails
+    
+    return {
+        "success": True,
+        "message": "Password changed successfully",
+        "data": {
+            "email": current_user.email,
+            "password_changed_at": now.isoformat(),
+        },
+        "error": None,
+        "meta": {},
+    }
+
+
 @router.get("/ping")
 async def auth_ping(request: Request):
     """

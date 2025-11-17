@@ -8,6 +8,9 @@ from .auth import (
     AuthData,
     ApiResponse,
     AuthResponse,
+    CaptchaGenerateResponse,
+    CaptchaValidateRequest,
+    ChangePasswordRequest,
 )
 
 __all__ = [
@@ -19,4 +22,7 @@ __all__ = [
     "AuthData",
     "ApiResponse",
     "AuthResponse",
+    "CaptchaGenerateResponse",
+    "CaptchaValidateRequest",
+    "ChangePasswordRequest",
 ]
