@@ -5,12 +5,15 @@ from starlette.middleware.sessions import SessionMiddleware
 from .core.config import settings
 from .core.database import prisma
 from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router, funding_account_router, otp_router
-from .middleware import RequestSizeLimitMiddleware, ActivityTimeoutMiddleware
+from .middleware import RequestSizeLimitMiddleware, ActivityTimeoutMiddleware, SecurityHeadersMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# ✅ Security headers middleware (adds security headers to all responses)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # ✅ Request size limit (rejects > configured MB)
 app.add_middleware(RequestSizeLimitMiddleware)
