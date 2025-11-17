@@ -433,6 +433,37 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
             # Do not leak DB errors; still respond with auth error
             pass
 
+        # Send email notification when attempts reach 3 (CAPTCHA required threshold)
+        if attempts == CAPTCHA_REQUIRED_ATTEMPTS:
+            try:
+                # Extract device and location information
+                user_agent = request.headers.get("user-agent")
+                ip_address = getattr(request.client, "host", None)
+                
+                # Parse device information
+                device_info = parse_device_from_headers(request)
+                
+                # Get location information
+                location_info = await get_location_from_client(request)
+                
+                # Get user's full name
+                user_name = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
+                
+                # Send email notification
+                await email_service.send_failed_login_notification(
+                    email=user.email,
+                    user_name=user_name,
+                    failed_attempts=attempts,
+                    device_info=device_info,
+                    location_info=location_info,
+                    ip_address=ip_address,
+                    timestamp=now
+                )
+                logger.info(f"[AUTH] Failed login notification email sent to {user.email} after {attempts} attempts")
+            except Exception as e:
+                logger.warning(f"[AUTH] Failed to send failed login notification email: {e}")
+                # Don't fail login if email fails
+
         if lock_until:
             response.headers["X-Account-Unlock-In"] = str(int((lock_until - now).total_seconds()))
             raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail)
