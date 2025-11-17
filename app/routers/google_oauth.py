@@ -94,7 +94,7 @@ async def google_callback(request: Request):
         httponly=True,
         samesite="lax",
         secure=False,
-        max_age=30 * 24 * 60 * 60,
+        max_age=7 * 24 * 60 * 60,
         path="/",
     )
     return resp

@@ -12,6 +12,8 @@ from passlib.context import CryptContext
 from app.services.otp_service import OTPService
 from app.services.otp_service import OTPService
 from app.services.session_service import SessionService
+from app.utils.device_parser import parse_device_from_headers
+from app.utils.location_service import get_location_from_client
 
 # from prisma.models import entities  # prisma python generates models from schema
 from .security import (
@@ -229,7 +231,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         httponly=True,       # ✅ HttpOnly set to True for security
         samesite="strict",   # stricter than lax for banking
         secure=True,         # must be True in production (HTTPS)
-        max_age=30 * 24 * 60 * 60,  # 30 days to match refresh token expiry
+        max_age=7 * 24 * 60 * 60,  # 7 days to match refresh token expiry
         path="/",
     )
 
@@ -383,19 +385,31 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         httponly=True,               # ✅ HttpOnly set to True for security
         samesite="strict",
         secure=True,                 # keep True in prod (HTTPS)
-        max_age=30 * 24 * 60 * 60,   # 30 days to match refresh token expiry
+        max_age=7 * 24 * 60 * 60,   # 7 days to match refresh token expiry
         path="/",
     )
 
     # Create login session for access token (used for inactivity tracking)
     try:
+        # Extract device and location information
+        user_agent = request.headers.get("user-agent")
+        ip_address = getattr(request.client, "host", None)
+        
+        # Parse device information (from custom headers for mobile app, or user-agent for web)
+        device_info = parse_device_from_headers(request)
+        
+        # Get location information (from client headers or IP geolocation)
+        location_info = await get_location_from_client(request)
+        
         session_service = SessionService(prisma)
         await session_service.create_session(
             entity_id=str(user.id),
             session_token=access_token,
             login_method=LoginMethodEnum.EMAIL_PASSWORD,
-            ip_address=getattr(request.client, "host", None),
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
+            device_info=device_info,
+            location_info=location_info,
         )
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session: {e}")
@@ -550,19 +564,31 @@ async def refresh_token(request: Request, response: Response):
         httponly=True,               # ✅ HttpOnly set to True for security
         samesite="strict",
         secure=True,
-        max_age=30 * 24 * 60 * 60,   # 30 days to match refresh token expiry
+        max_age=7 * 24 * 60 * 60,   # 7 days to match refresh token expiry
         path="/",
     )
 
     # Create a new login session for the new access token
     try:
+        # Extract device and location information
+        user_agent = request.headers.get("user-agent")
+        ip_address = getattr(request.client, "host", None)
+        
+        # Parse device information (from custom headers for mobile app, or user-agent for web)
+        device_info = parse_device_from_headers(request)
+        
+        # Get location information (from client headers or IP geolocation)
+        location_info = await get_location_from_client(request)
+        
         session_service = SessionService(prisma)
         await session_service.create_session(
             entity_id=str(user.id),
             session_token=access_token,
             login_method=LoginMethodEnum.EMAIL_PASSWORD,
-            ip_address=getattr(request.client, "host", None),
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
+            device_info=device_info,
+            location_info=location_info,
         )
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session on refresh: {e}")
@@ -597,9 +623,32 @@ async def refresh_token(request: Request, response: Response):
     }
 
 @router.post("/logout", response_model=schemas.ApiResponse)
-async def logout(response: Response):
-    """Clear the refresh cookie and return unified response."""
+async def logout(request: Request, response: Response):
+    """
+    Logout the current session.
+    - Updates session logout_at timestamp
+    - Marks session as LOGGED_OUT
+    - Clears refresh cookie
+    """
+    # Extract access token from Authorization header to update session
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    session_token = None
+    
+    if auth_header and auth_header.lower().startswith("bearer "):
+        session_token = auth_header.split(" ", 1)[1].strip()
+        
+        # Update session logout_at and status
+        try:
+            session_service = SessionService(prisma)
+            await session_service.logout_session(session_token=session_token)
+            logger.info(f"[AUTH] Session logged out: {session_token[:16]}...")
+        except Exception as e:
+            # Log error but don't fail logout (token might be expired/invalid)
+            logger.warning(f"[AUTH] Failed to update session on logout: {e}")
+    
+    # Clear refresh cookie
     response.delete_cookie("rp_refresh", path="/")
+    
     return {
         "success": True,
         "message": "Logged out",

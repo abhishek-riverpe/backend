@@ -14,7 +14,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE = timedelta(minutes=15)
-REFRESH_TOKEN_EXPIRE = timedelta(days=30)
+REFRESH_TOKEN_EXPIRE = timedelta(days=7)
 
 def get_password_hash(password):
     return pwd_context.hash(password)

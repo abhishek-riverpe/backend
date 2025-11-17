@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class SessionService:
     """Service for managing login sessions"""
 
-    SESSION_EXPIRY_DAYS = 30  # Sessions expire after 30 days
+    SESSION_EXPIRY_DAYS = 7  # Sessions expire after 7 days (matches refresh token expiry)
 
     def __init__(self, prisma: Prisma):
         self.prisma = prisma
@@ -231,7 +231,10 @@ class SessionService:
         try:
             await self.prisma.login_sessions.update(
                 where={"id": session_id},
-                data={"status": SessionStatusEnum.REVOKED}
+                data={
+                    "status": SessionStatusEnum.REVOKED,
+                    "logout_at": datetime.now(timezone.utc),
+                }
             )
             logger.info(f"[SESSION] Revoked session {session_id}")
             return True
@@ -363,7 +366,10 @@ class SessionService:
             
             result = await self.prisma.login_sessions.update_many(
                 where=where_clause,
-                data={"status": SessionStatusEnum.REVOKED}
+                data={
+                    "status": SessionStatusEnum.REVOKED,
+                    "logout_at": datetime.now(timezone.utc),
+                }
             )
             
             logger.info(f"[SESSION] Revoked {result} sessions for entity {entity_id}")

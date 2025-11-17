@@ -31,9 +31,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Referrer-Policy: Controls referrer information sent with requests
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         
-        # Permissions-Policy: Disables access to sensitive browser features
-        # Blocks geolocation, microphone, and camera for banking security
-        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        # Permissions-Policy: Allows geolocation for location tracking (user permission required)
+        # Blocks microphone and camera for banking security
+        # geolocation=(self) allows same-origin access (frontend can request permission)
+        response.headers["Permissions-Policy"] = "geolocation=(self), microphone=(), camera=()"
         
         return response
 
