@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # Concurrent session controls
     max_active_sessions: int = 3  # 0 or negative disables limiting
 
+    # CORS settings
+    cors_origins: str | list[str] = "http://localhost:5173,http://127.0.0.1:5173,https://www.riverpe.com"  # Comma-separated string or list
+    cors_allow_credentials: bool = True
+    cors_max_age: int = 3600  # Cache preflight requests for 1 hour
+
     # Pydantic v2 settings config
     model_config = SettingsConfigDict(
         env_file=".env",
