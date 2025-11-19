@@ -432,20 +432,9 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
                     "updated_at": now,
                 },
             )
-        except PrismaError as exc:
+        except PrismaError:
             # Do not leak DB errors; still respond with auth error
-            # But log the failure for monitoring/debugging
-            logger.error(
-                "[AUTH] Failed to update login attempts in database",
-                extra={
-                    "user_id": str(user.id),
-                    "email": user.email,
-                    "attempts": attempts,
-                    "lock_until": lock_until.isoformat() if lock_until else None,
-                },
-                exc_info=True,
-            )
-            # Continue with auth error response despite DB failure
+            pass
 
         # Send email notification when attempts reach 3 (CAPTCHA required threshold)
         if attempts == CAPTCHA_REQUIRED_ATTEMPTS:
@@ -500,19 +489,9 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
                 "updated_at": now,
             },
         )
-    except PrismaError as exc:
+    except PrismaError:
         # Non-fatal; continue issuing tokens
-        # But log the failure for monitoring/debugging
-        logger.error(
-            "[AUTH] Failed to update login success timestamp in database",
-            extra={
-                "user_id": str(user.id),
-                "email": user.email,
-                "operation": "reset_login_attempts",
-            },
-            exc_info=True,
-        )
-        # Continue issuing tokens despite DB failure
+        pass
 
     # Issue tokens
     access_token = auth.create_access_token(data={"sub": str(user.id), "type": "access"})

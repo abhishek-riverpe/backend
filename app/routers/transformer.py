@@ -7,7 +7,6 @@ from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
 from ..schemas.zynk import ZynkEntitiesResponse, ZynkEntityResponse, ZynkKycResponse, ZynkKycRequirementsResponse, ZynkKycDocumentsResponse, KycDocumentUpload, KycUploadResponse
-from ..utils.response import standard_response
 
 router = APIRouter(prefix="/api/v1/transformer", tags=["transformer"])
 
@@ -157,15 +156,8 @@ async def get_all_entities(current: Entities = Depends(auth.get_current_entity))
         if data is None or "entities" not in data or "paginationData" not in data or "message" not in data:
             raise HTTPException(status_code=502, detail="Upstream service did not provide the expected data structure")
 
-        # Upstream already returns unified format, ensure it has error and meta fields
-        # Return upstream response with missing fields added for consistency
-        return standard_response(
-            success=body.get("success", True),
-            message=body.get("message", data.get("message", "Entities fetched successfully")),
-            data=data,  # Keep the nested data structure as-is for frontend compatibility
-            error=body.get("error"),
-            meta=body.get("meta", {})
-        )
+        # Return the entire upstream response as it matches our schema
+        return body
 
     raise HTTPException(status_code=502, detail="Failed to fetch entities from upstream service after multiple attempts")
 
@@ -235,14 +227,8 @@ async def get_entity_by_id(
             if field not in entity:
                 raise HTTPException(status_code=502, detail=f"Upstream service response missing required field: {field}")
 
-        # Upstream already returns unified format, ensure it has error and meta fields
-        return standard_response(
-            success=body.get("success", True),
-            message=body.get("message", data.get("message", "Entity fetched successfully")),
-            data=data,  # Keep the nested data structure as-is for frontend compatibility
-            error=body.get("error"),
-            meta=body.get("meta", {})
-        )
+        # Return the upstream response as it matches our schema
+        return body
 
     raise HTTPException(status_code=502, detail="Failed to fetch entity from upstream service after multiple attempts")
 
@@ -306,12 +292,11 @@ async def upload_kyc_documents(
     # Submit to ZynkLabs
     zynk_response = await _submit_kyc_to_zynk(entity_id, routing_id, payload)
 
-    # Return success response in unified format
-    # zynk_response already has success, message, data - ensure error and meta are present
+    # Return success response
     return KycUploadResponse(
-        success=zynk_response.get("success", True),
-        message=zynk_response.get("message", "KYC documents uploaded and submitted successfully."),
-        data=zynk_response.get("data", zynk_response)  # If no nested data, use entire response
+        success=True,
+        message="KYC documents uploaded and submitted successfully.",
+        data=zynk_response
     )
 
 @router.get("/entity/kyc/{entity_id}", response_model=ZynkKycResponse)
@@ -379,14 +364,8 @@ async def get_entity_kyc_status(
         if not status:
             raise HTTPException(status_code=502, detail="Upstream service response 'status' list is empty")
 
-        # Upstream already returns unified format, ensure it has error and meta fields
-        return standard_response(
-            success=body.get("success", True),
-            message=body.get("message", data.get("message", "KYC status fetched successfully")),
-            data=data,  # Keep the nested data structure as-is for frontend compatibility
-            error=body.get("error"),
-            meta=body.get("meta", {})
-        )
+        # Return the upstream response as it matches our schema
+        return body
 
     raise HTTPException(status_code=502, detail="Failed to fetch KYC status from upstream service after multiple attempts")
 
@@ -454,14 +433,8 @@ async def get_entity_kyc_requirements(
         if not isinstance(kyc_requirements, list):
             raise HTTPException(status_code=502, detail="Upstream service response 'kycRequirements' must be a list")
 
-        # Upstream already returns unified format, ensure it has error and meta fields
-        return standard_response(
-            success=body.get("success", True),
-            message=body.get("message", data.get("message", "KYC requirements fetched successfully")),
-            data=data,  # Keep the nested data structure as-is for frontend compatibility
-            error=body.get("error"),
-            meta=body.get("meta", {})
-        )
+        # Return the upstream response as it matches our schema
+        return body
 
     raise HTTPException(status_code=502, detail="Failed to fetch KYC requirements from upstream service after multiple attempts")
 
@@ -528,15 +501,8 @@ async def get_entity_kyc_documents(
         # if not isinstance(documents, list):
         #     raise HTTPException(status_code=502, detail="Upstream service response 'documents' must be a list")
 
-        # Upstream already returns unified format, ensure it has error and meta fields
-        upstream_message = data.get("message", "KYC documents fetched successfully") if isinstance(data, dict) else "KYC documents fetched successfully"
-        return standard_response(
-            success=body.get("success", True),
-            message=body.get("message", upstream_message),
-            data=data,  # Keep the nested data structure as-is for frontend compatibility
-            error=body.get("error"),
-            meta=body.get("meta", {})
-        )
+        # Return the upstream response as it matches our schema
+        return body
 
     raise HTTPException(status_code=502, detail="Failed to fetch KYC documents from upstream service after multiple attempts")
 
@@ -605,13 +571,7 @@ async def get_entity_by_email(
             if field not in entity:
                 raise HTTPException(status_code=502, detail=f"Upstream service response missing required field: {field}")
 
-        # Upstream already returns unified format, ensure it has error and meta fields
-        return standard_response(
-            success=body.get("success", True),
-            message=body.get("message", data.get("message", "Entity fetched successfully")),
-            data=data,  # Keep the nested data structure as-is for frontend compatibility
-            error=body.get("error"),
-            meta=body.get("meta", {})
-        )
+        # Return the upstream response as it matches our schema
+        return body
 
     raise HTTPException(status_code=502, detail="Failed to fetch entity from upstream service after multiple attempts")
