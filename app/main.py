@@ -21,18 +21,44 @@ app.add_middleware(RequestSizeLimitMiddleware)
 # ✅ Session inactivity timeout enforcement for authenticated requests
 app.add_middleware(ActivityTimeoutMiddleware)
 
-# ✅ CORS setup - Allowing all origins for development
-# For React Native/Expo development, this is the simplest approach
+# ✅ CORS setup - Production-ready with explicit allowlist
+# Parse CORS origins from config (support both string and list)
+cors_origins_list = (
+    settings.cors_origins.split(",") if isinstance(settings.cors_origins, str)
+    else settings.cors_origins
+)
+# Strip whitespace from each origin
+cors_origins_list = [origin.strip() for origin in cors_origins_list]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://www.riverpe.com",
+    allow_origins=cors_origins_list,
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=["GET", "POST", "OPTIONS"],  # Explicit whitelist - only methods actually used
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "X-Requested-With",
+        "X-RP-Skip-Refresh",  # Custom header for token refresh
+        # Device information headers (used by mobile app and middleware)
+        "X-Device-Type",
+        "X-Device-Name",
+        "X-OS-Name",
+        "X-OS-Version",
+        "X-Browser-Name",
+        "X-Browser-Version",
+        "X-App-Version",
+        # Location headers (optional, used by location service)
+        "X-User-Latitude",
+        "X-User-Longitude",
+        "X-User-City",
+        "X-User-Country",
+        # Standard browser headers
+        "User-Agent",
+        "Content-Length",
     ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    max_age=settings.cors_max_age,  # Cache preflight requests
 )
 
 
