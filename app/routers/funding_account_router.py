@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from prisma.models import entities as Entities
 from ..core import auth
 from ..core.config import settings
-from ..utils.response import standard_response
 
 router = APIRouter(prefix="/api/v1/funding_account", tags=["funding_account"])
 
@@ -65,16 +64,8 @@ async def get_funding_accounts(
                 raise HTTPException(status_code=404, detail="Funding accounts not found for the entity in external service.")
             raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
 
-        # Upstream already returns unified format, ensure it has error and meta fields
-        data = body.get("data", {})
-        upstream_message = data.get("message", "Funding accounts fetched successfully") if isinstance(data, dict) else "Funding accounts fetched successfully"
-        return standard_response(
-            success=body.get("success", True),
-            message=body.get("message", upstream_message),
-            data=data,  # Keep the nested data structure as-is for frontend compatibility
-            error=body.get("error"),
-            meta=body.get("meta", {})
-        )
+        # Return the upstream response as-is
+        return body
 
     raise HTTPException(status_code=502, detail="Failed to fetch funding accounts from upstream service after multiple attempts")
 
