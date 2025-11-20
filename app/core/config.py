@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     # Add these to match your .env so they are NOT "extra"
     jwt_algorithm: str = "HS256"
+    # JWT algorithm whitelist - only these algorithms are allowed
+    # Prevents algorithm confusion attacks (e.g., RS256 -> HS256 swap)
+    jwt_allowed_algorithms: list[str] = ["HS256"]  # Only symmetric algorithms for now
     access_token_expire_minutes: int = 15
 
     # SMS/OTP settings
