@@ -9,7 +9,7 @@ from ..core import auth
 from ..core.config import settings
 from ..schemas.zynk import CreateZynkEntityIn
 
-router = APIRouter(prefix="/api/v1/zynk", tags=["zynk"])
+router = APIRouter(prefix="/api/v1/transformer", tags=["transformer"])
 
 def _auth_header():
     if not settings.zynk_api_key:
@@ -133,7 +133,7 @@ async def create_external_entity(
         raise HTTPException(status_code=500, detail="Failed to persist external entity link")
 
     # 5) Return unified API response
-    response.headers["Location"] = f"/api/v1/zynk/entity/{updated.id}"
+    response.headers["Location"] = f"/api/v1/transformer/entity/{updated.id}"
     response.headers["X-External-Entity-Id"] = upstream_entity_id
     return {
         "success": True,
@@ -144,20 +144,25 @@ async def create_external_entity(
     }
 
 
-@router.get("/kyc/requirements/{routing_id}")
+@router.get("/entity/kyc/requirements/{entity_id}/{routing_id}")
 async def get_kyc_requirements(
+    entity_id: str,
     routing_id: str,
     current: Entities = Depends(get_current_entity),
 ):
     """
-    Fetch KYC requirements for the logged-in user's external entity id and the provided routing id.
+    Fetch KYC requirements for the specified entity id and routing id.
     Returns unified API response.
     """
+    # Security check: Ensure the requested entity belongs to the authenticated user
     external_id = getattr(current, "zynk_entity_id", None)
     if not external_id:
         raise HTTPException(status_code=400, detail="External entity id is missing. Complete profile first.")
+    
+    if external_id != entity_id:
+        raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC requirements.")
 
-    data = await _call_zynk_get_kyc_requirements(external_id, routing_id)
+    data = await _call_zynk_get_kyc_requirements(entity_id, routing_id)
     # Shape: { message, kycRequirements: [...] }
     return {
         "success": True,
