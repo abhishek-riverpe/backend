@@ -9,11 +9,11 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     backend_url: str | None = None
 
-    # Zynk API settings
-    zynk_base_url: str | None = "https://qaapi.zynklabs.xyz"
-    zynk_api_key: str | None = "2dfdbe8cbdbe7231375c93808d55cc32"
+    # Zynk API settings - MUST be set via environment variables
+    zynk_base_url: str | None = None
+    zynk_api_key: str | None = None
     zynk_timeout_s: int = 30
-    zynk_default_routing_id: str = "infrap_f2a15c0b_89cf_4041_83fb_8ba064083706"
+    zynk_default_routing_id: str | None = None
 
     # AWS S3 settings
     aws_access_key_id: str | None = None
