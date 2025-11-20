@@ -43,14 +43,29 @@ This is the FastAPI backend for the NeoBank application.
 
 5.  **Configure Environment Variables:**
 
-    Make sure you have a `.env` file in the `backend` directory with the following content:
+    Copy the example environment file and configure your settings:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Edit the `.env` file with your actual values. At minimum, you need:
 
     ```
     DATABASE_URL="postgresql://user:password@localhost:5432/neobank?schema=public"
     JWT_SECRET="your_super_secret_key_that_is_long_and_random"
+    
+    # Zynk Labs API (Required)
+    ZYNK_BASE_URL="https://qaapi.zynklabs.xyz"
+    ZYNK_API_KEY="your_zynk_api_key_here"
+    ZYNK_DEFAULT_ROUTING_ID="your_routing_id_here"
     ```
 
-    > **Note:** Replace `"postgresql://user:password@localhost:5432/neobank?schema=public"` with your actual PostgreSQL connection string. Ensure the database `neobank` exists in your PostgreSQL instance.
+    > **Important Security Notes:**
+    > - Replace all placeholder values with your actual credentials
+    > - Never commit the `.env` file to version control (it's already in `.gitignore`)
+    > - Get your Zynk Labs API credentials from your Zynk Labs dashboard
+    > - Ensure the database `neobank` exists in your PostgreSQL instance
 
 6.  **Apply the database schema:**
 
