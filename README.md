@@ -54,12 +54,15 @@ This is the FastAPI backend for the NeoBank application.
     ```
     DATABASE_URL="postgresql://user:password@localhost:5432/neobank?schema=public"
     JWT_SECRET="your_super_secret_key_that_is_long_and_random"
+    SESSION_SECRET="your_different_secret_key_for_session_cookies"
     
     # Zynk Labs API (Required)
     ZYNK_BASE_URL="https://qaapi.zynklabs.xyz"
     ZYNK_API_KEY="your_zynk_api_key_here"
     ZYNK_DEFAULT_ROUTING_ID="your_routing_id_here"
     ```
+    
+    > **Security Note:** `SESSION_SECRET` must be different from `JWT_SECRET` to prevent single point of failure. If one secret is compromised, the other remains secure.
 
     > **Important Security Notes:**
     > - Replace all placeholder values with your actual credentials
