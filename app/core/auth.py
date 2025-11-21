@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -35,7 +35,7 @@ def create_access_token(data: dict, expires_delta: timedelta = ACCESS_TOKEN_EXPI
     if "sub" not in to_encode:
         raise ValueError("access token requires 'sub' claim")
     to_encode.setdefault("type", "access")
-    to_encode.update({"exp": datetime.utcnow() + expires_delta})
+    to_encode.update({"exp": datetime.now(timezone.utc) + expires_delta})
     return _encode_jwt(to_encode)
 
 def create_refresh_token(data: dict, expires_delta: timedelta = REFRESH_TOKEN_EXPIRE) -> str:
@@ -43,7 +43,7 @@ def create_refresh_token(data: dict, expires_delta: timedelta = REFRESH_TOKEN_EX
     if "sub" not in to_encode:
         raise ValueError("refresh token requires 'sub' claim")
     to_encode.setdefault("type", "refresh")
-    to_encode.update({"exp": datetime.utcnow() + expires_delta})
+    to_encode.update({"exp": datetime.now(timezone.utc) + expires_delta})
     return _encode_jwt(to_encode)
 
 def _validate_jwt_algorithm(token: str) -> None:
