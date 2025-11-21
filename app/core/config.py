@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     zynk_api_key: str | None = None
     zynk_timeout_s: int = 30
     zynk_default_routing_id: str | None = None
+    zynk_webhook_secret: str | None = None  # Secret for verifying webhook signatures
 
     # AWS S3 settings
     aws_access_key_id: str | None = None

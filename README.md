@@ -60,7 +60,10 @@ This is the FastAPI backend for the NeoBank application.
     ZYNK_BASE_URL="https://qaapi.zynklabs.xyz"
     ZYNK_API_KEY="your_zynk_api_key_here"
     ZYNK_DEFAULT_ROUTING_ID="your_routing_id_here"
+    ZYNK_WEBHOOK_SECRET="your_webhook_secret_from_zynk_dashboard"
     ```
+    
+    > **Security Note:** `ZYNK_WEBHOOK_SECRET` is required for webhook signature verification. Get this from your Zynk Labs dashboard webhook configuration.
     
     > **Security Note:** `SESSION_SECRET` must be different from `JWT_SECRET` to prevent single point of failure. If one secret is compromised, the other remains secure.
 
