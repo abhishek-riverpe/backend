@@ -155,7 +155,8 @@ async def get_kyc_requirements(
     Returns unified API response.
     """
     # Security check: Ensure the requested entity belongs to the authenticated user
-    external_id = getattr(current, "zynk_entity_id", None)
+    # Prisma maps zynk_entity_id database column to external_entity_id attribute in Python
+    external_id = getattr(current, "external_entity_id", None) or getattr(current, "zynk_entity_id", None)
     if not external_id:
         raise HTTPException(status_code=400, detail="External entity id is missing. Complete profile first.")
     

@@ -529,10 +529,10 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         )
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session: {e}")
-
+    print(f"[AUTH] Login session created for user {user}")
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "zynk_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
@@ -545,7 +545,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else None,
         "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
     }
-
+    print(f"[AUTH] Safe user: {safe_user}")
     return {
         "success": True,
         "message": "Signin successful",
@@ -711,7 +711,7 @@ async def refresh_token(request: Request, response: Response):
 
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "zynk_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
