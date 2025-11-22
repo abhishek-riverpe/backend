@@ -14,7 +14,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE = timedelta(minutes=15)
-REFRESH_TOKEN_EXPIRE = timedelta(days=7)
+REFRESH_TOKEN_EXPIRE = timedelta(hours=24)  # 24 hours as requested
 
 # JWT Algorithm Whitelist - Only these algorithms are allowed
 # Explicitly rejects "none" algorithm and prevents algorithm confusion attacks

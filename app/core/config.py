@@ -1,10 +1,11 @@
 # app/core/config.py
+import secrets
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str
     jwt_secret: str
-    session_secret: str  # Separate secret for session cookies (must be different from jwt_secret)
+    session_secret: str | None = None  # Separate secret for session cookies (must be different from jwt_secret)
     google_client_id: str | None = None
     google_client_secret: str | None = None
     frontend_url: str = "http://localhost:5173"
@@ -56,7 +57,7 @@ class Settings(BaseSettings):
     hibp_timeout_s: int = 5
 
     # Session inactivity timeout (minutes)
-    inactivity_timeout_minutes: int = 20
+    inactivity_timeout_minutes: int = 60
 
     # Concurrent session controls
     max_active_sessions: int = 3  # 0 or negative disables limiting
@@ -70,4 +71,15 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
+
+# Generate a random session_secret if not provided (for development only)
+if settings.session_secret is None or settings.session_secret == "":
+    import warnings
+    warnings.warn(
+        "SESSION_SECRET not set in environment. Generating a random secret for this session. "
+        "This is not suitable for production! Please set SESSION_SECRET in your .env file.",
+        UserWarning
+    )
+    # Generate a random 32-byte hex string (same length as typical secrets)
+    settings.session_secret = secrets.token_urlsafe(32)
 
