@@ -57,7 +57,7 @@ async def shutdown():
         await prisma.disconnect()
 
 # Include routers
-# app.include_router(google_oauth.router)
+app.include_router(google_oauth.router)
 app.include_router(auth_routes.router)
 app.include_router(zync.router)
 # app.include_router(transformer.router)

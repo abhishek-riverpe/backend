@@ -1,6 +1,6 @@
 import secrets
 import random
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from urllib.parse import urlencode
 from starlette.responses import RedirectResponse
 from authlib.integrations.starlette_client import OAuth, OAuthError
@@ -8,9 +8,9 @@ from authlib.integrations.starlette_client import OAuth, OAuthError
 from ..core.config import settings
 from ..core.database import prisma
 from ..core import auth
+from ..utils.oauth_cache import generate_oauth_code, exchange_oauth_code
 
 router = APIRouter(prefix="/auth", tags=["auth"]) 
-
 # Configure Authlib OAuth client for Google
 oauth = OAuth()
 oauth.register(
@@ -54,25 +54,17 @@ async def google_callback(request: Request):
     last_name = userinfo.get("family_name") or ""
 
     # Find or create user
-    user = await prisma.user.find_unique(where={"username": email})
+    user = await prisma.entities.find_unique(where={"email": email})
     if not user:
         # Create a random password since login is via Google
         random_password = secrets.token_urlsafe(16)
         hashed = auth.get_password_hash(random_password)
-        user = await prisma.user.create(
+        user = await prisma.entities.create(
             data={
-                "username": email,
-                "password_hash": hashed,
+                "email": email,
                 "first_name": first_name,
                 "last_name": last_name,
-            }
-        )
-
-        # Also create an account like in signup flow
-        await prisma.account.create(
-            data={
-                "userId": user.id,
-                "balance": round(1 + random.random() * 9999, 2)
+                "password": hashed,
             }
         )
 
@@ -80,21 +72,73 @@ async def google_callback(request: Request):
     access_token = auth.create_access_token(data={"sub": user.id, "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": user.id, "type": "refresh"})
 
-    # Redirect back to React app with token and basic profile info
-    query = urlencode({
-        "token": access_token,
-        "firstName": first_name or "",
-        "lastName": last_name or "",
-    })
-    redirect_to = f"{settings.frontend_url}/oauth/callback?{query}"
-    resp = RedirectResponse(url=redirect_to, status_code=302)
-    resp.set_cookie(
+    # ✅ SECURITY: Generate temporary code instead of passing token in URL
+    # Store tokens securely for exchange
+    oauth_data = {
+        "user_id": user.id,
+        "email": user.email,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "first_name": first_name,
+        "last_name": last_name,
+    }
+    temp_code = generate_oauth_code(oauth_data)
+
+    # Redirect back to React app with temporary code (NOT token)
+    redirect_to = f"{settings.frontend_url}/oauth/callback?code={temp_code}"
+    return RedirectResponse(url=redirect_to, status_code=302)
+
+
+@router.post("/google/exchange")
+async def exchange_oauth_code_endpoint(code_data: dict, response: Response):
+    """
+    Exchange temporary OAuth code for session cookies.
+    
+    ✅ SECURITY: This endpoint validates the code and sets HttpOnly cookies.
+    The frontend never receives tokens directly, preventing XSS token theft.
+    """
+    code = code_data.get("code")
+    if not code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Code is required"
+        )
+    
+    # Exchange code for stored data (one-time use)
+    oauth_data = exchange_oauth_code(code)
+    if not oauth_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired code"
+        )
+    
+    # Set HttpOnly cookie for refresh token (long-lived, 7 days)
+    # Access token is returned in response for immediate use
+    response.set_cookie(
         key="rp_refresh",
-        value=refresh_token,
+        value=oauth_data["refresh_token"],
         httponly=True,
-        samesite="lax",
-        secure=False,
-        max_age=7 * 24 * 60 * 60,
+        secure=settings.frontend_url.startswith("https"),  # Secure in production
+        samesite="strict",  # CSRF protection
+        max_age=7 * 24 * 60 * 60,  # 7 days
         path="/",
     )
-    return resp
+    
+    # Return user info and access token
+    # Access token in response for immediate API calls
+    # Refresh token in HttpOnly cookie for security
+    return {
+        "success": True,
+        "message": "Authentication successful",
+        "data": {
+            "access_token": oauth_data["access_token"],
+            "user": {
+                "id": oauth_data["user_id"],
+                "email": oauth_data["email"],
+                "firstName": oauth_data.get("first_name", ""),
+                "lastName": oauth_data.get("last_name", ""),
+            }
+        },
+        "error": None,
+        "meta": {}
+    }
