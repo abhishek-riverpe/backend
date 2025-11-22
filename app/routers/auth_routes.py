@@ -123,11 +123,15 @@ async def check_captcha_required(data: dict):
 
 
 # Check if email is available
+# SECURITY: Always returns generic success to prevent account enumeration
+# Actual email validation happens during signup
 @router.post("/check-email")
-async def check_email(data: dict):
+async def check_email(data: dict, request: Request):
     """
-    Check if email is already registered.
-    Returns: {"available": true/false, "message": "..."}
+    DEPRECATED: This endpoint is kept for backwards compatibility but always returns success.
+    Email validation now happens during actual signup to prevent account enumeration attacks.
+    
+    Returns: {"available": true, "message": "..."} (always)
     """
     email = data.get("email", "").strip()
     
@@ -144,19 +148,14 @@ async def check_email(data: dict):
             detail="Invalid email format"
         )
     
-    email = normalize_email(email)
-    
-    email_exists = await _email_exists_in_zynk(email)
-    
-    if email_exists:
-        return {
-            "available": False,
-            "message": "This email is already registered. Please sign in instead."
-        }
+    # SECURITY: Always return generic success message to prevent account enumeration
+    # The actual email check happens during signup (handled by UniqueViolationError)
+    # This prevents attackers from enumerating valid email addresses
+    logger.info(f"[AUTH] check-email called for {email} (returning generic response to prevent enumeration)")
     
     return {
         "available": True,
-        "message": "Email is available"
+        "message": "If this email is available, you'll receive a verification code."
     }
 
 # Return unified response with tokens + user

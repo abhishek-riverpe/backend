@@ -4,16 +4,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str
     jwt_secret: str
+    session_secret: str  # Separate secret for session cookies (must be different from jwt_secret)
     google_client_id: str | None = None
     google_client_secret: str | None = None
     frontend_url: str = "http://localhost:5173"
     backend_url: str | None = None
 
-    # Zynk API settings
-    zynk_base_url: str | None = "https://qaapi.zynklabs.xyz"
-    zynk_api_key: str | None = "2dfdbe8cbdbe7231375c93808d55cc32"
+    # Zynk API settings - MUST be set via environment variables
+    zynk_base_url: str | None = None
+    zynk_api_key: str | None = None
     zynk_timeout_s: int = 30
-    zynk_default_routing_id: str = "infrap_f2a15c0b_89cf_4041_83fb_8ba064083706"
+    zynk_default_routing_id: str | None = None
+    zynk_webhook_secret: str | None = None  # Secret for verifying webhook signatures
 
     # AWS S3 settings
     aws_access_key_id: str | None = None
@@ -26,6 +28,9 @@ class Settings(BaseSettings):
 
     # Add these to match your .env so they are NOT "extra"
     jwt_algorithm: str = "HS256"
+    # JWT algorithm whitelist - only these algorithms are allowed
+    # Prevents algorithm confusion attacks (e.g., RS256 -> HS256 swap)
+    jwt_allowed_algorithms: list[str] = ["HS256"]  # Only symmetric algorithms for now
     access_token_expire_minutes: int = 15
 
     # SMS/OTP settings

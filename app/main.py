@@ -37,9 +37,10 @@ app.add_middleware(
 
 
 # ✅ Session middleware with secure cookie settings
+# SECURITY: Uses separate session_secret (not jwt_secret) to prevent single point of failure
 app.add_middleware(
     SessionMiddleware,
-    secret_key=settings.jwt_secret,  # or use settings.secret_key if you have one
+    secret_key=settings.session_secret,  # Separate secret from JWT to prevent token forgery
     session_cookie="riverpe_session",
     same_site="lax",    # allows redirect from Google back to your backend
     https_only=False,   # True in production with HTTPS
