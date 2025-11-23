@@ -1,5 +1,5 @@
 from __future__ import annotations
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 
 class PermanentAddress(BaseModel):
@@ -70,13 +70,31 @@ class ZynkKycFees(BaseModel):
     toWalletAddress: str
     paymentReceived: bool
 
+# Model for jurisdiction details in supported routes
+class JurisdictionInfo(BaseModel):
+    jurisdictionId: str
+    jurisdictionName: str
+    jurisdictionType: str
+    currency: str
+
+# Model for a supported route
+class SupportedRoute(BaseModel):
+    from_: JurisdictionInfo = Field(alias="from")  # 'from' is a Python keyword, so use alias
+    to: JurisdictionInfo
+    
+    class Config:
+        populate_by_name = True  # Allow both 'from' and 'from_' to work
+
 # Model for KYC status item in the response
 class ZynkKycStatusItem(BaseModel):
     routingId: str
-    supportedRoutes: List[str]
+    supportedRoutes: List[SupportedRoute]  # Changed from List[str] to List[SupportedRoute]
     kycStatus: str
     routingEnabled: bool
     kycFees: ZynkKycFees
+    
+    class Config:
+        populate_by_name = True
 
 # Data structure for KYC response
 class ZynkKycData(BaseModel):

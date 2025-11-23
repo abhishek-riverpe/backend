@@ -249,7 +249,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         if not zynk_entity_id:
             raise HTTPException(status_code=502, detail="Failed to get entity ID from Zynk Labs")
 
-        print(f"[SIGNUP] Zynk Labs entity created with ID: {zynk_entity_id}")
+        # print(f"[SIGNUP] Zynk Labs entity created with ID: {zynk_entity_id}")
 
         async with prisma.tx() as tx:
             entity = await tx.entities.create(
@@ -280,13 +280,16 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     refresh_token = auth.create_refresh_token(data={"sub": str(entity.id), "type": "refresh"})
 
     # Set refresh cookie: secure defaults for banking
+    # Use secure=True only in production (HTTPS), False for localhost development
+    # Use samesite="lax" in development for cross-port cookies, "strict" in production
+    is_production = not settings.frontend_url.startswith("http://localhost")
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
         httponly=True,       # ✅ HttpOnly set to True for security
-        samesite="strict",   # stricter than lax for banking
-        secure=True,         # must be True in production (HTTPS)
-        max_age=7 * 24 * 60 * 60,  # 7 days to match refresh token expiry
+        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+        secure=is_production,  # True in production (HTTPS), False in development
+        max_age=24 * 60 * 60,  # 24 hours (86400 seconds) to match refresh token expiry
         path="/",
     )
 
@@ -295,7 +298,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
 
     safe_user = {
         "id": str(entity.id) if hasattr(entity, "id") else None,
-        "external_entity_id": entity.external_entity_id if hasattr(entity, "external_entity_id") else None,
+        "external_entity_id": getattr(entity, "zynk_entity_id", None) or getattr(entity, "external_entity_id", None),
         "entity_type": str(entity.entity_type) if hasattr(entity, "entity_type") else None,
         "email": entity.email if hasattr(entity, "email") else None,
         "first_name": entity.first_name if hasattr(entity, "first_name") else None,
@@ -309,7 +312,7 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         "updated_at": entity.updated_at.isoformat() if getattr(entity, "updated_at", None) else None,
     }
 
-    print(f"Signup response: access_token={access_token}, refresh_token={refresh_token}, user={safe_user}")
+    # print(f"Signup response: access_token={access_token}, refresh_token={refresh_token}, user={safe_user}")
 
     return {
         "success": True,
@@ -497,13 +500,16 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     refresh_token = auth.create_refresh_token(data={"sub": str(user.id), "type": "refresh"})
 
     # Set refresh cookie (banking defaults)
+    # Use secure=True only in production (HTTPS), False for localhost development
+    # Use samesite="lax" in development for cross-port cookies, "strict" in production
+    is_production = not settings.frontend_url.startswith("http://localhost")
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
         httponly=True,               # ✅ HttpOnly set to True for security
-        samesite="strict",
-        secure=True,                 # keep True in prod (HTTPS)
-        max_age=7 * 24 * 60 * 60,   # 7 days to match refresh token expiry
+        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+        secure=is_production,        # True in production (HTTPS), False in development
+        max_age=24 * 60 * 60,   # 24 hours (86400 seconds) to match refresh token expiry
         path="/",
     )
 
@@ -531,10 +537,10 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         )
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session: {e}")
-
+    print(f"[AUTH] Login session created for user {user}")
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
@@ -547,7 +553,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else None,
         "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
     }
-
+    print(f"[AUTH] Safe user: {safe_user}")
     return {
         "success": True,
         "message": "Signin successful",
@@ -661,30 +667,42 @@ async def refresh_token(request: Request, response: Response):
     """
     rt = request.cookies.get("rp_refresh")
     if not rt:
+        logger.warning("[AUTH] Refresh token missing from cookies")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
 
-    # Validate refresh token
-    payload = auth.verify_token_type(rt, "refresh")
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+    try:
+        # Validate refresh token
+        payload = auth.verify_token_type(rt, "refresh")
+        user_id = payload.get("sub")
+        if not user_id:
+            logger.warning(f"[AUTH] Invalid token payload - missing 'sub': {payload}")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    user = await prisma.entities.find_unique(where={"id": user_id})
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
+        user = await prisma.entities.find_unique(where={"id": user_id})
+        if not user:
+            logger.warning(f"[AUTH] Entity not found for user_id: {user_id}")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
 
-    access_token = auth.create_access_token({"sub": str(user.id), "type": "access"})
-    refresh_token = auth.create_refresh_token({"sub": str(user.id), "type": "refresh"})
+        access_token = auth.create_access_token({"sub": str(user.id), "type": "access"})
+        refresh_token = auth.create_refresh_token({"sub": str(user.id), "type": "refresh"})
 
-    response.set_cookie(
-        key="rp_refresh",
-        value=refresh_token,
-        httponly=True,               # ✅ HttpOnly set to True for security
-        samesite="strict",
-        secure=True,
-        max_age=7 * 24 * 60 * 60,   # 7 days to match refresh token expiry
-        path="/",
-    )
+        # Use secure=True only in production (HTTPS), False for localhost development
+        # Use samesite="lax" in development for cross-port cookies, "strict" in production
+        is_production = not settings.frontend_url.startswith("http://localhost")
+        response.set_cookie(
+            key="rp_refresh",
+            value=refresh_token,
+            httponly=True,               # ✅ HttpOnly set to True for security
+            samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+            secure=is_production,        # True in production (HTTPS), False in development
+            max_age=24 * 60 * 60,   # 24 hours (86400 seconds) to match refresh token expiry
+            path="/",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AUTH] Error during token refresh: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Token refresh failed: {str(e)}")
 
     # Create a new login session for the new access token
     try:
@@ -713,7 +731,7 @@ async def refresh_token(request: Request, response: Response):
 
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "external_entity_id": user.external_entity_id if hasattr(user, "external_entity_id") else None,
+        "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,

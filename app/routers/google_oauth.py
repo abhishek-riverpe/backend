@@ -88,13 +88,15 @@ async def google_callback(request: Request):
     })
     redirect_to = f"{settings.frontend_url}/oauth/callback?{query}"
     resp = RedirectResponse(url=redirect_to, status_code=302)
+    # Use secure=True only in production (HTTPS), False for localhost development
+    is_production = not settings.frontend_url.startswith("http://localhost")
     resp.set_cookie(
         key="rp_refresh",
         value=refresh_token,
         httponly=True,
+        secure=is_production,
         samesite="lax",
-        secure=False,
-        max_age=7 * 24 * 60 * 60,
+        max_age=24 * 60 * 60,  # 24 hours (86400 seconds) to match refresh token expiry
         path="/",
     )
     return resp
