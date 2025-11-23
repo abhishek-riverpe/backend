@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str
     jwt_secret: str
-    session_secret: str | None = None  # Separate secret for session cookies (must be different from jwt_secret)
+    session_secret: str  # Separate secret for session cookies (must be different from jwt_secret)
     google_client_id: str | None = None
     google_client_secret: str | None = None
     frontend_url: str = "http://localhost:5173"

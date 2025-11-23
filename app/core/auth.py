@@ -23,6 +23,13 @@ ALLOWED_ALGORITHMS = settings.jwt_allowed_algorithms if hasattr(settings, 'jwt_a
 # Explicitly forbidden algorithms
 FORBIDDEN_ALGORITHMS = ["none", "NONE", "None"]
 
+# JWT Algorithm Whitelist - Only these algorithms are allowed
+# Explicitly rejects "none" algorithm and prevents algorithm confusion attacks
+ALLOWED_ALGORITHMS = settings.jwt_allowed_algorithms if hasattr(settings, 'jwt_allowed_algorithms') else ["HS256"]
+
+# Explicitly forbidden algorithms
+FORBIDDEN_ALGORITHMS = ["none", "NONE", "None"]
+
 def get_password_hash(password):
     return pwd_context.hash(password)
 
