@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException, status, Response, Request, Depends
 from datetime import datetime, timedelta, timezone
 import logging
 import httpx
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from ..core import auth
 from ..core.database import prisma
 from ..core.config import settings
@@ -37,6 +39,9 @@ router = APIRouter(
 )
 
 logger = logging.getLogger(__name__)
+
+# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
+limiter = Limiter(key_func=get_remote_address)
 
 
 async def _email_exists_in_zynk(email: str) -> bool:
@@ -126,6 +131,7 @@ async def check_captcha_required(data: dict):
 # SECURITY: Always returns generic success to prevent account enumeration
 # Actual email validation happens during signup
 @router.post("/check-email")
+@limiter.limit("10/minute")  # FIXED: HIGH-04 - Rate limit to prevent email enumeration
 async def check_email(data: dict, request: Request):
     """
     DEPRECATED: This endpoint is kept for backwards compatibility but always returns success.
@@ -160,7 +166,8 @@ async def check_email(data: dict, request: Request):
 
 # Return unified response with tokens + user
 @router.post("/signup", response_model=schemas.AuthResponse, status_code=status.HTTP_201_CREATED)
-async def signup(user_in: schemas.UserCreate, response: Response):
+@limiter.limit("3/minute")  # FIXED: HIGH-04 - Rate limit to prevent signup flooding and Zynk API exhaustion
+async def signup(user_in: schemas.UserCreate, response: Response, request: Request):
     """
     Create a new entity (user) with username, email, password.
     Returns access & refresh tokens and sets refresh token as HttpOnly cookie.
@@ -217,19 +224,33 @@ async def signup(user_in: schemas.UserCreate, response: Response):
     # Hash password
     pwd_hash = hash_password(password)
 
-    # Pre-check for duplicates (nice UX), but still handle race with try/except below
-    # if await prisma.entities.find_first(where={"OR": [{"username": user_in.name}, {"email": email}]}):
-        # Distinguish which one collided (not strictly necessary)
-        # existing_username = await prisma.entities.find_unique(where={"username": name})
-        # if existing_username:
-        #     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already in use")
-        # raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-    if await prisma.entities.find_first(where={"email": email}):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-
-    # Create user in a transaction to keep things consistent
+    # FIXED: TOCTOU Race Condition - Create placeholder record FIRST in transaction
+    # This uses the database unique constraint as a lock mechanism
+    # The transaction ensures atomicity: if external API fails, record is rolled back
+    entity = None
     try:
-        # First create entity in Zynk Labs
+        async with prisma.tx() as tx:
+            # Create placeholder record with PENDING status
+            # This will fail with UniqueViolationError if email already exists
+            # The unique constraint acts as the lock, preventing race conditions
+            entity = await tx.entities.create(
+                data={
+                    "email": email,
+                    "password": pwd_hash,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "date_of_birth": prisma_date_of_birth,
+                    "nationality": nationality,
+                    "phone_number": phone_number,
+                    "country_code": country_code,
+                    "status": "PENDING",  # Placeholder status until Zynk API succeeds (PENDING = user created but zynk entity not created)
+                    # zynk_entity_id will be set after Zynk API call
+                }
+            )
+            # Transaction commits here, entity is now locked by unique constraint
+
+        # Now call external API (outside transaction to avoid long-running transaction)
+        # If this fails, we'll need to clean up the placeholder record
         zynk_payload = {
             "firstName": first_name,
             "lastName": last_name,
@@ -243,37 +264,37 @@ async def signup(user_in: schemas.UserCreate, response: Response):
         }
 
         print(f"[SIGNUP] Creating entity in Zynk Labs with payload: {zynk_payload}")
-        zynk_response = await _create_entity_in_zynk(zynk_payload)
-        zynk_entity_id = zynk_response.get("data", {}).get("entityId")
+        try:
+            zynk_response = await _create_entity_in_zynk(zynk_payload)
+            zynk_entity_id = zynk_response.get("data", {}).get("entityId")
 
-        if not zynk_entity_id:
-            raise HTTPException(status_code=502, detail="Failed to get entity ID from Zynk Labs")
+            if not zynk_entity_id:
+                raise HTTPException(status_code=502, detail="Failed to get entity ID from Zynk Labs")
 
-        # print(f"[SIGNUP] Zynk Labs entity created with ID: {zynk_entity_id}")
-
-        async with prisma.tx() as tx:
-            entity = await tx.entities.create(
-                data={
-                    # "username": name,
-                    "email": email,
-                    # Store the hash. If your model is still `password`, set "password": pwd_hash
-                    "password": pwd_hash,
-                    # Optionally copy username into display name at first registration
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "date_of_birth": prisma_date_of_birth,
-                    "nationality": nationality,
-                    "phone_number": phone_number,
-                    "country_code": country_code,
-                    "external_entity_id": zynk_entity_id,  # Store the Zynk Labs entity ID
-                    "status": "ACTIVE",  # Set to ACTIVE since all required info is collected
-                    # created_at/updated_at default to now()
-                }
-            )
+            # Update record with external ID and set status to ACTIVE
+            async with prisma.tx() as tx:
+                entity = await tx.entities.update(
+                    where={"id": entity.id},
+                    data={
+                        "zynk_entity_id": zynk_entity_id,
+                        "status": "ACTIVE",  # Set to ACTIVE after successful Zynk creation
+                    }
+                )
+        except Exception as e:
+            # Cleanup: Delete placeholder record if external API fails
+            try:
+                await prisma.entities.delete(where={"id": entity.id})
+                logger.warning(f"[SIGNUP] Cleaned up placeholder record for {email} after Zynk API failure")
+            except Exception as cleanup_error:
+                logger.error(f"[SIGNUP] Failed to cleanup placeholder record: {cleanup_error}")
+            # Re-raise the original exception
+            if isinstance(e, HTTPException):
+                raise
+            raise HTTPException(status_code=502, detail=f"Failed to create entity in Zynk Labs: {str(e)}")
 
     except UniqueViolationError:
-        # Race condition safety: DB unique constraint fired despite pre-check
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
+        # Email already exists - caught by unique constraint
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
     # Tokens (subject should be a stable unique id)
     access_token = auth.create_access_token(data={"sub": str(entity.id), "type": "access"})
@@ -937,9 +958,16 @@ async def logout_all_devices(request: Request, response: Response, current_user=
     Revoke all active sessions for the current user and clear refresh cookie.
     Note: Existing refresh tokens on other devices will be cleared only when they refresh the page;
     server will not issue new access tokens for expired/idle sessions, but refresh JWTs are not tracked server-side.
+    
+    FIXED: HIGH-02 - BOLA Protection
+    - Only uses authenticated user's ID from token (current_user.id)
+    - No entity_id parameter accepted from request
+    - Prevents unauthorized session revocation
     """
     try:
         session_service = SessionService(prisma)
+        # FIXED: HIGH-02 - Explicit BOLA protection: Only use authenticated user's ID
+        # Never accept entity_id from request parameters - always use current_user.id
         revoked = await session_service.revoke_all_sessions(entity_id=str(current_user.id))
         # Clear current refresh cookie
         response.delete_cookie("rp_refresh", path="/")

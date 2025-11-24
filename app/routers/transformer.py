@@ -1,12 +1,35 @@
 import httpx
 import base64
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File
+import io
+import os
+import logging
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from prisma.models import entities as Entities
 from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
 from ..schemas.zynk import ZynkEntitiesResponse, ZynkEntityResponse, ZynkKycResponse, ZynkKycRequirementsResponse, ZynkKycDocumentsResponse, KycDocumentUpload, KycUploadResponse
+from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
+limiter = Limiter(key_func=get_remote_address)
+
+# FIXED: HIGH-05 - File upload validation constants
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp']
+
+# Magic bytes (file signatures) for image validation
+IMAGE_SIGNATURES = {
+    b'\xff\xd8\xff': 'image/jpeg',  # JPEG
+    b'\x89\x50\x4e\x47\x0d\x0a\x1a\x0a': 'image/png',  # PNG
+    b'RIFF': 'image/webp',  # WebP (starts with RIFF, but we check more specifically)
+}
 
 router = APIRouter(prefix="/api/v1/transformer", tags=["transformer"])
 
@@ -20,9 +43,33 @@ def _auth_header():
         "x-api-token": settings.zynk_api_key,
     }
 
-async def _upload_to_s3(file: UploadFile, file_name: str) -> str:
+def _validate_magic_bytes(file_content: bytes) -> str:
     """
-    Upload file to S3 and return the URL.
+    Validate file by checking magic bytes (file signature).
+    Returns the detected MIME type or raises HTTPException.
+    """
+    if len(file_content) < 12:
+        raise HTTPException(status_code=400, detail="File too small to be a valid image")
+    
+    # Check JPEG signature (FF D8 FF)
+    if file_content[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    
+    # Check PNG signature (89 50 4E 47 0D 0A 1A 0A)
+    if file_content[:8] == b'\x89\x50\x4e\x47\x0d\x0a\x1a\x0a':
+        return 'image/png'
+    
+    # Check WebP signature (RIFF...WEBP)
+    if file_content[:4] == b'RIFF' and file_content[8:12] == b'WEBP':
+        return 'image/webp'
+    
+    raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG, PNG, and WebP images are allowed.")
+
+
+async def _upload_to_s3(file_content: bytes, file_name: str) -> str:
+    """
+    Upload file content to S3 and return the URL.
+    Updated to accept bytes instead of UploadFile for better security.
     """
     if not settings.aws_access_key_id or not settings.aws_secret_access_key or not settings.aws_region or not settings.aws_s3_bucket_name:
         raise HTTPException(status_code=500, detail="AWS S3 configuration not set")
@@ -35,7 +82,6 @@ async def _upload_to_s3(file: UploadFile, file_name: str) -> str:
             aws_secret_access_key=settings.aws_secret_access_key,
             region_name=settings.aws_region
         )
-        file_content = await file.read()
         s3_client.put_object(Bucket=settings.aws_s3_bucket_name, Key=file_name, Body=file_content)
         url = f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{file_name}"
         
@@ -175,7 +221,9 @@ async def get_entity_by_id(
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
+    # FIXED: HIGH-02 - BOLA Protection: Explicit ownership validation
     # Security check: Ensure the requested entity belongs to the authenticated user
+    # Prevents Broken Object Level Authorization (OWASP API #1 risk)
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own entity data.")
 
@@ -233,6 +281,7 @@ async def get_entity_by_id(
     raise HTTPException(status_code=502, detail="Failed to fetch entity from upstream service after multiple attempts")
 
 @router.post("/entity/kyc/{entity_id}/{routing_id}", response_model=KycUploadResponse)
+@limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
 async def upload_kyc_documents(
     entity_id: str,
     routing_id: str,
@@ -241,7 +290,8 @@ async def upload_kyc_documents(
     base64Signature: str = Form(None),
     full_name: str = Form(None),
     date_of_birth: str = Form(None),
-    current: Entities = Depends(auth.get_current_entity)
+    current: Entities = Depends(auth.get_current_entity),
+    request: Request = None
 ):
     """
     Upload KYC documents to S3 and submit to ZynkLabs API.
@@ -251,24 +301,76 @@ async def upload_kyc_documents(
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
+    # FIXED: HIGH-02 - BOLA Protection: Explicit ownership validation
     # Security check: Ensure the requested entity belongs to the authenticated user
+    # Prevents Broken Object Level Authorization (OWASP API #1 risk)
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only upload KYC documents for your own entity.")
 
-    # Validate file type (basic security)
-    if not file.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="Only image files are allowed for KYC documents.")
-
-    # Generate unique file name
-    file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
-    file_name = f"kyc-{entity_id}-{routing_id}-{uuid.uuid4()}.{file_extension}"
-
-    # Upload to S3 and get URL
-    s3_url = await _upload_to_s3(file, file_name)
-
-    # Encode file to base64 for ZynkLabs
-    await file.seek(0)  # Reset file pointer
+    # FIXED: HIGH-05 - Comprehensive file upload validation
+    # 1. Read file content first (needed for all validations)
     file_content = await file.read()
+    
+    # 2. Check file size
+    if len(file_content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413, 
+            detail=f"File too large. Maximum size is {MAX_FILE_SIZE / (1024 * 1024):.0f}MB"
+        )
+    
+    # 3. Validate magic bytes (file signature) - prevents Content-Type spoofing
+    detected_mime_type = _validate_magic_bytes(file_content)
+    if detected_mime_type not in ALLOWED_MIME_TYPES:
+        logger.warning(f"[KYC] Rejected file with detected MIME type: {detected_mime_type}")
+        raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG, PNG, and WebP images are allowed.")
+    
+    # 4. Validate with PIL (ensures it's a real, valid image)
+    try:
+        img = Image.open(io.BytesIO(file_content))
+        img.verify()  # Verify it's a valid image (doesn't load into memory)
+        # Reopen after verify (verify() closes the image)
+        img = Image.open(io.BytesIO(file_content))
+        # Additional check: ensure it's a supported format
+        if img.format not in ['JPEG', 'PNG', 'WEBP']:
+            raise HTTPException(status_code=400, detail=f"Unsupported image format: {img.format}")
+    except Exception as e:
+        logger.warning(f"[KYC] PIL verification failed: {e}")
+        raise HTTPException(status_code=400, detail="Corrupted or invalid image file")
+    
+    # 5. Sanitize filename (remove path traversal attempts)
+    if file.filename:
+        # Extract extension from original filename (basename prevents path traversal)
+        safe_filename = os.path.basename(file.filename)
+        safe_extension = os.path.splitext(safe_filename)[1].lower()
+    else:
+        # Default to .jpg if no filename provided
+        safe_extension = '.jpg'
+    
+    # Validate extension matches detected type
+    extension_map = {
+        'image/jpeg': ['.jpg', '.jpeg'],
+        'image/png': ['.png'],
+        'image/webp': ['.webp']
+    }
+    if safe_extension not in extension_map.get(detected_mime_type, []):
+        # Use extension based on detected MIME type
+        if detected_mime_type == 'image/jpeg':
+            safe_extension = '.jpg'
+        elif detected_mime_type == 'image/png':
+            safe_extension = '.png'
+        elif detected_mime_type == 'image/webp':
+            safe_extension = '.webp'
+    
+    if safe_extension not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Invalid file extension")
+    
+    # 6. Generate secure random filename (no user input in filename)
+    secure_filename = f"kyc-{entity_id}-{uuid.uuid4()}{safe_extension}"
+    
+    # 7. Upload to S3 with validated file content
+    s3_url = await _upload_to_s3(file_content, secure_filename)
+    
+    # 8. Encode file to base64 for ZynkLabs (using detected MIME type, not client-provided)
     base64_document = base64.b64encode(file_content).decode('utf-8')
 
     # Construct payload
@@ -286,7 +388,8 @@ async def upload_kyc_documents(
     if date_of_birth:
         personal_details['date_of_birth'] = date_of_birth
     personal_details['identity_document_url'] = s3_url
-    personal_details['identity_document'] = f"data:{file.content_type};base64,{base64_document}"
+    # Use detected MIME type instead of client-provided content_type for security
+    personal_details['identity_document'] = f"data:{detected_mime_type};base64,{base64_document}"
     payload['personal_details'] = personal_details
 
     # Submit to ZynkLabs
@@ -300,9 +403,11 @@ async def upload_kyc_documents(
     )
 
 @router.get("/entity/kyc/{entity_id}", response_model=ZynkKycResponse)
+@limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
 async def get_entity_kyc_status(
     entity_id: str,
-    current: Entities = Depends(auth.get_current_entity)
+    current: Entities = Depends(auth.get_current_entity),
+    request: Request = None
 ):
     """
     Fetch KYC status for a specific entity from ZyncLab via their API.
@@ -315,7 +420,9 @@ async def get_entity_kyc_status(
     if not zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
+    # FIXED: HIGH-02 - BOLA Protection: Explicit ownership validation
     # Security check: Ensure the requested entity belongs to the authenticated user
+    # Prevents Broken Object Level Authorization (OWASP API #1 risk)
     if zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC data.")
 
@@ -372,10 +479,12 @@ async def get_entity_kyc_status(
     raise HTTPException(status_code=502, detail="Failed to fetch KYC status from upstream service after multiple attempts")
 
 @router.get("/entity/kyc/requirements/{entity_id}/{routing_id}", response_model=ZynkKycRequirementsResponse)
+@limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
 async def get_entity_kyc_requirements(
     entity_id: str,
     routing_id: str,
-    current: Entities = Depends(auth.get_current_entity)
+    current: Entities = Depends(auth.get_current_entity),
+    request: Request = None
 ):
     """
     Fetch KYC requirements for a specific entity and routing ID from ZyncLab via their API.
@@ -386,7 +495,9 @@ async def get_entity_kyc_requirements(
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
+    # FIXED: HIGH-02 - BOLA Protection: Explicit ownership validation
     # Security check: Ensure the requested entity belongs to the authenticated user
+    # Prevents Broken Object Level Authorization (OWASP API #1 risk)
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC requirements.")
 
@@ -441,9 +552,11 @@ async def get_entity_kyc_requirements(
     raise HTTPException(status_code=502, detail="Failed to fetch KYC requirements from upstream service after multiple attempts")
 
 @router.get("/entity/{entity_id}/kyc/documents", response_model=ZynkKycDocumentsResponse)
+@limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
 async def get_entity_kyc_documents(
     entity_id: str,
-    current: Entities = Depends(auth.get_current_entity)
+    current: Entities = Depends(auth.get_current_entity),
+    request: Request = None
 ):
     """
     Fetch KYC documents for a specific entity from ZyncLab via their API.
@@ -454,7 +567,9 @@ async def get_entity_kyc_documents(
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
+    # FIXED: HIGH-02 - BOLA Protection: Explicit ownership validation
     # Security check: Ensure the requested entity belongs to the authenticated user
+    # Prevents Broken Object Level Authorization (OWASP API #1 risk)
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC documents.")
 
