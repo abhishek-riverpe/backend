@@ -1,7 +1,9 @@
 # routes/zynk.py
 from datetime import datetime, timezone
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from prisma.errors import PrismaError
 from prisma.models import entities as Entities
 from ..core.database import prisma
@@ -10,6 +12,9 @@ from ..core.config import settings
 from ..schemas.zynk import CreateZynkEntityIn
 
 router = APIRouter(prefix="/api/v1/transformer", tags=["transformer"])
+
+# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
+limiter = Limiter(key_func=get_remote_address)
 
 def _auth_header():
     if not settings.zynk_api_key:
@@ -145,16 +150,20 @@ async def create_external_entity(
 
 
 @router.get("/entity/kyc/requirements/{entity_id}/{routing_id}")
+@limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
 async def get_kyc_requirements(
     entity_id: str,
     routing_id: str,
     current: Entities = Depends(get_current_entity),
+    request: Request = None
 ):
     """
     Fetch KYC requirements for the specified entity id and routing id.
     Returns unified API response.
     """
+    # FIXED: HIGH-02 - BOLA Protection: Explicit ownership validation
     # Security check: Ensure the requested entity belongs to the authenticated user
+    # Prevents Broken Object Level Authorization (OWASP API #1 risk)
     # Try both possible attribute names for compatibility
     zynk_entity_id = getattr(current, "zynk_entity_id", None) or getattr(current, "external_entity_id", None)
     if not zynk_entity_id:

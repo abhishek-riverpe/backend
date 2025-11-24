@@ -2,7 +2,9 @@ import logging
 from typing import Any, Dict
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from prisma.errors import DataError
 from prisma.models import entities as Entities
 
@@ -14,6 +16,9 @@ from ..schemas.kyc import KycLinkData, KycLinkResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/kyc", tags=["kyc"])
+
+# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
+limiter = Limiter(key_func=get_remote_address)
 
 
 def _build_error_response(
@@ -46,8 +51,10 @@ def _auth_header() -> Dict[str, str]:
 
 
 @router.get("", response_model=KycLinkResponse, status_code=status.HTTP_200_OK)
+@limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
 async def get_kyc_link(
-    current_entity: Entities = Depends(auth.get_current_entity)
+    current_entity: Entities = Depends(auth.get_current_entity),
+    request: Request = None
 ) -> KycLinkResponse:
     """
     Get KYC verification link for the authenticated user.
