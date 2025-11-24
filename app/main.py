@@ -60,7 +60,7 @@ async def shutdown():
 app.include_router(google_oauth.router)
 app.include_router(auth_routes.router)
 app.include_router(zync.router)
-# app.include_router(transformer.router)
+app.include_router(transformer.router)  # Enable transformer router for KYC status endpoint
 app.include_router(webhooks.router)
 app.include_router(kyc_router.router)
 app.include_router(otp_router.router)
