@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from types import SimpleNamespace
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, ExpiredSignatureError, jwt
 from passlib.context import CryptContext
+from prisma.errors import DataError
 
 from .config import settings
 from .database import prisma
@@ -136,7 +138,37 @@ async def get_current_entity(token: str = Depends(oauth2_scheme)):
     if not entity_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    entity = await prisma.entities.find_unique(where={"id": entity_id})
+    # Try Prisma first, fallback to raw SQL if DataError (corrupted date_of_birth)
+    entity = None
+    try:
+        entity = await prisma.entities.find_unique(where={"id": entity_id})
+    except DataError as e:
+        # Handle database data inconsistency (e.g., date_of_birth stored as string)
+        # Fallback to raw SQL if Prisma fails due to data inconsistency
+        raw_query = """
+            SELECT
+                id, zynk_entity_id, entity_type, email, first_name, last_name, password,
+                CASE
+                    WHEN date_of_birth ~ '^\d{2}/\d{2}/\d{4}$' THEN TO_TIMESTAMP(date_of_birth, 'MM/DD/YYYY')::timestamptz
+                    ELSE NULL
+                END AS date_of_birth,
+                nationality, phone_number, country_code, email_verified, last_login_at,
+                login_attempts, locked_until, encrypted_data, encryption_key_id, status,
+                created_at, updated_at, deleted_at
+            FROM entities
+            WHERE id = $1
+        """
+        raw_user_data = await prisma.query_raw(raw_query, entity_id)
+        if raw_user_data:
+            # Convert raw result to a SimpleNamespace object for compatibility
+            entity = SimpleNamespace(**raw_user_data[0])
+            # Manually convert date_of_birth if it's still a string (should be handled by SQL now)
+            if isinstance(entity.date_of_birth, str):
+                try:
+                    entity.date_of_birth = datetime.strptime(entity.date_of_birth, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+                except ValueError:
+                    entity.date_of_birth = None
+    
     if entity is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
     return entity
