@@ -300,17 +300,30 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     access_token = auth.create_access_token(data={"sub": str(entity.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(entity.id), "type": "refresh"})
 
-    # Set refresh cookie: secure defaults for banking
+    # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
     # Use secure=True only in production (HTTPS), False for localhost development
     # Use samesite="lax" in development for cross-port cookies, "strict" in production
     is_production = not settings.frontend_url.startswith("http://localhost")
+    
+    # Set access token as HttpOnly cookie (15 minutes expiry)
+    response.set_cookie(
+        key="rp_access",
+        value=access_token,
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
+        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+        secure=is_production,        # True in production (HTTPS), False in development
+        max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+        path="/",
+    )
+    
+    # Set refresh token as HttpOnly cookie (24 hours expiry)
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
-        httponly=True,       # ✅ HttpOnly set to True for security
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
         samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-        secure=is_production,  # True in production (HTTPS), False in development
-        max_age=24 * 60 * 60,  # 24 hours (86400 seconds) to match refresh token expiry
+        secure=is_production,        # True in production (HTTPS), False in development
+        max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
         path="/",
     )
 
@@ -585,17 +598,30 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     access_token = auth.create_access_token(data={"sub": str(user.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(user.id), "type": "refresh"})
 
-    # Set refresh cookie (banking defaults)
+    # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
     # Use secure=True only in production (HTTPS), False for localhost development
     # Use samesite="lax" in development for cross-port cookies, "strict" in production
     is_production = not settings.frontend_url.startswith("http://localhost")
+    
+    # Set access token as HttpOnly cookie (15 minutes expiry)
+    response.set_cookie(
+        key="rp_access",
+        value=access_token,
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
+        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+        secure=is_production,        # True in production (HTTPS), False in development
+        max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+        path="/",
+    )
+    
+    # Set refresh token as HttpOnly cookie (24 hours expiry)
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
-        httponly=True,               # ✅ HttpOnly set to True for security
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
         samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
         secure=is_production,        # True in production (HTTPS), False in development
-        max_age=24 * 60 * 60,   # 24 hours (86400 seconds) to match refresh token expiry
+        max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
         path="/",
     )
 
@@ -786,16 +812,30 @@ async def refresh_token(request: Request, response: Response):
         access_token = auth.create_access_token({"sub": str(user.id), "type": "access"})
         refresh_token = auth.create_refresh_token({"sub": str(user.id), "type": "refresh"})
 
+        # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
         # Use secure=True only in production (HTTPS), False for localhost development
         # Use samesite="lax" in development for cross-port cookies, "strict" in production
         is_production = not settings.frontend_url.startswith("http://localhost")
+        
+        # Set access token as HttpOnly cookie (15 minutes expiry)
+        response.set_cookie(
+            key="rp_access",
+            value=access_token,
+            httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
+            samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+            secure=is_production,        # True in production (HTTPS), False in development
+            max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+            path="/",
+        )
+        
+        # Set refresh token as HttpOnly cookie (24 hours expiry)
         response.set_cookie(
             key="rp_refresh",
             value=refresh_token,
-            httponly=True,               # ✅ HttpOnly set to True for security
+            httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
             samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
             secure=is_production,        # True in production (HTTPS), False in development
-            max_age=24 * 60 * 60,   # 24 hours (86400 seconds) to match refresh token expiry
+            max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
             path="/",
         )
     except HTTPException:
@@ -882,7 +922,8 @@ async def logout(request: Request, response: Response):
             # Log error but don't fail logout (token might be expired/invalid)
             logger.warning(f"[AUTH] Failed to update session on logout: {e}")
     
-    # Clear refresh cookie
+    # Clear both access and refresh cookies
+    response.delete_cookie("rp_access", path="/")
     response.delete_cookie("rp_refresh", path="/")
     
     return {
@@ -1049,6 +1090,7 @@ async def logout_all_devices(request: Request, response: Response, current_user=
         # Never accept entity_id from request parameters - always use current_user.id
         revoked = await session_service.revoke_all_sessions(entity_id=str(current_user.id))
         # Clear current refresh cookie
+        response.delete_cookie("rp_access", path="/")
         response.delete_cookie("rp_refresh", path="/")
         return {
             "success": True,

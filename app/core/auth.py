@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from types import SimpleNamespace
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, ExpiredSignatureError, jwt
 from passlib.context import CryptContext
@@ -12,7 +12,7 @@ from .config import settings
 from .database import prisma
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin", auto_error=False)
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE = timedelta(minutes=15)
@@ -131,9 +131,28 @@ def verify_token_type(token: str, expected_type: str) -> dict:
     return payload
 
 
-async def get_current_entity(token: str = Depends(oauth2_scheme)):
+async def get_current_entity(request: Request, token: Optional[str] = Depends(oauth2_scheme)):
+    """
+    Get current authenticated entity.
+    Reads access token from HttpOnly cookie (rp_access) first, then falls back to Authorization header.
+    This provides secure cookie-based auth while maintaining backward compatibility.
+    """
+    # Try to get token from HttpOnly cookie first (secure method)
+    access_token = request.cookies.get("rp_access")
+    
+    # Fallback to Authorization header for backward compatibility
+    if not access_token and token:
+        access_token = token
+    
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     # Validate access token and extract entity id (sub)
-    payload = verify_token_type(token, "access")
+    payload = verify_token_type(access_token, "access")
     entity_id: Optional[str] = payload.get("sub")
     if not entity_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
