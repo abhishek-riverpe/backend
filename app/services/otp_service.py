@@ -14,7 +14,7 @@ from typing import Optional, Tuple
 from app.core.config import settings
 from prisma import Prisma
 from prisma.enums import OtpStatusEnum, OtpTypeEnum
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
+from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 
 logger = logging.getLogger(__name__)
 
@@ -413,7 +413,7 @@ class OTPService:
                     </body>
                 </html>
                 """,
-                subtype=MessageType.html
+                subtype="html"  # Use string instead of enum to avoid Pydantic 2.x compatibility issues
             )
 
             # Send email
