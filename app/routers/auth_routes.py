@@ -969,6 +969,12 @@ async def change_password(
             detail="New password must be different from current password",
         )
     
+    # TODO: Implement password history check (last 5 passwords cannot be reused)
+    # This would require:
+    # 1. Database table/field to store password history
+    # 2. Check against previous password hashes before allowing change
+    # 3. Store new password hash in history after successful change
+    
     try:
         validate_password(payload.new_password)
     except ValueError as ve:

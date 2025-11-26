@@ -28,14 +28,15 @@ async def generate_captcha(request: Request):
         # Use request client IP or session as identifier
         session_id = getattr(request.client, "host", None) or "anonymous"
         
-        captcha_id, captcha_code = captcha_service.generate_captcha(session_id=session_id)
+        captcha_id, captcha_code, captcha_image = captcha_service.generate_captcha(session_id=session_id)
         
         return {
             "success": True,
             "message": "CAPTCHA generated successfully",
             "data": {
                 "captcha_id": captcha_id,
-                "captcha_code": captcha_code,  # Frontend will display this
+                "captcha_code": captcha_code,  # Keep for debug/fallback
+                "captcha_image": f"data:image/png;base64,{captcha_image}",  # Base64 image
                 "expires_in_seconds": captcha_service.CAPTCHA_EXPIRY_MINUTES * 60,
             },
             "error": None,
