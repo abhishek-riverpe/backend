@@ -1,240 +1,208 @@
 """
-Wallet Cryptography Utilities
+Wallet Cryptographic Utilities
 
-Handles P-256 key pair generation, credential bundle decryption, and payload signing
+Handles P-256 key pair generation, credential decryption, and payload signing
 for Zynk Labs wallet creation flow.
 """
 
-import json
 import base64
-import hashlib
+import json
 import logging
-from typing import Dict, Any, Tuple, Optional
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives import padding
+import os
 
 logger = logging.getLogger(__name__)
 
 
-def generate_p256_key_pair() -> Tuple[ec.EllipticCurvePrivateKey, bytes]:
+def generate_p256_key_pair():
     """
-    Generate a P-256 (secp256r1) ephemeral key pair.
+    Generate an ECDSA P-256 (secp256r1) private and public key pair.
     
     Returns:
-        Tuple of (private_key, uncompressed_public_key_bytes)
-        Public key is in uncompressed format: 0x04 + 32 bytes X + 32 bytes Y (65 bytes total)
+        tuple: (private_key_pem, public_key_base64)
+            - private_key_pem: PEM-encoded private key (string)
+            - public_key_base64: Base64-encoded uncompressed public key (string)
     """
-    # Generate P-256 key pair
-    private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
-    public_key = private_key.public_key()
+    try:
+        # Generate P-256 key pair
+        private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+        public_key = private_key.public_key()
+        
+        # Serialize private key to PEM format
+        private_key_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        ).decode('utf-8')
+        
+        # Serialize public key to uncompressed format (65 bytes: 0x04 + 32 bytes X + 32 bytes Y)
+        public_key_bytes = public_key.public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint
+        )
+        
+        # Encode to Base64
+        public_key_base64 = base64.b64encode(public_key_bytes).decode('utf-8')
+        
+        return private_key_pem, public_key_base64
     
-    # Get public key numbers
-    public_numbers = public_key.public_numbers()
-    
-    # Convert to uncompressed format (0x04 prefix + X coordinate + Y coordinate)
-    x_bytes = public_numbers.x.to_bytes(32, byteorder='big')
-    y_bytes = public_numbers.y.to_bytes(32, byteorder='big')
-    uncompressed_public_key = b'\x04' + x_bytes + y_bytes
-    
-    return private_key, uncompressed_public_key
+    except Exception as e:
+        logger.error(f"Error generating P-256 key pair: {str(e)}", exc_info=True)
+        raise
 
 
-def public_key_to_base64(public_key_bytes: bytes) -> str:
+def public_key_to_base64(public_key: ec.EllipticCurvePublicKey) -> str:
     """
-    Convert public key bytes to base64 string for API submission.
+    Convert a public key to uncompressed Base64 format.
     
     Args:
-        public_key_bytes: Uncompressed public key (65 bytes)
-    
+        public_key: EllipticCurvePublicKey object
+        
     Returns:
-        Base64 encoded string
+        Base64-encoded uncompressed public key string
     """
+    public_key_bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint
+    )
     return base64.b64encode(public_key_bytes).decode('utf-8')
 
 
-def sha256_hash(data: bytes) -> bytes:
+def decrypt_credential_bundle(credential_bundle: str, private_key_pem: str) -> dict:
     """
-    Compute SHA-256 hash of data.
+    Decrypt a credential bundle using the ephemeral private key.
+    
+    The credential bundle is encrypted by Zynk Labs using the ephemeral public key
+    sent during session creation. This function decrypts it to extract the session key.
     
     Args:
-        data: Input bytes
-    
+        credential_bundle: Base64-encoded encrypted credential bundle from Zynk
+        private_key_pem: PEM-encoded ephemeral private key
+        
     Returns:
-        SHA-256 hash bytes
-    """
-    return hashlib.sha256(data).digest()
-
-
-def decrypt_credential_bundle(
-    credential_bundle: str,
-    ephemeral_private_key: ec.EllipticCurvePrivateKey
-) -> str:
-    """
-    Decrypt the credential bundle using the ephemeral private key.
-    
-    The credential bundle is encrypted using ECDH (Elliptic Curve Diffie-Hellman)
-    key exchange. We derive a shared secret and use it to decrypt the bundle.
-    
-    Args:
-        credential_bundle: Base64 encoded encrypted credential bundle
-        ephemeral_private_key: The ephemeral private key used to create the session
-    
-    Returns:
-        Decrypted session private key (JWK format as JSON string)
-    
-    Note:
-        This is a simplified implementation. The actual Zynk Labs implementation
-        may use a different encryption scheme. You may need to adjust based on
-        their actual encryption method.
+        dict: Decrypted credential data containing session key in JWK format
     """
     try:
-        # Decode the credential bundle
-        encrypted_data = base64.b64decode(credential_bundle)
-        
-        # Extract components (this structure may vary based on Zynk's implementation)
-        # Assuming format: ephemeral_public_key (65 bytes) + nonce (12 bytes) + ciphertext + tag (16 bytes)
-        if len(encrypted_data) < 77:  # 65 + 12 minimum
-            raise ValueError("Invalid credential bundle format")
-        
-        # Extract ephemeral public key (65 bytes, uncompressed)
-        ephemeral_pub_bytes = encrypted_data[:65]
-        
-        # Reconstruct the ephemeral public key
-        if ephemeral_pub_bytes[0] != 0x04:
-            raise ValueError("Invalid public key format - must be uncompressed")
-        
-        x = int.from_bytes(ephemeral_pub_bytes[1:33], byteorder='big')
-        y = int.from_bytes(ephemeral_pub_bytes[33:65], byteorder='big')
-        
-        # Create public key from coordinates
-        public_numbers = ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1())
-        ephemeral_public_key = public_numbers.public_key(default_backend())
-        
-        # Perform ECDH key exchange
-        shared_secret = ephemeral_private_key.exchange(ec.ECDH(), ephemeral_public_key)
-        
-        # Derive encryption key using HKDF
-        hkdf = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=None,
-            info=b'credential_bundle',
-            backend=default_backend()
-        )
-        encryption_key = hkdf.derive(shared_secret)
-        
-        # Extract nonce and ciphertext (assuming AES-GCM)
-        nonce = encrypted_data[65:77]  # 12 bytes for GCM
-        ciphertext_with_tag = encrypted_data[77:]
-        
-        # Decrypt using AES-GCM
-        aesgcm = AESGCM(encryption_key)
-        decrypted = aesgcm.decrypt(nonce, ciphertext_with_tag, None)
-        
-        # Parse the decrypted JSON
-        session_key_jwk = json.loads(decrypted.decode('utf-8'))
-        
-        return json.dumps(session_key_jwk)
-        
-    except Exception as e:
-        logger.error(f"Error decrypting credential bundle: {e}", exc_info=True)
-        raise ValueError(f"Failed to decrypt credential bundle: {str(e)}")
-
-
-def sign_payload_with_session_key(
-    payload_to_sign: str,
-    session_key_jwk: str
-) -> str:
-    """
-    Sign a payload using the session private key.
-    
-    Args:
-        payload_to_sign: JSON stringified payload to sign
-        session_key_jwk: Session private key in JWK format (JSON string)
-    
-    Returns:
-        Base64 encoded signature
-    """
-    try:
-        # Parse the JWK
-        key_data = json.loads(session_key_jwk)
-        
-        # Load the private key from JWK
+        # Load private key from PEM
         private_key = serialization.load_pem_private_key(
-            json.dumps(key_data).encode(),
+            private_key_pem.encode('utf-8'),
             password=None,
             backend=default_backend()
         )
         
-        # For JWK format, we need to reconstruct the key differently
-        # JWK format: {"kty": "EC", "crv": "P-256", "x": "...", "y": "...", "d": "..."}
-        if key_data.get("kty") != "EC" or key_data.get("crv") != "P-256":
-            raise ValueError("Unsupported key type - must be EC P-256")
+        # Decode credential bundle
+        encrypted_data = base64.b64decode(credential_bundle)
         
-        # Reconstruct private key from JWK components
-        d = int.from_bytes(base64.urlsafe_b64decode(key_data["d"] + "=="), byteorder='big')
-        x = int.from_bytes(base64.urlsafe_b64decode(key_data["x"] + "=="), byteorder='big')
-        y = int.from_bytes(base64.urlsafe_b64decode(key_data["y"] + "=="), byteorder='big')
+        # Extract ephemeral public key and encrypted payload
+        # Format: [ephemeral_public_key (65 bytes)][iv (16 bytes)][encrypted_data][tag (16 bytes)]
+        if len(encrypted_data) < 65 + 16 + 16:
+            raise ValueError("Invalid credential bundle format")
         
-        # Create private key
-        private_numbers = ec.EllipticCurvePrivateNumbers(
-            private_value=d,
-            public_numbers=ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1())
+        ephemeral_public_key_bytes = encrypted_data[:65]
+        iv = encrypted_data[65:65+16]
+        tag = encrypted_data[-16:]
+        ciphertext = encrypted_data[65+16:-16]
+        
+        # Load ephemeral public key
+        ephemeral_public_key = ec.EllipticCurvePublicKey.from_encoded_point(
+            ec.SECP256R1(),
+            ephemeral_public_key_bytes,
+            default_backend()
+        )
+        
+        # Perform ECDH to derive shared secret
+        shared_secret = private_key.exchange(ec.ECDH(), ephemeral_public_key)
+        
+        # Derive AES key using HKDF
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b'wallet-credential-encryption',
+            backend=default_backend()
+        )
+        aes_key = hkdf.derive(shared_secret)
+        
+        # Decrypt using AES-GCM
+        cipher = Cipher(
+            algorithms.AES(aes_key),
+            modes.GCM(iv, tag),
+            backend=default_backend()
+        )
+        decryptor = cipher.decryptor()
+        decrypted_data = decryptor.update(ciphertext) + decryptor.finalize()
+        
+        # Parse JSON
+        credential_data = json.loads(decrypted_data.decode('utf-8'))
+        
+        return credential_data
+    
+    except Exception as e:
+        logger.error(f"Error decrypting credential bundle: {str(e)}", exc_info=True)
+        raise ValueError(f"Failed to decrypt credential bundle: {str(e)}")
+
+
+def sign_payload_with_session_key(payload_to_sign: str, session_key_jwk: str) -> str:
+    """
+    Sign a payload using the session private key (from JWK).
+    
+    Args:
+        payload_to_sign: String payload to sign
+        session_key_jwk: Session private key in JWK format (JSON string)
+        
+    Returns:
+        Base64-encoded signature string
+    """
+    try:
+        # Parse JWK
+        jwk_data = json.loads(session_key_jwk)
+        
+        # Extract private key components from JWK
+        if jwk_data.get('kty') != 'EC' or jwk_data.get('crv') != 'P-256':
+            raise ValueError("JWK must be P-256 ECDSA key")
+        
+        # Reconstruct private key from JWK
+        # Note: This is a simplified version. Full JWK parsing would require
+        # handling 'd' (private key) and 'x', 'y' (public key coordinates)
+        d_bytes = base64.urlsafe_b64decode(jwk_data['d'] + '==')
+        x_bytes = base64.urlsafe_b64decode(jwk_data['x'] + '==')
+        y_bytes = base64.urlsafe_b64decode(jwk_data['y'] + '==')
+        
+        # Create private key from private scalar
+        from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateNumbers
+        from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers
+        
+        private_value = int.from_bytes(d_bytes, 'big')
+        public_numbers = EllipticCurvePublicNumbers(
+            x=int.from_bytes(x_bytes, 'big'),
+            y=int.from_bytes(y_bytes, 'big'),
+            curve=ec.SECP256R1()
+        )
+        private_numbers = EllipticCurvePrivateNumbers(
+            private_value=private_value,
+            public_numbers=public_numbers
         )
         private_key = private_numbers.private_key(default_backend())
         
-        # Sign the payload
+        # Sign payload
         signature = private_key.sign(
             payload_to_sign.encode('utf-8'),
             ec.ECDSA(hashes.SHA256())
         )
         
-        # Encode signature as base64
-        return base64.b64encode(signature).decode('utf-8')
+        # Encode signature (DER format)
+        signature_base64 = base64.b64encode(signature).decode('utf-8')
         
+        return signature_base64
+    
     except Exception as e:
-        logger.error(f"Error signing payload: {e}", exc_info=True)
+        logger.error(f"Error signing payload: {str(e)}", exc_info=True)
         raise ValueError(f"Failed to sign payload: {str(e)}")
-
-
-def jwk_to_private_key(jwk_json: str) -> ec.EllipticCurvePrivateKey:
-    """
-    Convert JWK format private key to cryptography private key object.
-    
-    Args:
-        jwk_json: JWK format key as JSON string
-    
-    Returns:
-        EllipticCurvePrivateKey object
-    """
-    key_data = json.loads(jwk_json)
-    
-    if key_data.get("kty") != "EC" or key_data.get("crv") != "P-256":
-        raise ValueError("Unsupported key type - must be EC P-256")
-    
-    # Decode JWK components
-    d = int.from_bytes(
-        base64.urlsafe_b64decode(key_data["d"] + "=="),
-        byteorder='big'
-    )
-    x = int.from_bytes(
-        base64.urlsafe_b64decode(key_data["x"] + "=="),
-        byteorder='big'
-    )
-    y = int.from_bytes(
-        base64.urlsafe_b64decode(key_data["y"] + "=="),
-        byteorder='big'
-    )
-    
-    # Create private key
-    private_numbers = ec.EllipticCurvePrivateNumbers(
-        private_value=d,
-        public_numbers=ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1())
-    )
-    
-    return private_numbers.private_key(default_backend())
 

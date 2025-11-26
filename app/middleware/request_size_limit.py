@@ -9,7 +9,7 @@ MAX_REQUEST_SIZE = settings.max_request_size_mb * 1024 * 1024
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Skip size check for OPTIONS preflight requests (they have no body)
+        # ✅ Skip size limit check for OPTIONS preflight requests (CORS handles these)
         if request.method == "OPTIONS":
             return await call_next(request)
         
