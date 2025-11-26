@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 
 class ActivityTimeoutMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # ✅ Skip activity check for OPTIONS preflight requests (CORS handles these)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        
         # Only enforce for requests with Bearer access token
         auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
         if auth_header and auth_header.lower().startswith("bearer "):

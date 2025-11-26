@@ -90,12 +90,16 @@ async def google_callback(request: Request):
 
 
 @router.post("/google/exchange")
-async def exchange_oauth_code_endpoint(code_data: dict, response: Response):
+async def exchange_oauth_code_endpoint(code_data: dict, request: Request, response: Response):
     """
-    Exchange temporary OAuth code for session cookies.
+    Exchange temporary OAuth code for HttpOnly session cookies.
     
-    ✅ SECURITY: This endpoint validates the code and sets HttpOnly cookies.
-    The frontend never receives tokens directly, preventing XSS token theft.
+    ✅ SECURITY FIX: Tokens are set as HttpOnly cookies, NOT returned in response.
+    This prevents XSS token theft and ensures tokens never appear in:
+    - Browser history
+    - Server logs
+    - Referer headers
+    - URL parameters
     """
     code = code_data.get("code")
     if not code:
@@ -112,26 +116,39 @@ async def exchange_oauth_code_endpoint(code_data: dict, response: Response):
             detail="Invalid or expired code"
         )
     
-    # Set HttpOnly cookie for refresh token (long-lived, 7 days)
-    # Access token is returned in response for immediate use
+    # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
+    # Use secure=True only in production (HTTPS), False for localhost development
+    # Use samesite="lax" in development for cross-port cookies, "strict" in production
+    is_production = not settings.frontend_url.startswith("http://localhost")
+    
+    # Set access token as HttpOnly cookie (15 minutes expiry)
     response.set_cookie(
-        key="rp_refresh",
-        value=oauth_data["refresh_token"],
-        httponly=True,
-        secure=settings.frontend_url.startswith("https"),  # Secure in production
-        samesite="strict",  # CSRF protection
-        max_age=7 * 24 * 60 * 60,  # 7 days
+        key="rp_access",
+        value=oauth_data["access_token"],
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
+        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+        secure=is_production,        # True in production (HTTPS), False in development
+        max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
         path="/",
     )
     
-    # Return user info and access token
-    # Access token in response for immediate API calls
-    # Refresh token in HttpOnly cookie for security
+    # Set refresh token as HttpOnly cookie (24 hours expiry)
+    response.set_cookie(
+        key="rp_refresh",
+        value=oauth_data["refresh_token"],
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
+        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+        secure=is_production,        # True in production (HTTPS), False in development
+        max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
+        path="/",
+    )
+    
+    # ✅ SECURITY FIX: Return ONLY user info, NO tokens
+    # Tokens are in HttpOnly cookies and automatically sent with subsequent requests
     return {
         "success": True,
         "message": "Authentication successful",
         "data": {
-            "access_token": oauth_data["access_token"],
             "user": {
                 "id": oauth_data["user_id"],
                 "email": oauth_data["email"],
