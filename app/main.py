@@ -27,13 +27,12 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # ✅ CORS setup - MUST be FIRST middleware to handle preflight requests
 # FIXED: HIGH-06 - Explicit allow-lists for methods and headers to reduce attack surface
 # PCI DSS 4.0.1 Requirement 6.4.3: Only allow scripts/requests from allow-listed domains
+# Note: CORSMiddleware automatically handles OPTIONS requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",      # Local development (Vite)
         "http://127.0.0.1:5173",      # Local development (alternative)
-        "https://www.riverpe.com",    # Production website
-        "https://app.riverpe.com",    # Production app (if separate subdomain)
         "https://www.dattapay.com",    # Production app (if separate subdomain)
         "https://app.dattapay.com",    # Production app (if separate subdomain)
     ],

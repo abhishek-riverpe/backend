@@ -8,7 +8,7 @@ from ..core import auth
 from ..core.database import prisma
 from ..core.config import settings
 from .. import schemas
-from prisma.errors import UniqueViolationError, PrismaError
+from prisma.errors import UniqueViolationError, PrismaError, DataError
 from prisma.enums import LoginMethodEnum
 from passlib.context import CryptContext
 from app.services.otp_service import OTPService
@@ -300,17 +300,30 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     access_token = auth.create_access_token(data={"sub": str(entity.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(entity.id), "type": "refresh"})
 
-    # Set refresh cookie: secure defaults for banking
+    # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
     # Use secure=True only in production (HTTPS), False for localhost development
     # Use samesite="lax" in development for cross-port cookies, "strict" in production
     is_production = not settings.frontend_url.startswith("http://localhost")
+    
+    # Set access token as HttpOnly cookie (15 minutes expiry)
+    response.set_cookie(
+        key="rp_access",
+        value=access_token,
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
+        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+        secure=is_production,        # True in production (HTTPS), False in development
+        max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+        path="/",
+    )
+    
+    # Set refresh token as HttpOnly cookie (24 hours expiry)
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
-        httponly=True,       # ✅ HttpOnly set to True for security
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
         samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-        secure=is_production,  # True in production (HTTPS), False in development
-        max_age=24 * 60 * 60,  # 24 hours (86400 seconds) to match refresh token expiry
+        secure=is_production,        # True in production (HTTPS), False in development
+        max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
         path="/",
     )
 
@@ -349,6 +362,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     }
 
 @router.post("/signin", response_model=schemas.AuthResponse, status_code=status.HTTP_200_OK)
+@limiter.limit("10/minute")  # Rate limit signin attempts
 async def signin(payload: schemas.SignInInput, request: Request, response: Response):
     """
     Authenticate an entity using email + password.
@@ -357,20 +371,84 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     - Enforces account lockout after repeated failures.
     - Requires email_verified (tweak as needed).
     """
-
-    # email = payload.email.strip()
-    email = normalize_email(payload.email)
-    password = payload.password
-
-    # Fetch entity by exact email match (you chose not to lowercase)
-    user = await prisma.entities.find_unique(where={"email": email})
-
+    logger.info(f"[AUTH] Signin attempt for email: {payload.email}")
+    logger.info(f"[AUTH] Request method: {request.method}, URL: {request.url}")
+    logger.info(f"[AUTH] Request headers: {dict(request.headers)}")
+    
     # Uniform error for nonexistent users (avoid user enumeration)
     def invalid_credentials():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
+    
+    try:
+        # email = payload.email.strip()
+        email = normalize_email(payload.email)
+        password = payload.password
+    except Exception as e:
+        logger.error(f"[AUTH] Error processing signin payload: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid request payload",
+        )
+
+    # Fetch entity by exact email match (you chose not to lowercase)
+    # Use raw SQL query to handle date_of_birth stored as string (legacy data issue)
+    try:
+        user = await prisma.entities.find_unique(where={"email": email})
+    except DataError as e:
+        # Handle database data inconsistency (e.g., date_of_birth stored as string)
+        logger.warning(f"[AUTH] Database data error when fetching user {email}: {e}. Attempting raw SQL query.")
+        try:
+            # Use raw SQL to fetch user and handle date conversion
+            result = await prisma.query_raw(
+                """
+                SELECT id, email, first_name, last_name, password, 
+                       email_verified, last_login_at, login_attempts, locked_until, 
+                       status, created_at, updated_at, zynk_entity_id, entity_type,
+                       CASE 
+                           WHEN date_of_birth IS NULL THEN NULL
+                           WHEN date_of_birth::text LIKE '%/%' THEN 
+                               TO_TIMESTAMP(date_of_birth::text, 'MM/DD/YYYY')
+                           ELSE date_of_birth::timestamp
+                       END as date_of_birth,
+                       nationality, phone_number, country_code
+                FROM entities 
+                WHERE email = $1
+                """,
+                email
+            )
+            if not result or len(result) == 0:
+                invalid_credentials()
+            
+            # Convert raw result to a dict-like object for compatibility
+            row = result[0]
+            from types import SimpleNamespace
+            user = SimpleNamespace(
+                id=row['id'],
+                email=row['email'],
+                first_name=row['first_name'],
+                last_name=row['last_name'],
+                password=row['password'],
+                email_verified=row['email_verified'],
+                last_login_at=row['last_login_at'],
+                login_attempts=row['login_attempts'],
+                locked_until=row['locked_until'],
+                status=row['status'],
+                created_at=row['created_at'],
+                updated_at=row['updated_at'],
+                zynk_entity_id=row.get('zynk_entity_id'),
+                entity_type=row.get('entity_type'),
+                date_of_birth=row['date_of_birth'],
+                nationality=row.get('nationality'),
+                phone_number=row.get('phone_number'),
+                country_code=row.get('country_code'),
+            )
+            logger.info(f"[AUTH] Successfully fetched user {email} using raw SQL query")
+        except Exception as raw_sql_error:
+            logger.error(f"[AUTH] Raw SQL query also failed for user {email}: {raw_sql_error}")
+            invalid_credentials()
 
     # If no user, do NOT reveal which part failed
     if not user:
@@ -520,17 +598,30 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     access_token = auth.create_access_token(data={"sub": str(user.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(user.id), "type": "refresh"})
 
-    # Set refresh cookie (banking defaults)
+    # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
     # Use secure=True only in production (HTTPS), False for localhost development
     # Use samesite="lax" in development for cross-port cookies, "strict" in production
     is_production = not settings.frontend_url.startswith("http://localhost")
+    
+    # Set access token as HttpOnly cookie (15 minutes expiry)
+    response.set_cookie(
+        key="rp_access",
+        value=access_token,
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
+        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+        secure=is_production,        # True in production (HTTPS), False in development
+        max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+        path="/",
+    )
+    
+    # Set refresh token as HttpOnly cookie (24 hours expiry)
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
-        httponly=True,               # ✅ HttpOnly set to True for security
+        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
         samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
         secure=is_production,        # True in production (HTTPS), False in development
-        max_age=24 * 60 * 60,   # 24 hours (86400 seconds) to match refresh token expiry
+        max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
         path="/",
     )
 
@@ -559,6 +650,20 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session: {e}")
     print(f"[AUTH] Login session created for user {user}")
+    
+    # Helper function to safely convert datetime to ISO format string
+    def to_iso_string(dt_value):
+        """Convert datetime to ISO string, handling both datetime objects and strings."""
+        if dt_value is None:
+            return None
+        if isinstance(dt_value, str):
+            # Already a string (from raw SQL), return as-is
+            return dt_value
+        if hasattr(dt_value, 'isoformat'):
+            # It's a datetime object
+            return dt_value.isoformat()
+        return str(dt_value) if dt_value else None
+    
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
         "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
@@ -567,12 +672,12 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         "first_name": user.first_name if hasattr(user, "first_name") else None,
         "last_name": user.last_name if hasattr(user, "last_name") else None,
         "email_verified": user.email_verified if hasattr(user, "email_verified") else None,
-        "last_login_at": user.last_login_at.isoformat() if getattr(user, "last_login_at", None) else None,
+        "last_login_at": to_iso_string(getattr(user, "last_login_at", None)),
         "login_attempts": user.login_attempts if hasattr(user, "login_attempts") else None,
-        "locked_until": user.locked_until.isoformat() if getattr(user, "locked_until", None) else None,
+        "locked_until": to_iso_string(getattr(user, "locked_until", None)),
         "status": str(user.status) if hasattr(user, "status") else None,
-        "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else None,
-        "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
+        "created_at": to_iso_string(getattr(user, "created_at", None)),
+        "updated_at": to_iso_string(getattr(user, "updated_at", None)),
     }
     print(f"[AUTH] Safe user: {safe_user}")
     return {
@@ -707,16 +812,30 @@ async def refresh_token(request: Request, response: Response):
         access_token = auth.create_access_token({"sub": str(user.id), "type": "access"})
         refresh_token = auth.create_refresh_token({"sub": str(user.id), "type": "refresh"})
 
+        # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
         # Use secure=True only in production (HTTPS), False for localhost development
         # Use samesite="lax" in development for cross-port cookies, "strict" in production
         is_production = not settings.frontend_url.startswith("http://localhost")
+        
+        # Set access token as HttpOnly cookie (15 minutes expiry)
+        response.set_cookie(
+            key="rp_access",
+            value=access_token,
+            httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
+            samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
+            secure=is_production,        # True in production (HTTPS), False in development
+            max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+            path="/",
+        )
+        
+        # Set refresh token as HttpOnly cookie (24 hours expiry)
         response.set_cookie(
             key="rp_refresh",
             value=refresh_token,
-            httponly=True,               # ✅ HttpOnly set to True for security
+            httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
             samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
             secure=is_production,        # True in production (HTTPS), False in development
-            max_age=24 * 60 * 60,   # 24 hours (86400 seconds) to match refresh token expiry
+            max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
             path="/",
         )
     except HTTPException:
@@ -803,7 +922,8 @@ async def logout(request: Request, response: Response):
             # Log error but don't fail logout (token might be expired/invalid)
             logger.warning(f"[AUTH] Failed to update session on logout: {e}")
     
-    # Clear refresh cookie
+    # Clear both access and refresh cookies
+    response.delete_cookie("rp_access", path="/")
     response.delete_cookie("rp_refresh", path="/")
     
     return {
@@ -970,6 +1090,7 @@ async def logout_all_devices(request: Request, response: Response, current_user=
         # Never accept entity_id from request parameters - always use current_user.id
         revoked = await session_service.revoke_all_sessions(entity_id=str(current_user.id))
         # Clear current refresh cookie
+        response.delete_cookie("rp_access", path="/")
         response.delete_cookie("rp_refresh", path="/")
         return {
             "success": True,
