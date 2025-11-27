@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException, status, Response, Request, Depends
 from datetime import datetime, timedelta, timezone
 import logging
 import httpx
+import asyncio
+import random
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from ..core import auth
@@ -604,32 +606,30 @@ async def request_password_reset(payload: schemas.ForgotPasswordRequest):
     """
     Initiate password reset by sending an OTP to the user's email.
     Always responds with success to avoid leaking account existence.
+    MED-03: Fixed timing attack by simulating same delay regardless of user existence.
     """
     email = normalize_email(payload.email)
     user = await prisma.entities.find_unique(where={"email": email})
 
-    if not user:
-        return {
-            "success": True,
-            "message": "If that email exists, a reset code has been sent.",
-            "data": None,
-            "error": None,
-            "meta": {},
-        }
+    if user:
+        otp_service = OTPService(prisma)
+        success, message, data = await otp_service.send_password_reset_otp(email=email)
 
-    otp_service = OTPService(prisma)
-    success, message, data = await otp_service.send_password_reset_otp(email=email)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=message,
+            )
+    else:
+        # MED-03: Simulate same delay to prevent timing attack
+        # This prevents attackers from determining if an email exists based on response time
+        await asyncio.sleep(random.uniform(0.5, 1.5))
 
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=message,
-        )
-
+    # ALWAYS return same response regardless of user existence
     return {
         "success": True,
-        "message": message,
-        "data": data,
+        "message": "If that email exists, a reset code has been sent.",
+        "data": None,
         "error": None,
         "meta": {},
     }
