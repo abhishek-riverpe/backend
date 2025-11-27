@@ -35,6 +35,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Blocks microphone and camera for banking security
         # geolocation=(self) allows same-origin access (frontend can request permission)
         response.headers["Permissions-Policy"] = "geolocation=(self), microphone=(), camera=()"
+
+        # LOW-01: Cross-Origin isolation headers for enhanced security
+        # Cross-Origin-Embedder-Policy: Requires cross-origin resources to explicitly opt-in
+        response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
         
+        # Cross-Origin-Opener-Policy: Isolates browsing context to same-origin
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        
+        # Cross-Origin-Resource-Policy: Restricts resource loading to same-origin
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+
         return response
 

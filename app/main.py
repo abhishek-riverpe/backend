@@ -94,3 +94,37 @@ app.include_router(captcha_routes.router)
 @app.get("/")
 def read_root():
     return {"message": "NeoBank API is running"}
+
+# LOW-06: Health check endpoints for monitoring and load balancers
+@app.get("/health")
+async def health_check():
+    """
+    Basic health check endpoint.
+    Returns 200 if the service is running.
+    """
+    return {"status": "healthy", "service": "RiverPe API"}
+
+@app.get("/readiness")
+async def readiness_check():
+    """
+    Readiness probe - checks if the service is ready to accept traffic.
+    Verifies database connectivity.
+    """
+    try:
+        if prisma.is_connected():
+            # Optional: Run a simple query to verify DB is actually accessible
+            await prisma.query_raw("SELECT 1")
+            return {"status": "ready", "database": "connected"}
+        else:
+            return {"status": "not ready", "database": "disconnected"}, 503
+    except Exception as e:
+        logger.error(f"[HEALTH] Readiness check failed: {e}")
+        return {"status": "not ready", "error": "Database check failed"}, 503
+
+@app.get("/liveness")
+async def liveness_check():
+    """
+    Liveness probe - checks if the service is alive.
+    Should return 200 if the process is running (even if degraded).
+    """
+    return {"status": "alive", "service": "RiverPe API"}

@@ -333,15 +333,16 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
 
     # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
     # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
+    # LOW-05: Removed unnecessary hasattr() calls - Prisma models have defined fields
     safe_user = {
-        "id": str(entity.id) if hasattr(entity, "id") else None,
-        "email": entity.email if hasattr(entity, "email") else None,
-        "first_name": entity.first_name if hasattr(entity, "first_name") else None,
-        "last_name": entity.last_name if hasattr(entity, "last_name") else None,
-        "email_verified": entity.email_verified if hasattr(entity, "email_verified") else None,
+        "id": str(entity.id),
+        "email": entity.email,
+        "first_name": entity.first_name,
+        "last_name": entity.last_name,
+        "email_verified": entity.email_verified,
         "external_entity_id": getattr(entity, "zynk_entity_id", None) or getattr(entity, "external_entity_id", None),
-        "entity_type": str(entity.entity_type) if hasattr(entity, "entity_type") else None,
-        "status": str(entity.status) if hasattr(entity, "status") else None,
+        "entity_type": str(entity.entity_type) if entity.entity_type else None,
+        "status": str(entity.status) if entity.status else None,
     }
 
     # print(f"Signup response: access_token={access_token}, refresh_token={refresh_token}, user={safe_user}")
@@ -573,15 +574,16 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     logger.info(f"[AUTH] Login session created for user_id={user.id}")
     # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
     # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
+    # LOW-05: Removed unnecessary hasattr() calls - Prisma models have defined fields
     safe_user = {
-        "id": str(user.id) if hasattr(user, "id") else None,
-        "email": user.email if hasattr(user, "email") else None,
-        "first_name": user.first_name if hasattr(user, "first_name") else None,
-        "last_name": user.last_name if hasattr(user, "last_name") else None,
-        "email_verified": user.email_verified if hasattr(user, "email_verified") else None,
+        "id": str(user.id),
+        "email": user.email,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "email_verified": user.email_verified,
         "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
-        "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
-        "status": str(user.status) if hasattr(user, "status") else None,
+        "entity_type": str(user.entity_type) if user.entity_type else None,
+        "status": str(user.status) if user.status else None,
     }
     # MED-06: Use logger instead of print, avoid logging full user data
     logger.debug(f"[AUTH] User profile data prepared for user_id={user.id}")
@@ -764,15 +766,16 @@ async def refresh_token(request: Request, response: Response):
 
     # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
     # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
+    # LOW-05: Removed unnecessary hasattr() calls - Prisma models have defined fields
     safe_user = {
-        "id": str(user.id) if hasattr(user, "id") else None,
-        "email": user.email if hasattr(user, "email") else None,
-        "first_name": user.first_name if hasattr(user, "first_name") else None,
-        "last_name": user.last_name if hasattr(user, "last_name") else None,
-        "email_verified": user.email_verified if hasattr(user, "email_verified") else None,
+        "id": str(user.id),
+        "email": user.email,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "email_verified": user.email_verified,
         "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
-        "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
-        "status": str(user.status) if hasattr(user, "status") else None,
+        "entity_type": str(user.entity_type) if user.entity_type else None,
+        "status": str(user.status) if user.status else None,
     }
 
     return {

@@ -57,7 +57,8 @@ class Settings(BaseSettings):
     hibp_timeout_s: int = 5
 
     # Session inactivity timeout (minutes)
-    inactivity_timeout_minutes: int = 60
+    # LOW-02: Reduced to 15 minutes for banking security (was 60, recommended 10-15)
+    inactivity_timeout_minutes: int = 15
 
     # Concurrent session controls
     max_active_sessions: int = 3  # 0 or negative disables limiting
