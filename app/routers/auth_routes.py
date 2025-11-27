@@ -204,7 +204,8 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     else:
         zynk_date_of_birth = date_of_birth
 
-    print(f"Signup request: first_name={first_name}, last_name={last_name}, email={email}, date_of_birth={date_of_birth}, nationality={nationality}, phone={country_code}{phone_number}")
+    # MED-06: Use logger instead of print, sanitize PII
+    logger.info(f"[SIGNUP] Signup initiated for email={email[:3]}***")
 
     # Validate CAPTCHA first
     captcha_id = user_in.captcha_id.strip()
@@ -271,7 +272,8 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             "type": "individual"
         }
 
-        print(f"[SIGNUP] Creating entity in Zynk Labs with payload: {zynk_payload}")
+        # MED-06: Use logger instead of print, avoid logging full payload
+        logger.info(f"[SIGNUP] Creating entity in Zynk Labs for email={email[:3]}***")
         try:
             zynk_response = await _create_entity_in_zynk(zynk_payload)
             zynk_entity_id = zynk_response.get("data", {}).get("entityId")
@@ -567,7 +569,8 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         )
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session: {e}")
-    print(f"[AUTH] Login session created for user {user}")
+    # MED-06: Use logger instead of print, avoid logging full user object
+    logger.info(f"[AUTH] Login session created for user_id={user.id}")
     # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
     # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
     safe_user = {
@@ -580,7 +583,8 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "status": str(user.status) if hasattr(user, "status") else None,
     }
-    print(f"[AUTH] Safe user: {safe_user}")
+    # MED-06: Use logger instead of print, avoid logging full user data
+    logger.debug(f"[AUTH] User profile data prepared for user_id={user.id}")
     return {
         "success": True,
         "message": "Signin successful",

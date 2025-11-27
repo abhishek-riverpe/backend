@@ -8,7 +8,7 @@ from slowapi.errors import RateLimitExceeded
 from .core.config import settings
 from .core.database import prisma
 from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router, funding_account_router, otp_router, captcha_routes
-from .middleware import RequestSizeLimitMiddleware, ActivityTimeoutMiddleware, SecurityHeadersMiddleware
+from .middleware import RequestSizeLimitMiddleware, ActivityTimeoutMiddleware, SecurityHeadersMiddleware, RequestIDMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,6 +20,10 @@ app = FastAPI()
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# MED-05: Request ID middleware for audit trail tracking
+# PCI DSS 4.0.1 Requirement 10.2: Detailed audit log trail for all system components
+app.add_middleware(RequestIDMiddleware)
 
 # ✅ Security headers middleware (adds security headers to all responses)
 app.add_middleware(SecurityHeadersMiddleware)
