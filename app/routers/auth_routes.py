@@ -18,6 +18,7 @@ from app.services.captcha_service import captcha_service
 from app.services.email_service import email_service
 from app.utils.device_parser import parse_device_from_headers
 from app.utils.location_service import get_location_from_client
+from app.utils.errors import internal_error, upstream_error
 
 # from prisma.models import entities  # prisma python generates models from schema
 from .security import (
@@ -192,7 +193,12 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             # Convert to DateTime for Prisma (ISO-8601 format)
             prisma_date_of_birth = datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
         except (ValueError, TypeError) as e:
-            raise HTTPException(status_code=400, detail=f"Invalid date format. Please use MM/DD/YYYY format. Error: {str(e)}")
+            # MED-02: Do not leak exception details to clients
+            raise internal_error(
+                log_message=f"[SIGNUP] Invalid date format for email {email}: {date_of_birth}. Error: {e}",
+                user_message="Invalid date format. Please use MM/DD/YYYY format.",
+                status_code=400,
+            )
     else:
         zynk_date_of_birth = date_of_birth
 
@@ -290,7 +296,11 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             # Re-raise the original exception
             if isinstance(e, HTTPException):
                 raise
-            raise HTTPException(status_code=502, detail=f"Failed to create entity in Zynk Labs: {str(e)}")
+            # MED-02: Do not leak exception details to clients
+            raise upstream_error(
+                log_message=f"[SIGNUP] Failed to create entity in Zynk Labs for email {email}: {e}",
+                user_message="Failed to create account with verification service. Please try again later.",
+            )
 
     except UniqueViolationError:
         # Email already exists - caught by unique constraint
@@ -722,8 +732,12 @@ async def refresh_token(request: Request, response: Response):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[AUTH] Error during token refresh: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Token refresh failed: {str(e)}")
+        # MED-02: Do not leak exception details to clients
+        raise internal_error(
+            log_message=f"[AUTH] Error during token refresh: {e}",
+            user_message="Token refresh failed. Please log in again.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
 
     # Create a new login session for the new access token
     try:
