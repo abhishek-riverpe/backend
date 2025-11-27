@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from prisma.models import entities as Entities
 from ..core import auth
 from ..core.config import settings
+from ..utils.errors import upstream_error
 
 router = APIRouter(prefix="/api/v1/funding_account", tags=["funding_account"])
 
@@ -40,34 +41,52 @@ async def get_funding_accounts(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             if attempt == 0:
                 continue
-            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+            raise upstream_error(
+                log_message=f"[ZYNK] Request error while fetching funding accounts for entity {current.id} at {url}: {exc}",
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
 
         try:
             body = resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Invalid JSON while fetching funding accounts for entity {current.id} at {url}. Response preview: {resp.text[:200]}",
+                user_message="Verification service returned an invalid response. Please try again later.",
+            )
 
         if not (200 <= resp.status_code < 300):
-            # Extract upstream error details for user-friendly messaging
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             if resp.status_code == 404:
+                # 404 is safe and useful to expose
                 raise HTTPException(status_code=404, detail="Funding accounts not found for the entity in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream error {resp.status_code} while fetching funding accounts for entity {current.id} at {url}: {error_detail}",
+                user_message="Verification service is currently unavailable. Please try again later.",
+            )
 
         if not isinstance(body, dict):
-            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Unexpected response structure while fetching funding accounts for entity {current.id} at {url}: {body}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
             if "not found" in error_detail.lower():
                 raise HTTPException(status_code=404, detail="Funding accounts not found for the entity in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Funding accounts request rejected by upstream for entity {current.id} at {url}: {error_detail}",
+                user_message="Verification service rejected the request. Please contact support if this continues.",
+            )
 
         # Return the upstream response as-is
         return body
 
-    raise HTTPException(status_code=502, detail="Failed to fetch funding accounts from upstream service after multiple attempts")
+    raise upstream_error(
+        log_message=f"[ZYNK] Failed to fetch funding accounts for entity {current.id} at {url} after multiple attempts",
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
 

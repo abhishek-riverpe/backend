@@ -1,5 +1,6 @@
 import secrets
 import random
+import logging
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from urllib.parse import urlencode
 from starlette.responses import RedirectResponse
@@ -9,6 +10,9 @@ from ..core.config import settings
 from ..core.database import prisma
 from ..core import auth
 from ..utils.oauth_cache import generate_oauth_code, exchange_oauth_code
+from ..utils.errors import internal_error
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"]) 
 # Configure Authlib OAuth client for Google
@@ -39,7 +43,10 @@ async def google_callback(request: Request):
     try:
         token = await oauth.google.authorize_access_token(request)
     except OAuthError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"OAuth error: {e.error}")
+        raise internal_error(
+            log_message=f"[OAUTH] Google OAuth error during callback: {e.error}",
+            user_message="Authentication failed. Please try again.",
+        )
 
     userinfo = token.get("userinfo")
     if not userinfo:
