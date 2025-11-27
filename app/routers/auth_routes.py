@@ -329,20 +329,17 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     # Optional: include Location header for the created resource
     response.headers["Location"] = f"/api/v1/entities/{entity.id}"
 
+    # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
+    # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
     safe_user = {
         "id": str(entity.id) if hasattr(entity, "id") else None,
-        "external_entity_id": getattr(entity, "zynk_entity_id", None) or getattr(entity, "external_entity_id", None),
-        "entity_type": str(entity.entity_type) if hasattr(entity, "entity_type") else None,
         "email": entity.email if hasattr(entity, "email") else None,
         "first_name": entity.first_name if hasattr(entity, "first_name") else None,
         "last_name": entity.last_name if hasattr(entity, "last_name") else None,
         "email_verified": entity.email_verified if hasattr(entity, "email_verified") else None,
-        "last_login_at": entity.last_login_at.isoformat() if getattr(entity, "last_login_at", None) else None,
-        "login_attempts": entity.login_attempts if hasattr(entity, "login_attempts") else None,
-        "locked_until": entity.locked_until.isoformat() if getattr(entity, "locked_until", None) else None,
+        "external_entity_id": getattr(entity, "zynk_entity_id", None) or getattr(entity, "external_entity_id", None),
+        "entity_type": str(entity.entity_type) if hasattr(entity, "entity_type") else None,
         "status": str(entity.status) if hasattr(entity, "status") else None,
-        "created_at": entity.created_at.isoformat() if getattr(entity, "created_at", None) else None,
-        "updated_at": entity.updated_at.isoformat() if getattr(entity, "updated_at", None) else None,
     }
 
     # print(f"Signup response: access_token={access_token}, refresh_token={refresh_token}, user={safe_user}")
@@ -571,20 +568,17 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session: {e}")
     print(f"[AUTH] Login session created for user {user}")
+    # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
+    # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
-        "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
         "last_name": user.last_name if hasattr(user, "last_name") else None,
         "email_verified": user.email_verified if hasattr(user, "email_verified") else None,
-        "last_login_at": user.last_login_at.isoformat() if getattr(user, "last_login_at", None) else None,
-        "login_attempts": user.login_attempts if hasattr(user, "login_attempts") else None,
-        "locked_until": user.locked_until.isoformat() if getattr(user, "locked_until", None) else None,
+        "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
+        "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "status": str(user.status) if hasattr(user, "status") else None,
-        "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else None,
-        "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
     }
     print(f"[AUTH] Safe user: {safe_user}")
     return {
@@ -764,20 +758,17 @@ async def refresh_token(request: Request, response: Response):
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session on refresh: {e}")
 
+    # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
+    # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
     safe_user = {
         "id": str(user.id) if hasattr(user, "id") else None,
-        "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
-        "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "email": user.email if hasattr(user, "email") else None,
         "first_name": user.first_name if hasattr(user, "first_name") else None,
         "last_name": user.last_name if hasattr(user, "last_name") else None,
         "email_verified": user.email_verified if hasattr(user, "email_verified") else None,
-        "last_login_at": user.last_login_at.isoformat() if getattr(user, "last_login_at", None) else None,
-        "login_attempts": user.login_attempts if hasattr(user, "login_attempts") else None,
-        "locked_until": user.locked_until.isoformat() if getattr(user, "locked_until", None) else None,
+        "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
+        "entity_type": str(user.entity_type) if hasattr(user, "entity_type") else None,
         "status": str(user.status) if hasattr(user, "status") else None,
-        "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else None,
-        "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
     }
 
     return {
