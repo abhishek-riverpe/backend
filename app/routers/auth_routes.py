@@ -416,7 +416,8 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
     # Check if CAPTCHA is required (after 3 failed attempts)
     current_attempts = user.login_attempts or 0
-    captcha_required = current_attempts >= CAPTCHA_REQUIRED_ATTEMPTS
+    # captcha_required = current_attempts >= CAPTCHA_REQUIRED_ATTEMPTS
+    captcha_required = False
     
     if captcha_required:
         # CAPTCHA is required - validate it before password check

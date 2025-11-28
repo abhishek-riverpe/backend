@@ -21,20 +21,8 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# MED-05: Request ID middleware for audit trail tracking
-# PCI DSS 4.0.1 Requirement 10.2: Detailed audit log trail for all system components
-app.add_middleware(RequestIDMiddleware)
-
-# ✅ Security headers middleware (adds security headers to all responses)
-app.add_middleware(SecurityHeadersMiddleware)
-
-# ✅ Request size limit (rejects > configured MB)
-app.add_middleware(RequestSizeLimitMiddleware)
-
-# ✅ Session inactivity timeout enforcement for authenticated requests
-app.add_middleware(ActivityTimeoutMiddleware)
-
-# ✅ CORS setup - FIXED: HIGH-06 - Restrictive CORS configuration
+# ✅ CORS setup - MUST be early to handle preflight requests
+# FIXED: HIGH-06 - Restrictive CORS configuration
 # FIXED: HIGH-06 - Explicit allow-lists for methods and headers to reduce attack surface
 # PCI DSS 4.0.1 Requirement 6.4.3: Only allow scripts/requests from allow-listed domains
 app.add_middleware(
@@ -54,9 +42,23 @@ app.add_middleware(
         "Authorization",
         "Accept",
         "X-Request-ID",  # For request tracking (if used)
+        "X-RP-Skip-Refresh",  # Used by frontend for auth endpoints
     ],  # Explicit list - no wildcards
     max_age=600,  # Cache preflight requests for 10 minutes
 )
+
+# MED-05: Request ID middleware for audit trail tracking
+# PCI DSS 4.0.1 Requirement 10.2: Detailed audit log trail for all system components
+app.add_middleware(RequestIDMiddleware)
+
+# ✅ Security headers middleware (adds security headers to all responses)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# ✅ Request size limit (rejects > configured MB)
+app.add_middleware(RequestSizeLimitMiddleware)
+
+# ✅ Session inactivity timeout enforcement for authenticated requests
+app.add_middleware(ActivityTimeoutMiddleware)
 
 
 # ✅ Session middleware with secure cookie settings

@@ -23,25 +23,39 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
             # Non-integer or malformed header; proceed to body validation
             pass
         
-        # LOW-03: Validate actual body size by reading in chunks
-        # This prevents attackers from sending a small Content-Length but large body
-        body_size = 0
-        body_chunks = []
+        # Skip body validation for requests without a body (GET, HEAD, etc.)
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return await call_next(request)
         
-        # Read body stream in chunks
-        async for chunk in request.stream():
-            body_size += len(chunk)
+        # LOW-03: Validate actual body size by reading the body
+        # This prevents attackers from sending a small Content-Length but large body
+        try:
+            body = await request.body()
+            body_size = len(body)
+            
             if body_size > MAX_REQUEST_SIZE:
                 raise HTTPException(status_code=413, detail="Request body too large")
-            body_chunks.append(chunk)
-        
-        # Reconstruct body for downstream handlers
-        if body_chunks:
-            body = b"".join(body_chunks)
-            # Replace the receive function to return the body we just read
+            
+            # Reconstruct body for downstream handlers
+            # Store original receive function
+            original_receive = request._receive
+            
+            # Create a new receive function that returns the cached body
+            # This allows FastAPI to read the body multiple times if needed
+            body_sent = False
             async def receive():
-                return {"type": "http.request", "body": body}
+                nonlocal body_sent
+                if not body_sent:
+                    body_sent = True
+                    return {"type": "http.request", "body": body, "more_body": False}
+                # After first call, return empty body to signal completion
+                return {"type": "http.request", "body": b"", "more_body": False}
+            
+            # Replace the receive function
             request._receive = receive
+        except RuntimeError:
+            # Body already consumed, skip validation
+            pass
         
         return await call_next(request)
 
