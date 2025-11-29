@@ -11,8 +11,14 @@ from prisma.errors import DataError
 from .config import settings
 from .database import prisma
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin", auto_error=False)
+# LOW-07: Explicitly configure bcrypt rounds for consistent security
+# bcrypt__rounds=12 provides good security-performance balance (2^12 = 4096 iterations)
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__rounds=12
+)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE = timedelta(minutes=15)

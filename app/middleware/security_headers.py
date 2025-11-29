@@ -1,6 +1,7 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+from ..core.config import settings
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -43,6 +44,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Blocks microphone and camera for banking security
         # geolocation=(self) allows same-origin access (frontend can request permission)
         response.headers["Permissions-Policy"] = "geolocation=(self), microphone=(), camera=()"
+
+        # LOW-01: Cross-Origin isolation headers for enhanced security
+        # Cross-Origin-Embedder-Policy: Requires cross-origin resources to explicitly opt-in
+        # Note: COEP can break CORS in development, so we make it conditional
+        is_production = settings.frontend_url.startswith("https://")
+        if is_production:
+            response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
         
+        # Cross-Origin-Opener-Policy: Isolates browsing context to same-origin
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        
+        # Cross-Origin-Resource-Policy: Restricts resource loading to same-origin
+        # CORS FIX: Only set in production to avoid blocking CORS requests in development
+        # In development, this header blocks cross-origin requests even with CORS configured
+        if is_production:
+            response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        # In development, don't set CORP to allow CORS to work properly
+
         return response
 

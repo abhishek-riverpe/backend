@@ -10,8 +10,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from .core.config import settings
 from .core.database import prisma
-from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router, funding_account_router, otp_router, captcha_routes, wallet_router
-from .middleware import RequestSizeLimitMiddleware, ActivityTimeoutMiddleware, SecurityHeadersMiddleware
+from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router, funding_account_router, otp_router, captcha_routes
+from .middleware import RequestSizeLimitMiddleware, ActivityTimeoutMiddleware, SecurityHeadersMiddleware, RequestIDMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +24,8 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# ✅ CORS setup - MUST be FIRST middleware to handle preflight requests
+# ✅ CORS setup - MUST be early to handle preflight requests
+# FIXED: HIGH-06 - Restrictive CORS configuration
 # FIXED: HIGH-06 - Explicit allow-lists for methods and headers to reduce attack surface
 # PCI DSS 4.0.1 Requirement 6.4.3: Only allow scripts/requests from allow-listed domains
 # Note: CORSMiddleware automatically handles OPTIONS requests
@@ -43,11 +44,15 @@ app.add_middleware(
         "Authorization",
         "Accept",
         "X-Request-ID",  # For request tracking (if used)
-        "X-RP-Skip-Refresh",  # ✅ Custom header to skip token refresh on auth endpoints
+        "X-RP-Skip-Refresh",  # Used by frontend for auth endpoints
     ],  # Explicit list - no wildcards
     max_age=600,  # Cache preflight requests for 10 minutes
     expose_headers=["*"],  # Allow all response headers to be exposed
 )
+
+# MED-05: Request ID middleware for audit trail tracking
+# PCI DSS 4.0.1 Requirement 10.2: Detailed audit log trail for all system components
+app.add_middleware(RequestIDMiddleware)
 
 # ✅ Security headers middleware (adds security headers to all responses)
 app.add_middleware(SecurityHeadersMiddleware)
@@ -97,45 +102,36 @@ app.include_router(wallet_router.router)
 def read_root():
     return {"message": "NeoBank API is running"}
 
+# LOW-06: Health check endpoints for monitoring and load balancers
+@app.get("/health")
+async def health_check():
+    """
+    Basic health check endpoint.
+    Returns 200 if the service is running.
+    """
+    return {"status": "healthy", "service": "RiverPe API"}
 
-# ✅ Global exception handlers to ensure CORS headers are always present on error responses
-async def add_cors_headers_to_response(request: Request, response: Response):
-    """Add CORS headers to response for allowed origins"""
-    origin = request.headers.get("origin")
-    allowed_origins = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://www.riverpe.com",
-        "https://app.riverpe.com",
-        "https://www.dattapay.com",
-        "https://app.dattapay.com",
-    ]
-    if origin and origin in allowed_origins:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Accept, X-Request-ID, X-RP-Skip-Refresh"
-        response.headers["Access-Control-Max-Age"] = "600"
+@app.get("/readiness")
+async def readiness_check():
+    """
+    Readiness probe - checks if the service is ready to accept traffic.
+    Verifies database connectivity.
+    """
+    try:
+        if prisma.is_connected():
+            # Optional: Run a simple query to verify DB is actually accessible
+            await prisma.query_raw("SELECT 1")
+            return {"status": "ready", "database": "connected"}
+        else:
+            return {"status": "not ready", "database": "disconnected"}, 503
+    except Exception as e:
+        logger.error(f"[HEALTH] Readiness check failed: {e}")
+        return {"status": "not ready", "error": "Database check failed"}, 503
 
-
-@app.exception_handler(StarletteHTTPException)
-async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """Handle HTTP exceptions and ensure CORS headers are present"""
-    response = JSONResponse(
-        status_code=exc.status_code,
-        content={"success": False, "message": exc.detail, "error": {"code": exc.status_code, "details": exc.detail}},
-    )
-    await add_cors_headers_to_response(request, response)
-    return response
-
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle general exceptions and ensure CORS headers are present"""
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    response = JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"success": False, "message": "Internal Server Error", "error": {"code": 500, "details": str(exc)}},
-    )
-    await add_cors_headers_to_response(request, response)
-    return response
+@app.get("/liveness")
+async def liveness_check():
+    """
+    Liveness probe - checks if the service is alive.
+    Should return 200 if the process is running (even if degraded).
+    """
+    return {"status": "alive", "service": "RiverPe API"}

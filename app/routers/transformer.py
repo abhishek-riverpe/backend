@@ -11,7 +11,16 @@ from prisma.models import entities as Entities
 from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
-from ..schemas.zynk import ZynkEntitiesResponse, ZynkEntityResponse, ZynkKycResponse, ZynkKycRequirementsResponse, ZynkKycDocumentsResponse, KycDocumentUpload, KycUploadResponse
+from ..schemas.zynk import (
+    ZynkEntitiesResponse,
+    ZynkEntityResponse,
+    ZynkKycResponse,
+    ZynkKycRequirementsResponse,
+    ZynkKycDocumentsResponse,
+    KycDocumentUpload,
+    KycUploadResponse,
+)
+from ..utils.errors import upstream_error, internal_error
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -87,7 +96,11 @@ async def _upload_to_s3(file_content: bytes, file_name: str) -> str:
         
         return url
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload file to S3: {str(e)}")
+        # MED-02: Do not leak internal S3 error details to clients
+        raise internal_error(
+            log_message=f"[S3] Failed to upload file '{file_name}' to S3: {e}",
+            user_message="Failed to store uploaded file. Please try again later.",
+        )
 
 async def _create_entity_in_zynk(payload: dict) -> dict:
     """
@@ -100,30 +113,50 @@ async def _create_entity_in_zynk(payload: dict) -> dict:
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.post(url, headers=headers, json=payload)
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             if attempt == 0:
                 continue
-            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+            # MED-02: Log full error, return generic upstream error
+            raise upstream_error(
+                log_message=f"[ZYNK] Request error while creating entity at {url}: {exc}",
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
 
         try:
             body = resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+            # MED-02: Log response preview server-side only
+            raise upstream_error(
+                log_message=f"[ZYNK] Invalid JSON while creating entity at {url}. Response preview: {resp.text[:200]}",
+                user_message="Verification service returned an invalid response. Please try again later.",
+            )
 
         if not (200 <= resp.status_code < 300):
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
-            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream error {resp.status_code} for {url}: {error_detail}",
+                user_message="Verification service is currently unavailable. Please try again later.",
+            )
 
         if not isinstance(body, dict):
-            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Unexpected response structure while creating entity at {url}: {body}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
-            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Request to create entity rejected by upstream at {url}: {error_detail}",
+                user_message="Verification service rejected the request. Please contact support if this continues.",
+            )
 
         return body
 
-    raise HTTPException(status_code=502, detail="Failed to create entity in upstream service after multiple attempts")
+    raise upstream_error(
+        log_message=f"[ZYNK] Failed to create entity at {url} after multiple attempts",
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
 
 async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) -> dict:
     """
@@ -136,30 +169,48 @@ async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) ->
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.post(url, headers=headers, json=payload)
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             if attempt == 0:
                 continue
-            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+            raise upstream_error(
+                log_message=f"[ZYNK] Request error while submitting KYC for entity {entity_id} routing {routing_id} at {url}: {exc}",
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
 
         try:
             body = resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Invalid JSON while submitting KYC for entity {entity_id} routing {routing_id} at {url}. Response preview: {resp.text[:200]}",
+                user_message="Verification service returned an invalid response. Please try again later.",
+            )
 
         if not (200 <= resp.status_code < 300):
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
-            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream error {resp.status_code} while submitting KYC for entity {entity_id} routing {routing_id} at {url}: {error_detail}",
+                user_message="Verification service is currently unavailable. Please try again later.",
+            )
 
         if not isinstance(body, dict):
-            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Unexpected response structure while submitting KYC for entity {entity_id} routing {routing_id} at {url}: {body}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
-            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] KYC submission rejected by upstream for entity {entity_id} routing {routing_id} at {url}: {error_detail}",
+                user_message="Verification service rejected the request. Please contact support if this continues.",
+            )
 
         return body
 
-    raise HTTPException(status_code=502, detail="Failed to submit KYC to upstream service after multiple attempts")
+    raise upstream_error(
+        log_message=f"[ZYNK] Failed to submit KYC for entity {entity_id} routing {routing_id} at {url} after multiple attempts",
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
 
 
 @router.get("/entity/entities", response_model=ZynkEntitiesResponse)
@@ -175,27 +226,41 @@ async def get_all_entities(current: Entities = Depends(auth.get_current_entity))
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             if attempt == 0:
                 continue
-            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+            raise upstream_error(
+                log_message=f"[ZYNK] Request error while fetching entities at {url}: {exc}",
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
 
         try:
             body = resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Invalid JSON while fetching entities at {url}. Response preview: {resp.text[:200]}",
+                user_message="Verification service returned an invalid response. Please try again later.",
+            )
 
         if not (200 <= resp.status_code < 300):
-            # Extract upstream error details for user-friendly messaging
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
-            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream error {resp.status_code} while fetching entities at {url}: {error_detail}",
+                user_message="Verification service is currently unavailable. Please try again later.",
+            )
 
         if not isinstance(body, dict):
-            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Unexpected response structure while fetching entities at {url}: {body}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
-            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Fetch entities rejected by upstream at {url}: {error_detail}",
+                user_message="Verification service rejected the request. Please contact support if this continues.",
+            )
 
         # Validate that data exists and has required fields for the response schema
         data = body.get("data")
@@ -205,7 +270,10 @@ async def get_all_entities(current: Entities = Depends(auth.get_current_entity))
         # Return the entire upstream response as it matches our schema
         return body
 
-    raise HTTPException(status_code=502, detail="Failed to fetch entities from upstream service after multiple attempts")
+    raise upstream_error(
+        log_message=f"[ZYNK] Failed to fetch entities at {url} after multiple attempts",
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
 
 @router.get("/entity/{entity_id}", response_model=ZynkEntityResponse)
 async def get_entity_by_id(
@@ -237,48 +305,73 @@ async def get_entity_by_id(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             if attempt == 0:
                 continue
-            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+            raise upstream_error(
+                log_message=f"[ZYNK] Request error while fetching entity {entity_id} at {url}: {exc}",
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
 
         try:
             body = resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Invalid JSON while fetching entity {entity_id} at {url}. Response preview: {resp.text[:200]}",
+                user_message="Verification service returned an invalid response. Please try again later.",
+            )
 
         if not (200 <= resp.status_code < 300):
-            # Extract upstream error details for user-friendly messaging
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             if resp.status_code == 404:
+                # 404 is safe and meaningful to expose
                 raise HTTPException(status_code=404, detail="Entity not found in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream error {resp.status_code} while fetching entity {entity_id} at {url}: {error_detail}",
+                user_message="Verification service is currently unavailable. Please try again later.",
+            )
 
         if not isinstance(body, dict):
-            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Unexpected response structure while fetching entity {entity_id} at {url}: {body}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
+            # Preserve 404 semantics for "not found" without leaking upstream body
             if "not found" in error_detail.lower():
                 raise HTTPException(status_code=404, detail="Entity not found in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Fetch entity {entity_id} rejected by upstream at {url}: {error_detail}",
+                user_message="Verification service rejected the request. Please contact support if this continues.",
+            )
 
         # Validate that data exists for the response schema
         data = body.get("data")
         if data is None or "entity" not in data:
-            raise HTTPException(status_code=502, detail="Upstream service did not provide the expected data structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Missing 'entity' in upstream response while fetching entity {entity_id} at {url}: {body}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         # Additional validation to ensure entity contains essential fields
         entity = data["entity"]
         required_fields = ["entityId", "type", "firstName", "lastName", "email"]
         for field in required_fields:
             if field not in entity:
-                raise HTTPException(status_code=502, detail=f"Upstream service response missing required field: {field}")
+                raise upstream_error(
+                    log_message=f"[ZYNK] Missing required field '{field}' in entity response for {entity_id} at {url}: {entity}",
+                    user_message="Verification service returned an unexpected response. Please try again later.",
+                )
 
         # Return the upstream response as it matches our schema
         return body
 
-    raise HTTPException(status_code=502, detail="Failed to fetch entity from upstream service after multiple attempts")
+    raise upstream_error(
+        log_message=f"[ZYNK] Failed to fetch entity {entity_id} at {url} after multiple attempts",
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
 
 @router.post("/entity/kyc/{entity_id}/{routing_id}", response_model=KycUploadResponse)
 @limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
@@ -435,31 +528,45 @@ async def get_entity_kyc_status(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             if attempt == 0:
                 continue
-            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+            raise upstream_error(
+                log_message=f"[ZYNK] Request error while fetching KYC status for entity {entity_id} at {url}: {exc}",
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
 
         try:
             body = resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Invalid JSON while fetching KYC status for entity {entity_id} at {url}. Response preview: {resp.text[:200]}",
+                user_message="Verification service returned an invalid response. Please try again later.",
+            )
 
         if not (200 <= resp.status_code < 300):
-            # Extract upstream error details for user-friendly messaging
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             if resp.status_code == 404:
                 raise HTTPException(status_code=404, detail="KYC data not found for the entity in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream error {resp.status_code} while fetching KYC status for entity {entity_id} at {url}: {error_detail}",
+                user_message="Verification service is currently unavailable. Please try again later.",
+            )
 
         if not isinstance(body, dict):
-            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Unexpected response structure while fetching KYC status for entity {entity_id} at {url}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
             if "not found" in error_detail.lower():
                 raise HTTPException(status_code=404, detail="KYC data not found for the entity in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream rejected request while fetching KYC status for entity {entity_id} at {url}: {error_detail}",
+                user_message="Verification service rejected the request. Please try again later.",
+            )
 
         # Validate that data exists for the response schema
         data = body.get("data")
@@ -476,7 +583,10 @@ async def get_entity_kyc_status(
         # Return the upstream response as it matches our schema
         return body
 
-    raise HTTPException(status_code=502, detail="Failed to fetch KYC status from upstream service after multiple attempts")
+    raise upstream_error(
+        log_message=f"[ZYNK] Failed to fetch KYC status for entity {entity_id} at {url} after multiple attempts",
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
 
 @router.get("/entity/kyc/requirements/{entity_id}/{routing_id}", response_model=ZynkKycRequirementsResponse)
 @limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
@@ -510,31 +620,45 @@ async def get_entity_kyc_requirements(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             if attempt == 0:
                 continue
-            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+            raise upstream_error(
+                log_message=f"[ZYNK] Request error while fetching KYC requirements for entity {entity_id} routing {routing_id} at {url}: {exc}",
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
 
         try:
             body = resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Invalid JSON while fetching KYC requirements for entity {entity_id} routing {routing_id} at {url}. Response preview: {resp.text[:200]}",
+                user_message="Verification service returned an invalid response. Please try again later.",
+            )
 
         if not (200 <= resp.status_code < 300):
-            # Extract upstream error details for user-friendly messaging
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             if resp.status_code == 404:
                 raise HTTPException(status_code=404, detail="KYC requirements not found for the entity and routing ID in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream error {resp.status_code} while fetching KYC requirements for entity {entity_id} routing {routing_id} at {url}: {error_detail}",
+                user_message="Verification service is currently unavailable. Please try again later.",
+            )
 
         if not isinstance(body, dict):
-            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Unexpected response structure while fetching KYC requirements for entity {entity_id} routing {routing_id} at {url}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
             if "not found" in error_detail.lower():
                 raise HTTPException(status_code=404, detail="KYC requirements not found for the entity and routing ID in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream rejected request while fetching KYC requirements for entity {entity_id} routing {routing_id} at {url}: {error_detail}",
+                user_message="Verification service rejected the request. Please try again later.",
+            )
 
         # Validate that data exists for the response schema
         data = body.get("data")
@@ -549,7 +673,10 @@ async def get_entity_kyc_requirements(
         # Return the upstream response as it matches our schema
         return body
 
-    raise HTTPException(status_code=502, detail="Failed to fetch KYC requirements from upstream service after multiple attempts")
+    raise upstream_error(
+        log_message=f"[ZYNK] Failed to fetch KYC requirements for entity {entity_id} routing {routing_id} at {url} after multiple attempts",
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
 
 @router.get("/entity/{entity_id}/kyc/documents", response_model=ZynkKycDocumentsResponse)
 @limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
@@ -582,31 +709,45 @@ async def get_entity_kyc_documents(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             if attempt == 0:
                 continue
-            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+            raise upstream_error(
+                log_message=f"[ZYNK] Request error while fetching KYC documents for entity {current.id} at {url}: {exc}",
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
 
         try:
             body = resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Invalid JSON while fetching KYC documents for entity {current.id} at {url}. Response preview: {resp.text[:200]}",
+                user_message="Verification service returned an invalid response. Please try again later.",
+            )
 
         if not (200 <= resp.status_code < 300):
-            # Extract upstream error details for user-friendly messaging
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             if resp.status_code == 404:
                 raise HTTPException(status_code=404, detail="KYC documents not found for the entity in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream error {resp.status_code} while fetching KYC documents for entity {current.id} at {url}: {error_detail}",
+                user_message="Verification service is currently unavailable. Please try again later.",
+            )
 
         if not isinstance(body, dict):
-            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Unexpected response structure while fetching KYC documents for entity {current.id} at {url}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
             if "not found" in error_detail.lower():
                 raise HTTPException(status_code=404, detail="KYC documents not found for the entity in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream rejected request while fetching KYC documents for entity {current.id} at {url}: {error_detail}",
+                user_message="Verification service rejected the request. Please try again later.",
+            )
 
         # Validate that data exists for the response schema
         data = body.get("data")
@@ -621,7 +762,10 @@ async def get_entity_kyc_documents(
         # Return the upstream response as it matches our schema
         return body
 
-    raise HTTPException(status_code=502, detail="Failed to fetch KYC documents from upstream service after multiple attempts")
+    raise upstream_error(
+        log_message=f"[ZYNK] Failed to fetch KYC documents for entity {current.id} at {url} after multiple attempts",
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
 
 @router.get("/entity/email/{email}", response_model=ZynkEntityResponse)
 async def get_entity_by_email(
@@ -650,45 +794,68 @@ async def get_entity_by_email(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError:
+        except httpx.RequestError as exc:
             if attempt == 0:
                 continue
-            raise HTTPException(status_code=502, detail="Upstream service unreachable. Please try again later.")
+            raise upstream_error(
+                log_message=f"[ZYNK] Request error while fetching entity by email {email} at {url}: {exc}",
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
 
         try:
             body = resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=f"Received invalid response format from upstream service. Response preview: {resp.text[:200]}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Invalid JSON while fetching entity by email {email} at {url}. Response preview: {resp.text[:200]}",
+                user_message="Verification service returned an invalid response. Please try again later.",
+            )
 
         if not (200 <= resp.status_code < 300):
-            # Extract upstream error details for user-friendly messaging
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             if resp.status_code == 404:
                 raise HTTPException(status_code=404, detail="Entity not found in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service error: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream error {resp.status_code} while fetching entity by email {email} at {url}: {error_detail}",
+                user_message="Verification service is currently unavailable. Please try again later.",
+            )
 
         if not isinstance(body, dict):
-            raise HTTPException(status_code=502, detail="Upstream service returned unexpected response structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Unexpected response structure while fetching entity by email {email} at {url}",
+                user_message="Verification service returned an unexpected response. Please try again later.",
+            )
 
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
             if "not found" in error_detail.lower():
                 raise HTTPException(status_code=404, detail="Entity not found in external service.")
-            raise HTTPException(status_code=502, detail=f"Upstream service rejected the request: {error_detail}")
+            raise upstream_error(
+                log_message=f"[ZYNK] Upstream rejected request while fetching entity by email {email} at {url}: {error_detail}",
+                user_message="Verification service rejected the request. Please try again later.",
+            )
 
         # Validate that data exists for the response schema
         data = body.get("data")
         if data is None or "entity" not in data:
-            raise HTTPException(status_code=502, detail="Upstream service did not provide the expected data structure")
+            raise upstream_error(
+                log_message=f"[ZYNK] Missing data structure while fetching entity by email {email} at {url}",
+                user_message="Verification service did not provide the expected data structure. Please try again later.",
+            )
 
         # Additional validation to ensure entity contains essential fields
         entity = data["entity"]
         required_fields = ["entityId", "type", "firstName", "lastName", "email"]
         for field in required_fields:
             if field not in entity:
-                raise HTTPException(status_code=502, detail=f"Upstream service response missing required field: {field}")
+                raise upstream_error(
+                    log_message=f"[ZYNK] Missing required field '{field}' while fetching entity by email {email} at {url}",
+                    user_message="Verification service response is incomplete. Please try again later.",
+                )
 
         # Return the upstream response as it matches our schema
         return body
 
-    raise HTTPException(status_code=502, detail="Failed to fetch entity from upstream service after multiple attempts")
+    raise upstream_error(
+        log_message=f"[ZYNK] Failed to fetch entity by email {email} at {url} after multiple attempts",
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
