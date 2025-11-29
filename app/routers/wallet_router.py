@@ -2,14 +2,15 @@
 Wallet Router
 
 Handles wallet creation endpoints for Zynk Labs Continuum API integration.
-Follows the official Zynk Labs authentication and wallet creation flow:
-1. Generate ephemeral P-256 key pair
-2. Initiate OTP for authentication
-3. Start session with OTP and ephemeral public key
-4. Decrypt credential bundle to get session key
-5. Prepare wallet creation challenge
-6. Sign challenge with session key
-7. Submit signed wallet creation
+Complete wallet creation flow:
+1. Register Auth (always proceed)
+2. Initiate OTP
+3. Generate P-256 key pair
+4. Start session with OTP verification
+5. Decrypt credential bundle (HPKE)
+6. Prepare wallet creation
+7. Sign payload with session key
+8. Submit wallet creation
 """
 
 import json
@@ -23,9 +24,9 @@ from app.core.auth import get_current_entity
 from app.core.database import prisma
 from prisma.models import entities as Entities
 from app.utils.wallet_crypto import (
-    generate_p256_key_pair,
+    generate_keypair as generate_keypair_crypto,
     decrypt_credential_bundle,
-    sign_payload_with_session_key
+    sign_payload_with_api_key
 )
 from app.services.otp_service import OTPService
 
@@ -35,8 +36,31 @@ router = APIRouter(prefix="/api/v1/wallets", tags=["Wallets"])
 # Rate limiter instance (will be set from app.state.limiter)
 limiter = Limiter(key_func=get_remote_address)
 
+# Zynk API base URL
+ZYNK_BASE_URL = "https://qaapi.zynklabs.xyz"
 
-def _auth_header():
+logger.info(f"[WALLET] Router initialized with Zynk API: {ZYNK_BASE_URL}")
+
+
+def _clean_entity_id(entity_id) -> str:
+    """Clean entity ID by removing whitespace and validating format."""
+    if not entity_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is not linked to a Zynk entity"
+        )
+
+    entity_id = str(entity_id).strip()
+    if not entity_id or '\n' in entity_id or '\r' in entity_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid entity ID format"
+        )
+
+    return entity_id
+
+
+def _zynk_auth_header():
     """Get Zynk API authentication header"""
     if not settings.zynk_api_key:
         raise HTTPException(status_code=500, detail="Zynk API key not configured")
@@ -47,255 +71,463 @@ def _auth_header():
     }
 
 
-def _continuum_auth_header():
-    """Get Zynk Continuum API authentication header"""
-    if not settings.zynk_api_key:
-        raise HTTPException(status_code=500, detail="Zynk API key not configured")
-    return {
-        "x-api-token": settings.zynk_api_key,
-        "Content-Type": "application/json",
-        "Accept": "application/json"
+async def _initiate_otp_internal(entity_id: str, user_email: str) -> dict:
+    """
+    Internal helper function to initiate OTP.
+    Can be called from register-auth or the initiate-otp endpoint.
+    
+    Args:
+        entity_id: Cleaned entity ID
+        user_email: User email for logging
+        
+    Returns:
+        dict: OTP response with otpId, otpType, otpContact
+    """
+    logger.info("[WALLET] ========== INITIATE OTP (INTERNAL) START ==========")
+    logger.info(f"[WALLET] Initiating OTP for entity: {entity_id}, user: {user_email}")
+    
+    # Call Zynk initiate-otp endpoint (entityId in path, no payload needed)
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/initiate-otp"
+    logger.info(f"[WALLET] Zynk API URL: {url}")
+    
+    headers = _zynk_auth_header()
+    
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        logger.info("[WALLET] Sending POST request to Zynk API for initiate-otp")
+        response = await client.post(url, headers=headers)
+        logger.info(f"[WALLET] Response status code: {response.status_code}")
+        
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+                error_detail = error_body.get("message", f"HTTP {response.status_code}")
+            except:
+                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
+            
+            logger.error(f"[WALLET] Initiate OTP failed: {error_detail}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Zynk API error: {error_detail}"
+            )
+        
+        body = response.json()
+        logger.info(f"[WALLET] Initiate OTP response: {body}")
+        
+        if not body.get("success"):
+            error_msg = body.get("message", "Zynk API returned error")
+            logger.error(f"[WALLET] Initiate OTP failed: {error_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=error_msg
+            )
+        
+        data = body.get("data", {})
+        otp_id = data.get("otpId")
+        
+        if not otp_id:
+            logger.error("[WALLET] Initiate OTP failed: Missing otpId in response")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Zynk API did not return otpId"
+            )
+        
+        logger.info(f"[WALLET] ========== INITIATE OTP (INTERNAL) SUCCESS ==========")
+        logger.info(f"[WALLET] OTP ID: {otp_id}")
+        return body
+
+
+@router.post("/register-auth")
+@limiter.limit("10/minute")
+async def register_auth(
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Register auth for wallet creation.
+    Always proceeds to next step regardless of response.
+
+    Returns:
+        Success response (always proceeds)
+    """
+    logger.info("[WALLET] ========== REGISTER AUTH START ==========")
+    logger.info(f"[WALLET] Step 1: Received register-auth request from user: {current_user.email}")
+
+    # Get and clean entity ID from authenticated user
+    logger.info("[WALLET] Step 2: Getting and cleaning entity ID")
+    entity_id = _clean_entity_id(current_user.zynk_entity_id)
+    logger.info(f"[WALLET] Step 2 Complete: Entity ID = {entity_id}")
+
+    # Call Zynk register-auth endpoint
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/register-auth"
+    payload = {
+        "authType": "Email_Auth",
+        "authPayload": {
+            "email": current_user.email
+        }
     }
+
+    logger.info(f"[WALLET] Step 3: Preparing Zynk API call")
+    logger.info(f"[WALLET] Register auth payload: {payload}")
+    logger.info(f"[WALLET] Register auth URL: {url}")
+
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        logger.info("[WALLET] Step 4: Sending request to Zynk API")
+        response = await client.post(url, json=payload, headers=_zynk_auth_header())
+        logger.info(f"[WALLET] Step 4 Complete: Received response with status {response.status_code}")
+
+        # Handle both 200 (success) and 400 (already registered) responses
+        if response.status_code == 200:
+            body = response.json()
+            logger.info(f"[WALLET] Register auth response: {body}")
+
+            if body.get("success"):
+                logger.info("[WALLET] Step 5 Complete: New user registered successfully")
+                logger.info("[WALLET] ========== REGISTER AUTH SUCCESS (New Registration) ==========")
+                logger.info("[WALLET] ✅ Automatically calling initiate-otp...")
+                
+                # Automatically call initiate-otp
+                try:
+                    otp_response = await _initiate_otp_internal(entity_id, current_user.email)
+                    logger.info("[WALLET] ✅ Initiate OTP completed successfully")
+                    return otp_response
+                except HTTPException as e:
+                    logger.error(f"[WALLET] Failed to initiate OTP after register-auth: {e.detail}")
+                    raise
+                except Exception as e:
+                    logger.error(f"[WALLET] Unexpected error during initiate-otp: {str(e)}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to initiate OTP: {str(e)}"
+                    )
+            else:
+                # Unexpected 200 response with success: false
+                error_msg = body.get("error", {}).get("message", "Unknown error")
+                logger.error(f"[WALLET] Register auth unexpected failure: {error_msg}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Zynk API error: {error_msg}"
+                )
+
+        elif response.status_code == 400:
+            # Check if it's the "already registered" case
+            try:
+                body = response.json()
+                error_details = body.get("error", {}).get("details", "")
+                if "Entity already has a registered Turnkey organization" in error_details:
+                    logger.info("[WALLET] Step 5 Complete: User already registered with Turnkey")
+                    logger.info("[WALLET] ========== REGISTER AUTH SUCCESS (Already Registered) ==========")
+                    logger.info("[WALLET] ✅ Automatically calling initiate-otp...")
+                    
+                    # Automatically call initiate-otp
+                    try:
+                        otp_response = await _initiate_otp_internal(entity_id, current_user.email)
+                        logger.info("[WALLET] ✅ Initiate OTP completed successfully")
+                        return otp_response
+                    except HTTPException as e:
+                        logger.error(f"[WALLET] Failed to initiate OTP after register-auth: {e.detail}")
+                        raise
+                    except Exception as e:
+                        logger.error(f"[WALLET] Unexpected error during initiate-otp: {str(e)}")
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to initiate OTP: {str(e)}"
+                        )
+                else:
+                    # Different 400 error
+                    error_msg = body.get("error", {}).get("message", "Bad Request")
+                    logger.error(f"[WALLET] Register auth 400 error: {error_msg}")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=error_msg
+                    )
+            except Exception as e:
+                logger.error(f"[WALLET] Failed to parse 400 response: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Invalid response from Zynk API"
+                )
+
+        else:
+            # Other HTTP status codes
+            try:
+                error_detail = response.json().get("message", f"HTTP {response.status_code}")
+            except:
+                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
+
+            logger.error(f"[WALLET] Register auth HTTP error: {error_detail}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Zynk API error: {error_detail}"
+            )
 
 
 @router.post("/generate-keypair")
 @limiter.limit("30/minute")
 async def generate_keypair(request: Request):
     """
-    Generate a P-256 key pair for wallet creation.
+    Generate P-256 key pair for wallet creation.
 
     Returns:
-        - publicKey: Base64-encoded uncompressed public key
-        - privateKeyPem: PEM-encoded private key
+        - privateKey: 64-character hex string
+        - publicKey: 130-character hex string (uncompressed)
     """
-    try:
-        private_key_pem, public_key_base64 = generate_p256_key_pair()
+    logger.info("[WALLET] Generating P-256 key pair")
 
-        return {
-            "success": True,
-            "message": "Key pair generated successfully",
-            "data": {
-                "publicKey": public_key_base64,
-                "privateKeyPem": private_key_pem
-            }
+    private_hex, public_hex = generate_keypair_crypto()
+
+    logger.info(f"[WALLET] Key pair generated - private: {len(private_hex)} chars, public: {len(public_hex)} chars")
+
+    return {
+        "success": True,
+        "data": {
+            "privateKey": private_hex,
+            "publicKey": public_hex
         }
-    except Exception as e:
-        logger.error(f"Error generating key pair: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate key pair: {str(e)}"
-        )
+    }
 
 
-@router.post("/{entity_id}/initiate-otp")
+@router.post("/initiate-otp")
 @limiter.limit("10/minute")
 async def initiate_otp(
-    entity_id: str,
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
     """
-    Initiate email OTP for wallet session creation.
-
-    Path: entity_id - Zynk entity ID
-    Body: None (uses current user's email)
+    Initiate OTP for wallet creation.
+    This endpoint can still be called directly if needed.
 
     Returns:
-        - otpId: OTP session ID for verification
+        - otpId: OTP session ID
+        - otpType: OTP type
+        - otpContact: Contact method
     """
     try:
-        # Verify entity belongs to current user
-        if current_user.zynk_entity_id != entity_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Entity ID does not match authenticated user"
-            )
+        logger.info("[WALLET] ========== INITIATE OTP (ENDPOINT) START ==========")
+        logger.info(f"[WALLET] Received initiate-otp request from user: {current_user.email}")
 
-        # Send email OTP to current user's email
-        otp_service = OTPService(prisma)
-        success, message, otp_data = await otp_service.send_email_otp(current_user.email)
+        # Get and clean entity ID from authenticated user
+        entity_id = _clean_entity_id(current_user.zynk_entity_id)
+        logger.info(f"[WALLET] Entity ID: {entity_id}")
 
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=message
-            )
+        # Call the internal helper function
+        result = await _initiate_otp_internal(entity_id, current_user.email)
+        
+        logger.info("[WALLET] ========== INITIATE OTP (ENDPOINT) SUCCESS ==========")
+        return result
 
-        return {
-            "success": True,
-            "message": "OTP sent successfully",
-            "otpId": otp_data.get("otp_id") if otp_data else None
-        }
-
-    except HTTPException:
+    except HTTPException as he:
+        logger.error("[WALLET] ========== INITIATE OTP (ENDPOINT) FAILED (HTTPException) ==========")
+        logger.error(f"[WALLET] HTTPException status: {he.status_code}")
+        logger.error(f"[WALLET] HTTPException detail: {he.detail}")
         raise
     except Exception as e:
-        logger.error(f"Error initiating OTP: {str(e)}", exc_info=True)
+        logger.error(f"[WALLET] ========== INITIATE OTP (ENDPOINT) FAILED (Unexpected Error) ==========")
+        logger.error(f"[WALLET] Error type: {type(e).__name__}")
+        logger.error(f"[WALLET] Error message: {str(e)}")
+        logger.error(f"[WALLET] Full traceback:", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to initiate OTP: {str(e)}"
         )
 
 
-@router.post("/{entity_id}/start-session")
+@router.post("/start-session")
 @limiter.limit("10/minute")
 async def start_session(
-    entity_id: str,
     data: dict,
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
     """
-    Start Zynk session using OTP and ephemeral public key.
+    Start session with OTP code. Generates keypair (or uses provided publicKey) and calls Zynk API.
 
-    Path: entity_id - Zynk entity ID
     Body:
-        - publicKey: Base64-encoded ephemeral public key
-        - otpId: OTP session ID
-        - otpCode: OTP code
+        - otpId: OTP session ID from initiate-otp response (required)
+        - otpCode: OTP code entered by user (required)
+        - publicKey: Optional public key (if not provided, will generate a new keypair)
 
     Returns:
-        - credentialBundle: Encrypted credential bundle from Zynk
+        - success: true
+        - data:
+            - credentialBundle: Encrypted credential bundle from Zynk API
+            - privateKey: Private key (if generated, for decryption later)
     """
-    try:
-        public_key = data.get("publicKey")
-        otp_id = data.get("otpId")
-        otp_code = data.get("otpCode")
+    logger.info("[WALLET] ========== START SESSION START ==========")
+    logger.info(f"[WALLET] Request payload keys: {list(data.keys())}")
+    logger.info(f"[WALLET] Full request payload: {data}")
 
-        if not all([public_key, otp_id, otp_code]):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="publicKey, otpId, and otpCode are required"
-            )
+    otp_id = data.get("otpId")
+    otp_code = data.get("otpCode")
+    public_key = data.get("publicKey")
 
-        # Verify entity belongs to current user
-        if current_user.zynk_entity_id != entity_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Entity ID does not match authenticated user"
-            )
-
-        # Verify OTP
-        otp_service = OTPService(prisma)
-        success, message, _ = await otp_service.verify_email_otp(
-            email=current_user.email,
-            otp_code=otp_code
+    if not otp_id or not otp_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="otpId and otpCode are required"
         )
 
-        if not success:
+    logger.info(f"[WALLET] Step 1: Received otpId: {otp_id}, otpCode: {otp_code}")
+    if public_key:
+        logger.info(f"[WALLET] Step 1a: Using provided publicKey: {public_key}")
+
+    # Get and clean entity_id from current user
+    logger.info("[WALLET] Step 2: Getting entity ID")
+    entity_id = _clean_entity_id(current_user.zynk_entity_id)
+    logger.info(f"[WALLET] Step 2 Complete: Entity ID = {entity_id}")
+
+    # Generate keypair if publicKey not provided
+    private_hex = None
+    if not public_key:
+        logger.info("[WALLET] Step 3: Generating P-256 keypair (publicKey not provided)")
+        private_hex, public_key = generate_keypair_crypto()
+        logger.info(f"[WALLET] Step 3 Complete: Generated keypair")
+        logger.info(f"[WALLET] Private key length: {len(private_hex)} chars")
+        logger.info(f"[WALLET] Public key length: {len(public_key)} chars")
+    else:
+        logger.info("[WALLET] Step 3: Using provided publicKey (no keypair generation needed)")
+
+    logger.info(f"[WALLET] Public key to use: {public_key}")
+
+    # Call Zynk wallets start-session endpoint
+    logger.info("[WALLET] Step 4: Preparing Zynk API call")
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/start-session"
+    payload = {
+        "publicKey": public_key,
+        "otpId": otp_id,
+        "otpCode": otp_code
+    }
+
+    logger.info(f"[WALLET] Step 4 Complete: Zynk API URL = {url}")
+    logger.info(f"[WALLET] Step 4 Complete: Request payload to Zynk = {payload}")
+
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        logger.info("[WALLET] Step 5: Sending POST request to Zynk API")
+        logger.info(f"[WALLET] Request URL: {url}")
+        logger.info(f"[WALLET] Request headers: {_zynk_auth_header()}")
+        logger.info(f"[WALLET] Request payload: {payload}")
+        
+        response = await client.post(
+            url,
+            json=payload,
+            headers=_zynk_auth_header()
+        )
+
+        logger.info(f"[WALLET] Step 5 Complete: Response status = {response.status_code}")
+        logger.info(f"[WALLET] Response headers: {dict(response.headers)}")
+
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+                error_detail = error_body.get("message", f"HTTP {response.status_code}")
+                logger.error(f"[WALLET] Zynk API error response: {error_body}")
+            except:
+                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
+                logger.error(f"[WALLET] Zynk API error (non-JSON): {error_detail}")
+            
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=message or "Invalid OTP code"
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Zynk API error: {error_detail}"
             )
 
-        # Call Zynk Labs continuum session creation endpoint
-        url = f"{settings.zynk_base_url}/api/v1/continuum/session/create"
-        payload = {
-            "entityId": entity_id,
-            "ephemeralPublicKey": public_key
-        }
+        logger.info("[WALLET] Step 6: Parsing response")
+        body = response.json()
+        logger.info(f"[WALLET] Step 6 Complete: Full response body = {body}")
+        logger.info(f"[WALLET] Response JSON (formatted):")
+        logger.info(f"[WALLET] {json.dumps(body, indent=2)}")
 
-        async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-            response = await client.post(
-                url,
-                json=payload,
-                headers=_continuum_auth_header()
+        if not body.get("success"):
+            error_msg = body.get("message", "Zynk API returned error")
+            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=error_msg
             )
 
-            if response.status_code != 200:
-                error_detail = response.json().get("message", f"HTTP {response.status_code}")
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Zynk API error: {error_detail}"
-                )
+        logger.info("[WALLET] Step 7: Extracting credential bundle")
+        credential_bundle = body.get("data", {}).get("credentialBundle")
+        if not credential_bundle:
+            logger.error("[WALLET] Missing credentialBundle in response")
+            logger.error(f"[WALLET] Response data keys: {list(body.get('data', {}).keys())}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Zynk API did not return credential bundle"
+            )
 
-            body = response.json()
-            if not body.get("success"):
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=body.get("message", "Zynk API returned error")
-                )
+        logger.info(f"[WALLET] Step 7 Complete: Credential bundle length = {len(credential_bundle)} chars")
+        logger.info(f"[WALLET] Step 7 Complete: Credential bundle (first 50 chars): {credential_bundle[:50]}...")
+        logger.info("[WALLET] ========== START SESSION SUCCESS ==========")
+        logger.info(f"[WALLET] ✅ Full Zynk API Response:")
+        logger.info(f"[WALLET] {json.dumps(body, indent=2)}")
+        logger.info(f"[WALLET] ✅ Credential Bundle: {credential_bundle}")
 
-            credential_bundle = body.get("data", {}).get("credentialBundle")
-            if not credential_bundle:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Zynk API did not return credential bundle"
-                )
-
-            return {
-                "success": True,
-                "message": "Session created successfully",
+        # Prepare response
+        result = {
+            "success": True,
+            "data": {
                 "credentialBundle": credential_bundle
             }
+        }
+        
+        # Include private key if we generated it (for decryption later)
+        if private_hex:
+            result["data"]["privateKey"] = private_hex
+            logger.info(f"[WALLET] ✅ Private Key (for decryption): {private_hex}")
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error starting session: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start session: {str(e)}"
-        )
+        return result
 
 
-@router.post("/decrypt-credential")
+@router.post("/decrypt-bundle")
 @limiter.limit("30/minute")
-async def decrypt_credential(
+async def decrypt_bundle(
     data: dict,
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
     """
-    Decrypt credential bundle to extract session key.
+    Decrypt credential bundle using HPKE to get session keys.
 
     Body:
-        - credentialBundle: Encrypted credential bundle from Zynk
-        - privateKeyPem: PEM-encoded ephemeral private key
+        - credentialBundle: Encrypted credential bundle from start-session
+        - ephemeralPrivateKey: 64-character hex string from generate-keypair
 
     Returns:
-        - sessionKeyJwk: Session key in JWK format
+        - sessionPrivateKey: 64-character hex string
+        - sessionPublicKey: 66-character compressed hex string
     """
-    try:
-        credential_bundle = data.get("credentialBundle")
-        private_key_pem = data.get("privateKeyPem")
+    logger.info(f"[WALLET] Decrypt bundle request - keys: {list(data.keys())}")
 
-        if not credential_bundle or not private_key_pem:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="credentialBundle and privateKeyPem are required"
-            )
+    credential_bundle = data.get("credentialBundle")
+    ephemeral_private_key = data.get("ephemeralPrivateKey")
 
-        # Decrypt credential bundle
-        credential_data = decrypt_credential_bundle(credential_bundle, private_key_pem)
-
-        # Extract session key JWK
-        session_key_jwk = credential_data.get("sessionKey")
-        if not session_key_jwk:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Session key not found in decrypted credential"
-            )
-
-        return {
-            "success": True,
-            "message": "Credential decrypted successfully",
-            "sessionKeyJwk": json.dumps(session_key_jwk) if isinstance(session_key_jwk, dict) else session_key_jwk
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error decrypting credential: {str(e)}", exc_info=True)
+    if not credential_bundle or not ephemeral_private_key:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to decrypt credential: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="credentialBundle and ephemeralPrivateKey are required"
         )
 
+    logger.info(f"[WALLET] Input - bundle: {len(credential_bundle)} chars, private key: {len(ephemeral_private_key)} chars")
 
-@router.post("/create/prepare")
+    # Decrypt using HPKE
+    logger.info("[WALLET] Starting HPKE decryption")
+    result = decrypt_credential_bundle(credential_bundle, ephemeral_private_key)
+
+    session_private_key = result['tempPrivateKey']
+    session_public_key = result['tempPublicKey']
+
+    logger.info(f"[WALLET] Decryption successful - private key: {len(session_private_key)} chars, public key: {len(session_public_key)} chars")
+
+    return {
+        "success": True,
+        "data": {
+            "sessionPrivateKey": session_private_key,
+            "sessionPublicKey": session_public_key
+        }
+    }
+
+
+@router.post("/prepare")
 @limiter.limit("30/minute")
-async def prepare_wallet_creation(
+async def prepare_wallet(
     data: dict,
     request: Request,
     current_user: Entities = Depends(get_current_entity)
@@ -304,89 +536,86 @@ async def prepare_wallet_creation(
     Prepare wallet creation challenge.
 
     Body:
-        - entityId: Zynk entity ID
         - walletName: Name for the wallet
-        - chain: Blockchain (SOLANA, ETHEREUM, ARBITRUM, POLYGON)
+        - chain: Blockchain (SOLANA, ETHEREUM, etc.)
 
     Returns:
         - payloadId: Unique identifier for this challenge
-        - payloadToSign: JSON stringified unsigned activity payload
-        - rpId: Relying Party ID for Turnkey authentication
+        - payloadToSign: JSON string to sign
+        - rpId: Relying Party ID
     """
-    try:
-        entity_id = data.get("entityId")
-        wallet_name = data.get("walletName")
-        chain = data.get("chain", "SOLANA")
+    logger.info(f"[WALLET] Prepare wallet request - keys: {list(data.keys())}")
 
-        if not all([entity_id, wallet_name]):
+    wallet_name = data.get("walletName")
+    chain = data.get("chain", "SOLANA")
+
+    if not wallet_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="walletName is required"
+        )
+
+    # Get and clean entity_id from current user
+    entity_id = _clean_entity_id(current_user.zynk_entity_id)
+
+    logger.info(f"[WALLET] Preparing wallet - Name: {wallet_name}, Chain: {chain}, Entity ID: {entity_id}")
+
+    # Call Zynk prepare wallet creation endpoint
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/create/prepare"
+    payload = {
+        "walletName": wallet_name,
+        "chain": chain
+    }
+
+    logger.info(f"[WALLET] Prepare wallet payload: {payload}")
+
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        response = await client.post(
+            url,
+            json=payload,
+            headers=_zynk_auth_header()
+        )
+
+        logger.info(f"[WALLET] Prepare wallet response status: {response.status_code}")
+
+        if response.status_code != 200:
+            error_detail = response.json().get("message", f"HTTP {response.status_code}")
+            logger.error(f"[WALLET] Zynk API error: {error_detail}")
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="entityId and walletName are required"
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Zynk API error: {error_detail}"
             )
 
-        # Verify entity belongs to current user
-        if current_user.zynk_entity_id != entity_id:
+        body = response.json()
+        if not body.get("success"):
+            error_msg = body.get("message", "Zynk API returned error")
+            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Entity ID does not match authenticated user"
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=error_msg
             )
 
-        # Call Zynk Labs prepare wallet creation endpoint
-        url = f"{settings.zynk_base_url}/api/v1/wallets/create/prepare"
-        payload = {
-            "entityId": entity_id,
-            "walletName": wallet_name,
-            "chain": chain
-        }
+        logger.info(f"[WALLET] Prepare wallet response: {body}")
 
-        async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-            response = await client.post(
-                url,
-                json=payload,
-                headers=_continuum_auth_header()
+        data_response = body.get("data", {})
+        payload_id = data_response.get("payloadId")
+        payload_to_sign = data_response.get("payloadToSign")
+        rp_id = data_response.get("rpId")
+
+        if not all([payload_id, payload_to_sign]):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Zynk API did not return complete challenge data"
             )
 
-            if response.status_code != 200:
-                error_detail = response.json().get("message", f"HTTP {response.status_code}")
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Zynk API error: {error_detail}"
-                )
-
-            body = response.json()
-            if not body.get("success"):
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=body.get("message", "Zynk API returned error")
-                )
-
-            data_response = body.get("data", {})
-            payload_id = data_response.get("payloadId")
-            payload_to_sign = data_response.get("payloadToSign")
-            rp_id = data_response.get("rpId")
-
-            if not all([payload_id, payload_to_sign]):
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Zynk API did not return complete challenge data"
-                )
-
-            return {
-                "success": True,
-                "message": "Wallet creation challenge prepared successfully",
+        return {
+            "success": True,
+            "data": {
                 "payloadId": payload_id,
                 "payloadToSign": payload_to_sign,
                 "rpId": rp_id
             }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error preparing wallet creation: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to prepare wallet creation: {str(e)}"
-        )
+        }
 
 
 @router.post("/sign-payload")
@@ -397,120 +626,125 @@ async def sign_payload(
     current_user: Entities = Depends(get_current_entity)
 ):
     """
-    Sign a payload using the session key.
+    Sign payload using session private key.
 
     Body:
-        - payloadToSign: String payload to sign
-        - sessionKeyJwk: Session key in JWK format
+        - payload: JSON string to sign from prepare step
+        - sessionPrivateKey: 64-character hex string from decrypt step
+        - sessionPublicKey: 66-character compressed hex string
 
     Returns:
-        - signature: Base64-encoded signature
+        - signature: Base64URL-encoded signature
     """
-    try:
-        payload_to_sign = data.get("payloadToSign")
-        session_key_jwk = data.get("sessionKeyJwk")
+    logger.info(f"[WALLET] Sign payload request - keys: {list(data.keys())}")
 
-        if not payload_to_sign or not session_key_jwk:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="payloadToSign and sessionKeyJwk are required"
-            )
+    payload_to_sign = data.get("payload")
+    session_private_key = data.get("sessionPrivateKey")
+    session_public_key = data.get("sessionPublicKey")
 
-        # Sign payload
-        signature = sign_payload_with_session_key(payload_to_sign, session_key_jwk)
-
-        return {
-            "success": True,
-            "message": "Payload signed successfully",
-            "signature": signature
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error signing payload: {str(e)}", exc_info=True)
+    if not all([payload_to_sign, session_private_key, session_public_key]):
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to sign payload: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="payload, sessionPrivateKey, and sessionPublicKey are required"
         )
 
+    logger.info(f"[WALLET] Input - payload: {len(payload_to_sign)} chars, private key: {len(session_private_key)} chars, public key: {len(session_public_key)} chars")
 
-@router.post("/create/submit")
+    # Sign the payload
+    logger.info("[WALLET] Signing payload with session key")
+    signature = sign_payload_with_api_key(payload_to_sign, session_private_key, session_public_key)
+
+    logger.info(f"[WALLET] Payload signed successfully - signature: {len(signature)} chars")
+
+    return {
+        "success": True,
+        "data": {
+            "signature": signature
+        }
+    }
+
+
+@router.post("/submit")
 @limiter.limit("30/minute")
-async def submit_wallet_creation(
+async def submit_wallet(
     data: dict,
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
     """
-    Submit signed wallet creation activity.
+    Submit signed wallet creation.
 
     Body:
         - payloadId: Payload ID from prepare step
-        - signatureType: "ApiKey" for session-based signing
-        - signature: Signed challenge (X-Stamp header value)
+        - signatureType: "ApiKey"
+        - signature: Base64URL-encoded signature from sign step
 
     Returns:
         - walletId: Created wallet ID
         - addresses: Wallet addresses for the chain
     """
-    try:
-        payload_id = data.get("payloadId")
-        signature_type = data.get("signatureType", "ApiKey")
-        signature = data.get("signature")
+    logger.info(f"[WALLET] Submit wallet request - keys: {list(data.keys())}")
 
-        if not all([payload_id, signature]):
+    payload_id = data.get("payloadId")
+    signature_type = data.get("signatureType", "ApiKey")
+    signature = data.get("signature")
+
+    if not all([payload_id, signature]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="payloadId and signature are required"
+        )
+
+    logger.info(f"[WALLET] Input - payloadId: {payload_id}, signature: {len(signature)} chars")
+
+    # Call Zynk submit wallet creation endpoint
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/create/submit"
+    payload = {
+        "payloadId": payload_id,
+        "signatureType": signature_type,
+        "signature": signature
+    }
+
+    logger.info(f"[WALLET] Submit wallet payload: {payload}")
+
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        response = await client.post(
+            url,
+            json=payload,
+            headers=_zynk_auth_header()
+        )
+
+        logger.info(f"[WALLET] Submit wallet response status: {response.status_code}")
+
+        if response.status_code != 200:
+            error_detail = response.json().get("message", f"HTTP {response.status_code}")
+            logger.error(f"[WALLET] Zynk API error: {error_detail}")
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="payloadId and signature are required"
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Zynk API error: {error_detail}"
             )
 
-        # Call Zynk Labs submit wallet creation endpoint
-        url = f"{settings.zynk_base_url}/api/v1/wallets/create/submit"
-        payload = {
-            "payloadId": payload_id,
-            "signatureType": signature_type,
-            "signature": signature
-        }
-
-        async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-            response = await client.post(
-                url,
-                json=payload,
-                headers=_continuum_auth_header()
+        body = response.json()
+        if not body.get("success"):
+            error_msg = body.get("message", "Zynk API returned error")
+            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=error_msg
             )
 
-            if response.status_code != 200:
-                error_detail = response.json().get("message", f"HTTP {response.status_code}")
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Zynk API error: {error_detail}"
-                )
+        logger.info(f"[WALLET] Submit wallet response: {body}")
 
-            body = response.json()
-            if not body.get("success"):
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=body.get("message", "Zynk API returned error")
-                )
+        wallet_data = body.get("data", {})
+        wallet_id = wallet_data.get("walletId")
+        addresses = wallet_data.get("addresses", [])
 
-            wallet_data = body.get("data", {})
-            wallet_id = wallet_data.get("walletId")
-            addresses = wallet_data.get("addresses", [])
-
-            return {
-                "success": True,
-                "message": "Wallet created successfully",
+        return {
+            "success": True,
+            "message": "Wallet created successfully",
+            "data": {
                 "walletId": wallet_id,
                 "addresses": addresses
             }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error submitting wallet creation: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to submit wallet creation: {str(e)}"
-        )
+        }
 
