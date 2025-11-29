@@ -11,10 +11,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """
     
     async def dispatch(self, request: Request, call_next):
+        # ✅ Skip security headers for OPTIONS preflight requests (CORS handles these)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        
         response = await call_next(request)
         
         # Content-Security-Policy: Prevents XSS attacks by controlling resource loading
-        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        # Relaxed for development to allow localhost connections
+        if request.url.hostname in ["localhost", "127.0.0.1"]:
+            response.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:*"
+        else:
+            response.headers["Content-Security-Policy"] = "default-src 'self'"
         
         # X-Frame-Options: Prevents clickjacking by blocking iframe embedding
         response.headers["X-Frame-Options"] = "DENY"
