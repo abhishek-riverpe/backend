@@ -11,10 +11,19 @@ logger = logging.getLogger(__name__)
 
 class ActivityTimeoutMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Only enforce for requests with Bearer access token
-        auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-        if auth_header and auth_header.lower().startswith("bearer "):
-            token = auth_header.split(" ", 1)[1].strip()
+        # Skip activity check for OPTIONS preflight requests
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        
+        # Only enforce for requests with access token (from cookie or Authorization header)
+        # Try cookie first (secure method), then fallback to Authorization header
+        token = request.cookies.get("rp_access")
+        if not token:
+            auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+            if auth_header and auth_header.lower().startswith("bearer "):
+                token = auth_header.split(" ", 1)[1].strip()
+        
+        if token:
             try:
                 payload = auth.verify_token_type(token, "access")
                 # If token valid, enforce inactivity on this session token
