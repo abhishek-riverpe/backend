@@ -130,18 +130,9 @@ async def check_captcha_required(data: dict):
     }
 
 
-# Check if email is available
-# SECURITY: Always returns generic success to prevent account enumeration
-# Actual email validation happens during signup
 @router.post("/check-email")
 @limiter.limit("10/minute")  # FIXED: HIGH-04 - Rate limit to prevent email enumeration
 async def check_email(data: dict, request: Request):
-    """
-    DEPRECATED: This endpoint is kept for backwards compatibility but always returns success.
-    Email validation now happens during actual signup to prevent account enumeration attacks.
-    
-    Returns: {"available": true, "message": "..."} (always)
-    """
     email = data.get("email", "").strip()
     
     if not email:
@@ -157,14 +148,22 @@ async def check_email(data: dict, request: Request):
             detail="Invalid email format"
         )
     
-    # SECURITY: Always return generic success message to prevent account enumeration
-    # The actual email check happens during signup (handled by UniqueViolationError)
-    # This prevents attackers from enumerating valid email addresses
-    logger.info(f"[AUTH] check-email called for {email} (returning generic response to prevent enumeration)")
-    
+    # Check against Zynk Labs (with local DB fallback if Zynk is not configured)
+    # This ensures we fail fast on the first step of signup when the email is
+    # already registered either in our database or in Zynk Labs.
+    exists = await _email_exists_in_zynk(email)
+
+    if exists:
+        # Email already registered (either locally or upstream in Zynk)
+        return {
+            "available": False,
+            "message": "This email is already registered. Please sign in instead.",
+        }
+
+    # Email not found in Zynk/DB
     return {
         "available": True,
-        "message": "If this email is available, you'll receive a verification code."
+        "message": "Email is available.",
     }
 
 # Return unified response with tokens + user
@@ -229,6 +228,16 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     except ValueError as ve:
         # 400 for client input that fails our policy
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+
+    # Early email existence check against Zynk + local DB.
+    # This allows the mobile app to surface "email already registered"
+    # on the very first screen, and also gives a clear 409 response
+    # even if the client bypasses /check-email and hits /signup directly.
+    if await _email_exists_in_zynk(email):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
+        )
 
     # Hash password
     pwd_hash = hash_password(password)
