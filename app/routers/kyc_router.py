@@ -11,7 +11,7 @@ from prisma.models import entities as Entities
 from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
-from ..schemas.kyc import KycLinkData, KycLinkResponse
+from ..schemas.kyc import KycLinkData, KycLinkResponse, KycStatusData, KycStatusResponse
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,80 @@ def _auth_header() -> Dict[str, str]:
             detail="ZyncLabs API key not configured"
         )
     return {"x-api-token": settings.zynk_api_key}
+
+
+@router.get("/status", response_model=KycStatusResponse, status_code=status.HTTP_200_OK)
+@limiter.limit("30/minute")  # Reuse KYC rate limiting to avoid status polling abuse
+async def get_kyc_status(
+    request: Request,  # pyright: ignore[reportUnusedParameter]
+    current_entity: Entities = Depends(auth.get_current_entity),
+) -> KycStatusResponse:
+    entity_id = current_entity.id
+    logger.info(f"[KYC] KYC status request received - entity_id={entity_id}")
+
+    try:
+        kyc_session = await prisma.kyc_sessions.find_first(
+            where={"entity_id": entity_id, "deleted_at": None}
+        )
+    except DataError as exc:
+        logger.error(
+            f"[KYC] DataError while fetching KYC status for entity_id={entity_id}",
+            exc_info=exc,
+        )
+        raise _build_error_response(
+            "Invalid entity identifier",
+            code="BAD_REQUEST",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as exc:
+        logger.error(
+            f"[KYC] Unexpected error while fetching KYC status for entity_id={entity_id}",
+            exc_info=exc,
+        )
+        raise _build_error_response(
+            "Unable to fetch KYC status. Please try again later.",
+            code="INTERNAL_ERROR",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    if not kyc_session:
+        logger.info(
+            f"[KYC] No KYC session found for entity_id={entity_id}. Returning NOT_STARTED."
+        )
+        return KycStatusResponse(
+            success=True,
+            data=KycStatusData(
+                status="NOT_STARTED",
+                routing_id=None,
+                kyc_link=None,
+                initiated_at=None,
+                completed_at=None,
+                rejection_reason=None,
+            ),
+            error=None,
+            meta={},
+        )
+
+    logger.info(
+        "[KYC] Returning KYC status for entity_id=%s, session_id=%s, status=%s",
+        entity_id,
+        kyc_session.id,
+        kyc_session.status,
+    )
+
+    return KycStatusResponse(
+        success=True,
+        data=KycStatusData(
+            status=str(kyc_session.status),
+            routing_id=kyc_session.routing_id,
+            kyc_link=kyc_session.kyc_link,
+            initiated_at=kyc_session.initiated_at,
+            completed_at=kyc_session.completed_at,
+            rejection_reason=kyc_session.rejection_reason,
+        ),
+        error=None,
+        meta={},
+    )
 
 
 @router.get("", response_model=KycLinkResponse, status_code=status.HTTP_200_OK)
