@@ -1,7 +1,7 @@
+from datetime import datetime, timezone
 import logging
 from typing import Any, Dict
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -10,8 +10,8 @@ from prisma.models import entities as Entities
 
 from ..core.database import prisma
 from ..core import auth
-from ..core.config import settings
 from ..schemas.kyc import KycLinkData, KycLinkResponse, KycStatusData, KycStatusResponse
+from ..services.zynk_client import get_kyc_link_from_zynk
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +22,11 @@ limiter = Limiter(key_func=get_remote_address)
 
 
 def _build_error_response(
-    message: str, 
-    code: str, 
-    *, 
-    status_code: int, 
-    error_details: Dict[str, Any] | None = None
+    message: str,
+    code: str,
+    *,
+    status_code: int,
+    error_details: Dict[str, Any] | None = None,
 ) -> HTTPException:
     """Build a standardized error response for the API"""
     return HTTPException(
@@ -40,14 +40,8 @@ def _build_error_response(
     )
 
 
-def _auth_header() -> Dict[str, str]:
-    """Generate authentication header for ZyncLabs API"""
-    if not settings.zynk_api_key:
-        raise HTTPException(
-            status_code=500, 
-            detail="ZyncLabs API key not configured"
-        )
-    return {"x-api-token": settings.zynk_api_key}
+# Fixed routing id for US-based KYC flow
+US_KYC_ROUTING_ID = "infrap_f2a15c0b_89cf_4041_83fb_8ba064083706"
 
 
 @router.get("/status", response_model=KycStatusResponse, status_code=status.HTTP_200_OK)
@@ -125,20 +119,20 @@ async def get_kyc_status(
 
 
 @router.get("", response_model=KycLinkResponse, status_code=status.HTTP_200_OK)
+@router.get("/link", response_model=KycLinkResponse, status_code=status.HTTP_200_OK)
 @limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
 async def get_kyc_link(
+    request: Request,  # pyright: ignore[reportUnusedParameter]
     current_entity: Entities = Depends(auth.get_current_entity),
-    request: Request = None
 ) -> KycLinkResponse:
     """
     Get KYC verification link for the authenticated user.
-    
-    This endpoint:
-    1. Checks if user has zynk_entity_id (linked to ZyncLabs)
-    2. Finds or creates a KYC session
-    3. Returns existing KYC link or generates a new one from ZyncLabs
-    
-    Returns KYC link, TOS link, and their respective statuses.
+
+    Behaviour:
+    - If no KYC session exists: call Zynk to generate a link, create a session
+      with status INITIATED, and return the link.
+    - If a session exists with status INITIATED: return the stored link.
+    - Otherwise: return 404 (no active KYC link).
     """
     logger.info(
         f"[KYC] KYC link request received - id={current_entity.id}, "
@@ -159,88 +153,166 @@ async def get_kyc_link(
 
     zynk_entity_id = current_entity.zynk_entity_id
     entity_id = current_entity.id
-    
-    logger.info(f"[KYC] Using zynk_entity_id={zynk_entity_id} for ZyncLabs API")
 
-    # Find or create KYC session
+    logger.info(
+        "[KYC] KYC link request - entity_id=%s, email=%s, zynk_entity_id=%s",
+        entity_id,
+        current_entity.email,
+        zynk_entity_id,
+    )
+
+    # Look up existing KYC session (normally created at entity creation time)
     try:
-        kyc_session = await _get_or_create_kyc_session(entity_id)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"[KYC] Failed to get/create KYC session for entity_id={entity_id}", exc_info=exc)
+        kyc_session = await prisma.kyc_sessions.find_first(
+            where={"entity_id": entity_id, "deleted_at": None}
+        )
+    except DataError as exc:
+        logger.error(
+            "[KYC] DataError while looking up KYC session for entity_id=%s", entity_id, exc_info=exc
+        )
         raise _build_error_response(
-            "Unable to initialize KYC session. Please try again later.",
+            "Invalid entity identifier",
+            code="BAD_REQUEST",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as exc:
+        logger.error(
+            "[KYC] Unexpected error while looking up KYC session for entity_id=%s",
+            entity_id,
+            exc_info=exc,
+        )
+        raise _build_error_response(
+            "Unable to look up KYC session. Please try again later.",
             code="INTERNAL_ERROR",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    # If KYC link already exists, return it
-    if kyc_session.kyc_link:
+    # If no session exists (should be rare), treat as NOT_STARTED and create one
+    if not kyc_session:
         logger.info(
-            f"[KYC] Returning existing KYC link - entity_id={entity_id}, "
-            f"session_id={kyc_session.id}, status={kyc_session.status}"
+            "[KYC] No KYC session found for entity_id=%s. Creating NOT_STARTED session.",
+            entity_id,
+        )
+        try:
+            kyc_session = await prisma.kyc_sessions.create(
+                data={
+                    "entity_id": entity_id,
+                    "status": "NOT_STARTED",
+                    "routing_enabled": False,
+                }
+            )
+        except Exception as exc:
+            logger.error(
+                "[KYC] Failed to create initial KYC session for entity_id=%s",
+                entity_id,
+                exc_info=exc,
+            )
+            raise _build_error_response(
+                "Failed to initialize KYC session. Please try again later.",
+                code="INTERNAL_ERROR",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    status_value = str(kyc_session.status)
+
+    # If KYC has not started yet, trigger Zynk and move to INITIATED
+    if status_value == "NOT_STARTED":
+        routing_id = US_KYC_ROUTING_ID
+        logger.info(
+            "[KYC] Status NOT_STARTED - generating new KYC link from Zynk "
+            "- entity_id=%s, zynk_entity_id=%s, routing_id=%s",
+            entity_id,
+            zynk_entity_id,
+            routing_id,
+        )
+
+        try:
+            kyc_data = await get_kyc_link_from_zynk(zynk_entity_id, routing_id)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(
+                "[KYC] Failed to generate KYC link from Zynk for zynk_entity_id=%s",
+                zynk_entity_id,
+                exc_info=exc,
+            )
+            raise _build_error_response(
+                "Failed to generate KYC link. Please try again later.",
+                code="INTERNAL_ERROR",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        now = datetime.now(timezone.utc)
+        try:
+            kyc_session = await prisma.kyc_sessions.update(
+                where={"id": kyc_session.id},
+                data={
+                    "status": "INITIATED",
+                    "routing_id": routing_id,
+                    "kyc_link": kyc_data["kycLink"],
+                    "initiated_at": now,
+                },
+            )
+            logger.info(
+                "[KYC] Updated KYC session to INITIATED - entity_id=%s, session_id=%s",
+                entity_id,
+                kyc_session.id,
+            )
+        except Exception as exc:
+            logger.error(
+                "[KYC] Failed to update KYC session to INITIATED for entity_id=%s",
+                entity_id,
+                exc_info=exc,
+            )
+            raise _build_error_response(
+                "Failed to persist KYC session. Please try again later.",
+                code="INTERNAL_ERROR",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return KycLinkResponse(
+            success=True,
+            data=KycLinkData(
+                message=kyc_data.get("message", "KYC link generated successfully"),
+                kycLink=kyc_data["kycLink"],
+                tosLink=kyc_data.get("tosLink"),
+                kycStatus=kyc_data.get("kycStatus", "initiated"),
+                tosStatus=kyc_data.get("tosStatus", "pending"),
+            ),
+            error=None,
+        )
+
+    # If already INITIATED with a link, just return it
+    if status_value == "INITIATED" and kyc_session.kyc_link:
+        logger.info(
+            "[KYC] Returning existing INITIATED KYC link - entity_id=%s, session_id=%s",
+            entity_id,
+            kyc_session.id,
         )
         return KycLinkResponse(
             success=True,
             data=KycLinkData(
                 message="KYC link retrieved successfully",
                 kycLink=kyc_session.kyc_link,
-                tosLink=None,  # TOS link would come from the same response
-                kycStatus=kyc_session.status.lower(),
-                tosStatus="pending",  # Default status
+                tosLink=None,
+                kycStatus=status_value.lower(),
+                tosStatus="pending",
             ),
             error=None,
         )
 
-    # Generate new KYC link from ZyncLabs
-    # Use routing_id from session, or fall back to default from config
-    routing_id = kyc_session.routing_id or settings.zynk_default_routing_id
-    
+    # Any other status: do not expose link
     logger.info(
-        f"[KYC] No existing KYC link found. Generating new link from ZyncLabs - "
-        f"zynk_entity_id={zynk_entity_id}, routing_id={routing_id}"
+        "[KYC] KYC session is not eligible for link - entity_id=%s, session_id=%s, status=%s",
+        entity_id,
+        kyc_session.id,
+        status_value,
     )
-    
-    try:
-        kyc_data = await _generate_kyc_link_from_upstream(
-            zynk_entity_id, 
-            routing_id
-        )
-        
-        logger.info(f"[KYC] Successfully received KYC data from ZyncLabs: {list(kyc_data.keys())}")
-        
-        # Update KYC session with new link and routing_id
-        await prisma.kyc_sessions.update(
-            where={"id": kyc_session.id},
-            data={
-                "kyc_link": kyc_data["kycLink"],
-                "routing_id": routing_id,  # Save routing_id for future use
-            },
-        )
-        logger.info(f"[KYC] Updated KYC session {kyc_session.id} with new link and routing_id")
-        
-        return KycLinkResponse(
-            success=True,
-            data=KycLinkData(
-                message="KYC link generated successfully",
-                kycLink=kyc_data["kycLink"],
-                tosLink=kyc_data.get("tosLink"),
-                kycStatus=kyc_data.get("kycStatus", kyc_session.status.lower()),
-                tosStatus=kyc_data.get("tosStatus", "pending"),
-            ),
-            error=None,
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"[KYC] Failed to generate KYC link for zynk_entity_id={zynk_entity_id}", exc_info=exc)
-        raise _build_error_response(
-            "Failed to generate KYC link. Please try again later.",
-            code="INTERNAL_ERROR",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    raise _build_error_response(
+        "No active KYC link found for this user",
+        code="KYC_LINK_NOT_FOUND",
+        status_code=status.HTTP_404_NOT_FOUND,
+    )
 
 
 async def _get_or_create_kyc_session(entity_id: str):
@@ -284,107 +356,8 @@ async def _get_or_create_kyc_session(entity_id: str):
             status_code=status.HTTP_400_BAD_REQUEST,
         )
     except Exception as exc:
-        logger.error(f"[KYC] Unexpected error in _get_or_create_kyc_session for entity_id={entity_id}", exc_info=exc)
-        raise
-
-
-async def _generate_kyc_link_from_upstream(
-    zynk_entity_id: str, 
-    routing_id: str
-) -> Dict[str, Any]:
-    """
-    Call ZyncLabs API to generate KYC verification link.
-    
-    Returns dict with kycLink, tosLink, kycStatus, tosStatus
-    """
-    # Always include routing_id in the URL
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{zynk_entity_id}/{routing_id}"
-    
-    logger.info(f"[KYC] Calling ZyncLabs API: POST {url}")
-    
-    headers = {
-        **_auth_header(), 
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-
-    # Retry logic for network resilience
-    for attempt in range(2):
-        logger.info(f"[KYC] ZyncLabs API call attempt {attempt + 1}/2")
-        
-        try:
-            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-                response = await client.post(url, headers=headers, json={})
-                logger.info(f"[KYC] ZyncLabs response: status_code={response.status_code}")
-                
-        except httpx.RequestError as exc:
-            logger.warning(
-                f"[KYC] Network error calling ZyncLabs (attempt {attempt + 1}/2): {str(exc)}", 
-                exc_info=exc
-            )
-            if attempt == 0:
-                continue
-            raise _build_error_response(
-                "Unable to reach verification service. Please try again.",
-                code="UPSTREAM_UNREACHABLE",
-                status_code=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        # Parse response
-        try:
-            body = response.json()
-            logger.info(f"[KYC] ZyncLabs response body keys: {list(body.keys()) if isinstance(body, dict) else 'not a dict'}")
-        except ValueError:
-            logger.error(f"[KYC] Invalid JSON from ZyncLabs: {response.text[:200]}")
-            raise _build_error_response(
-                "Received invalid response from verification service",
-                code="UPSTREAM_ERROR",
-                status_code=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        # Handle non-success status codes
-        if not (200 <= response.status_code < 300):
-            error_msg = body.get("message") or body.get("error") or "Unknown error"
-            logger.error(
-                f"[KYC] ZyncLabs API error: status={response.status_code}, "
-                f"error={error_msg}, body={body}"
-            )
-            raise _build_error_response(
-                f"Verification service error: {error_msg}",
-                code="UPSTREAM_ERROR",
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                error_details=body,
-            )
-
-        # Validate response structure
-        if not isinstance(body, dict) or not body.get("success"):
-            error_msg = body.get("message", "Request was not successful")
-            logger.error(f"[KYC] ZyncLabs returned unsuccessful response: {body}")
-            raise _build_error_response(
-                f"Verification service rejected request: {error_msg}",
-                code="UPSTREAM_ERROR",
-                status_code=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        # Extract KYC data from response
-        data = body.get("data", {})
-        if not data.get("kycLink"):
-            logger.error(f"[KYC] Missing kycLink in ZyncLabs response data: {data}")
-            raise _build_error_response(
-                "Verification service returned incomplete data",
-                code="UPSTREAM_ERROR",
-                status_code=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        logger.info(
-            f"[KYC] Successfully generated KYC link for entity {zynk_entity_id}. "
-            f"Response contains: {list(data.keys())}"
+        logger.error(
+            f"[KYC] Unexpected error in _get_or_create_kyc_session for entity_id={entity_id}",
+            exc_info=exc,
         )
-        return data
-
-    # Should never reach here due to raises above, but just in case
-    raise _build_error_response(
-        "Failed to generate KYC link after multiple attempts",
-        code="INTERNAL_ERROR",
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-    )
+        raise
