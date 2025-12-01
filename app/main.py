@@ -7,7 +7,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from .core.config import settings
 from .core.database import prisma
-from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router, funding_account_router, otp_router, captcha_routes
+from .routers import google_oauth, auth_routes, zync, transformer, webhooks, kyc_router, funding_account_router, otp_router, captcha_routes, teleport_router
 from .middleware import RequestSizeLimitMiddleware, ActivityTimeoutMiddleware, SecurityHeadersMiddleware, RequestIDMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -92,6 +92,7 @@ app.include_router(kyc_router.router)
 app.include_router(otp_router.router)
 app.include_router(funding_account_router.router)
 app.include_router(captcha_routes.router)
+app.include_router(teleport_router.router)
 
 @app.get("/")
 def read_root():

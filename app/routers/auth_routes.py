@@ -390,15 +390,15 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
     # Check locked state
     now = datetime.now(timezone.utc)
-    if user.locked_until and user.locked_until > now:
-        # 423 Locked with Retry-After-ish hint
-        remaining = int((user.locked_until - now).total_seconds())
-        # Optional header; clients can use it for UX
-        response.headers["X-Account-Unlock-In"] = str(remaining)
-        raise HTTPException(
-            status_code=status.HTTP_423_LOCKED,
-            detail="Account locked due to multiple failed attempts. Try again later.",
-        )
+    # if user.locked_until and user.locked_until > now:
+    #     # 423 Locked with Retry-After-ish hint
+    #     remaining = int((user.locked_until - now).total_seconds())
+    #     # Optional header; clients can use it for UX
+    #     response.headers["X-Account-Unlock-In"] = str(remaining)
+    #     raise HTTPException(
+    #         status_code=status.HTTP_423_LOCKED,
+    #         detail="Account locked due to multiple failed attempts. Try again later.",
+    #     )
 
     # (Optional) Require verified email before login
     # if user.email_verified is not True:
@@ -455,9 +455,9 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         lock_until = None
         detail = "Invalid email or password"
 
-        if attempts >= MAX_LOGIN_ATTEMPTS:
-            lock_until = now + timedelta(minutes=LOCKOUT_MINUTES)
-            detail = "Account locked due to multiple failed attempts. Try again later."
+        # if attempts >= MAX_LOGIN_ATTEMPTS:
+        #     lock_until = now + timedelta(minutes=LOCKOUT_MINUTES)
+        #     detail = "Account locked due to multiple failed attempts. Try again later."
 
         try:
             await prisma.entities.update(

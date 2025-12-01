@@ -89,4 +89,3 @@ async def get_funding_accounts(
         log_message=f"[ZYNK] Failed to fetch funding accounts for entity {current.id} at {url} after multiple attempts",
         user_message="Verification service is currently unavailable. Please try again later.",
     )
-
