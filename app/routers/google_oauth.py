@@ -14,6 +14,26 @@ from ..utils.errors import internal_error
 
 logger = logging.getLogger(__name__)
 
+
+def sanitize_null_bytes(text: str) -> str:
+    """
+    Remove NULL bytes (0x00) from string to prevent PostgreSQL encoding errors.
+    PostgreSQL text/varchar fields cannot contain NULL bytes in UTF-8 encoding.
+    """
+    if not isinstance(text, str):
+        return text
+    return text.replace('\x00', '')
+
+
+def sanitize_string_input(text: str | None) -> str:
+    """
+    Sanitize string input by removing NULL bytes and stripping whitespace.
+    Returns empty string if input is None.
+    """
+    if text is None:
+        return ""
+    return sanitize_null_bytes(str(text).strip())
+
 router = APIRouter(prefix="/auth", tags=["auth"]) 
 # Configure Authlib OAuth client for Google
 oauth = OAuth()
@@ -56,9 +76,10 @@ async def google_callback(request: Request):
     if not userinfo or not userinfo.get("email"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to retrieve Google user info")
 
-    email = userinfo["email"].lower()
-    first_name = userinfo.get("given_name") or ""
-    last_name = userinfo.get("family_name") or ""
+    # Sanitize all string inputs to remove NULL bytes (PostgreSQL doesn't support 0x00 in UTF-8 text fields)
+    email = sanitize_string_input(userinfo["email"]).lower()
+    first_name = sanitize_string_input(userinfo.get("given_name") or "")
+    last_name = sanitize_string_input(userinfo.get("family_name") or "")
 
     # Find or create user
     user = await prisma.entities.find_unique(where={"email": email})

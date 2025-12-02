@@ -36,6 +36,101 @@ LOCKOUT_MINUTES = 15
 CAPTCHA_REQUIRED_ATTEMPTS = 3  # Require CAPTCHA after 3 failed attempts
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def sanitize_null_bytes(text: str | bytes | None) -> str:
+    """
+    Remove NULL bytes (0x00) from string to prevent PostgreSQL encoding errors.
+    PostgreSQL text/varchar fields cannot contain NULL bytes in UTF-8 encoding.
+    Handles str, bytes, and None inputs.
+    Uses multiple methods to ensure complete NULL byte removal.
+    """
+    if text is None:
+        return ""
+    
+    # Convert to string if needed
+    if isinstance(text, bytes):
+        # Remove NULL bytes from bytes first, then decode
+        text = text.replace(b'\x00', b'').replace(b'\0', b'').decode('utf-8', errors='replace')
+    elif not isinstance(text, str):
+        text = str(text)
+    
+    # Multiple passes to ensure complete removal
+    # Method 1: Direct string replacement
+    text = text.replace('\x00', '').replace('\u0000', '').replace('\0', '')
+    
+    # Method 2: Encode/decode cycle to force UTF-8 validation
+    try:
+        # Encode to bytes, filter out NULL bytes
+        text_bytes = text.encode('utf-8', errors='replace')
+        # Remove NULL bytes using replace (Python 3 compatible)
+        text_bytes = text_bytes.replace(b'\x00', b'')
+        text = text_bytes.decode('utf-8', errors='replace')
+    except Exception:
+        # Fallback: use regex if encode/decode fails
+        import re
+        text = re.sub(r'\x00', '', text)
+        text = re.sub(r'\u0000', '', text)
+    
+    # Final check: one more pass with replace
+    text = text.replace('\x00', '').replace('\u0000', '').replace('\0', '')
+    
+    return text
+
+
+def sanitize_string_input(text: str | None) -> str:
+    """
+    Sanitize string input by removing NULL bytes and stripping whitespace.
+    Returns empty string if input is None.
+    """
+    if text is None:
+        return ""
+    # Convert to string first, then sanitize
+    text_str = str(text) if not isinstance(text, str) else text
+    return sanitize_null_bytes(text_str.strip())
+
+
+def sanitize_dict_recursively(data: dict) -> dict:
+    """
+    Recursively sanitize all string values in a dictionary to remove NULL bytes.
+    This ensures no NULL bytes can slip through to the database.
+    """
+    sanitized = {}
+    for key, value in data.items():
+        if isinstance(value, str):
+            # Check byte representation for NULL bytes
+            try:
+                value_bytes = value.encode('utf-8', errors='replace')
+                if b'\x00' in value_bytes:
+                    logger.warning(f"[SIGNUP] NULL byte found in dict key '{key}' at byte level. Original: {repr(value[:50])}")
+                    # Remove NULL bytes at byte level
+                    value_bytes = value_bytes.replace(b'\x00', b'')
+                    value = value_bytes.decode('utf-8', errors='replace')
+                    # Double-check string level
+                    value = value.replace('\x00', '').replace('\u0000', '').replace('\0', '')
+                    logger.info(f"[SIGNUP] Sanitized dict key '{key}'. New length: {len(value)}")
+                else:
+                    # Still sanitize to be safe
+                    value = sanitize_null_bytes(value)
+            except Exception as e:
+                logger.error(f"[SIGNUP] Error sanitizing dict key '{key}': {e}")
+                # Fallback: use sanitize_null_bytes
+                value = sanitize_null_bytes(value)
+        elif isinstance(value, dict):
+            # Recursively sanitize nested dicts
+            value = sanitize_dict_recursively(value)
+        elif value is not None and not isinstance(value, (int, float, bool, datetime)):
+            # For other types, convert to string and sanitize if it's a string-like type
+            try:
+                str_value = str(value)
+                if isinstance(value, (str, bytes)):
+                    value = sanitize_null_bytes(str_value)
+            except Exception:
+                pass  # Keep original value if conversion fails
+        
+        sanitized[key] = value
+    
+    return sanitized
 router = APIRouter(
     prefix="/api/v1/auth",
     tags=["auth"],
@@ -174,14 +269,25 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     Create a new entity (user) with username, email, password.
     Returns access & refresh tokens and sets refresh token as HttpOnly cookie.
     """
-    first_name = user_in.first_name.strip()
-    last_name = user_in.last_name.strip()
-    email = normalize_email(user_in.email)
-    password = user_in.password
-    date_of_birth = user_in.date_of_birth.strip()
-    nationality = user_in.nationality.strip()
-    phone_number = user_in.phone_number.strip()
-    country_code = user_in.country_code.strip()
+    # Sanitize all string inputs to remove NULL bytes (PostgreSQL doesn't support 0x00 in UTF-8 text fields)
+    # IMPORTANT: Sanitize raw input FIRST before any processing
+    logger.info(f"[SIGNUP] Raw inputs - email: {repr(user_in.email[:50])}, first_name: {repr(user_in.first_name[:20])}, last_name: {repr(user_in.last_name[:20])}")
+    first_name = sanitize_string_input(user_in.first_name)
+    last_name = sanitize_string_input(user_in.last_name)
+    # Sanitize email before normalization
+    raw_email = sanitize_string_input(user_in.email)
+    logger.info(f"[SIGNUP] After initial sanitization - email: {repr(raw_email[:50])}")
+    email = normalize_email(raw_email)
+    logger.info(f"[SIGNUP] After normalization - email: {repr(email[:50])}")
+    # Double-check email after normalization
+    email = sanitize_null_bytes(email)
+    logger.info(f"[SIGNUP] After final sanitization - email: {repr(email[:50])}")
+    # Sanitize password before hashing (defensive - passwords shouldn't have NULL bytes but just in case)
+    password = sanitize_null_bytes(user_in.password) if user_in.password else ""
+    date_of_birth = sanitize_string_input(user_in.date_of_birth)
+    nationality = sanitize_string_input(user_in.nationality)
+    phone_number = sanitize_string_input(user_in.phone_number)
+    country_code = sanitize_string_input(user_in.country_code)
     # Extract phone prefix (numeric part without +)
     phone_prefix = country_code.replace('+', '')
 
@@ -207,8 +313,8 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     logger.info(f"[SIGNUP] Signup initiated for email={email[:3]}***")
 
     # Validate CAPTCHA first
-    captcha_id = user_in.captcha_id.strip()
-    captcha_code = user_in.captcha_code.strip()
+    captcha_id = sanitize_string_input(user_in.captcha_id)
+    captcha_code = sanitize_string_input(user_in.captcha_code)
     
     is_valid, error_message = captcha_service.validate_captcha(
         captcha_id=captcha_id,
@@ -241,6 +347,8 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
 
     # Hash password
     pwd_hash = hash_password(password)
+    # Sanitize password hash (bcrypt formatted strings are safe, but defensive programming)
+    pwd_hash = sanitize_null_bytes(pwd_hash)
 
     # FIXED: TOCTOU Race Condition - Create placeholder record FIRST in transaction
     # This uses the database unique constraint as a lock mechanism
@@ -251,33 +359,426 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             # Create placeholder record with PENDING status
             # This will fail with UniqueViolationError if email already exists
             # The unique constraint acts as the lock, preventing race conditions
-            entity = await tx.entities.create(
-                data={
+            # Final sanitization pass - ensure all string fields are clean before DB insert
+            # Build data dict with aggressive NULL byte removal
+            # Test each field individually BEFORE building the dict to identify problematic field
+            logger.info("[SIGNUP] Testing each field for NULL bytes before entity creation...")
+            
+            # Test email
+            email_bytes = email.encode('utf-8', errors='replace')
+            null_byte = b'\x00'
+            if null_byte in email_bytes:
+                null_pos = email_bytes.find(null_byte)
+                logger.error(f"[SIGNUP] PROBLEM FOUND: email contains NULL byte! Position: {null_pos}, Value: {repr(email[:100])}")
+                email = email_bytes.replace(null_byte, b'').decode('utf-8', errors='replace')
+                logger.warning(f"[SIGNUP] Fixed email by removing NULL byte")
+            
+            # Test password hash
+            pwd_hash_bytes = pwd_hash.encode('utf-8', errors='replace')
+            if null_byte in pwd_hash_bytes:
+                null_pos = pwd_hash_bytes.find(null_byte)
+                logger.error(f"[SIGNUP] PROBLEM FOUND: password hash contains NULL byte! Position: {null_pos}, Hash preview: {pwd_hash[:50]}")
+                pwd_hash = pwd_hash_bytes.replace(null_byte, b'').decode('utf-8', errors='replace')
+                logger.warning(f"[SIGNUP] Fixed password hash by removing NULL byte")
+            
+            # Test first_name
+            first_name_bytes = first_name.encode('utf-8', errors='replace')
+            if null_byte in first_name_bytes:
+                null_pos = first_name_bytes.find(null_byte)
+                logger.error(f"[SIGNUP] PROBLEM FOUND: first_name contains NULL byte! Position: {null_pos}, Value: {repr(first_name[:100])}")
+                first_name = first_name_bytes.replace(null_byte, b'').decode('utf-8', errors='replace')
+                logger.warning(f"[SIGNUP] Fixed first_name by removing NULL byte")
+            
+            # Test last_name
+            last_name_bytes = last_name.encode('utf-8', errors='replace')
+            if null_byte in last_name_bytes:
+                null_pos = last_name_bytes.find(null_byte)
+                logger.error(f"[SIGNUP] PROBLEM FOUND: last_name contains NULL byte! Position: {null_pos}, Value: {repr(last_name[:100])}")
+                last_name = last_name_bytes.replace(null_byte, b'').decode('utf-8', errors='replace')
+                logger.warning(f"[SIGNUP] Fixed last_name by removing NULL byte")
+            
+            # Build data dict with tested and sanitized values
+            entity_data = {
                     "email": email,
                     "password": pwd_hash,
                     "first_name": first_name,
                     "last_name": last_name,
-                    "date_of_birth": prisma_date_of_birth,
-                    "nationality": nationality,
-                    "phone_number": phone_number,
-                    "country_code": country_code,
+                "date_of_birth": prisma_date_of_birth,  # DateTime, no sanitization needed
                     "status": "PENDING",  # Placeholder status until Zynk API succeeds (PENDING = user created but zynk entity not created)
                     # zynk_entity_id will be set after Zynk API call
                 }
-            )
+            
+            # Final verification: test the entire dict can be encoded
+            logger.info("[SIGNUP] Final verification - testing all fields together...")
+            for key, val in entity_data.items():
+                if isinstance(val, str):
+                    test_enc = val.encode('utf-8', errors='strict')
+                    if b'\x00' in test_enc:
+                        logger.error(f"[SIGNUP] FINAL CHECK FAILED: '{key}' still has NULL byte after all fixes!")
+                    else:
+                        logger.debug(f"[SIGNUP] Field '{key}' passed final check")
+            
+            # Add optional fields only if they exist, are non-empty, and are sanitized
+            # Don't add empty strings - they might contain NULL bytes
+            if nationality and nationality.strip():
+                sanitized_nationality = sanitize_null_bytes(nationality.strip())
+                if sanitized_nationality:  # Only add if not empty after sanitization
+                    entity_data["nationality"] = sanitized_nationality
+            if phone_number and phone_number.strip():
+                sanitized_phone = sanitize_null_bytes(phone_number.strip())
+                if sanitized_phone:  # Only add if not empty after sanitization
+                    entity_data["phone_number"] = sanitized_phone
+            if country_code and country_code.strip():
+                sanitized_country = sanitize_null_bytes(country_code.strip())
+                if sanitized_country:  # Only add if not empty after sanitization
+                    entity_data["country_code"] = sanitized_country
+            
+            # Comprehensive NULL byte check and removal before database insert
+            # Use recursive sanitization to ensure all string values are clean
+            entity_data = sanitize_dict_recursively(entity_data)
+            
+            # Final verification pass - check each field at byte level
+            for key, value in entity_data.items():
+                if isinstance(value, str):
+                    # Check at byte level (most reliable)
+                    try:
+                        value_bytes = value.encode('utf-8', errors='replace')
+                        if b'\x00' in value_bytes:
+                            logger.error(f"[SIGNUP] CRITICAL: NULL byte still present in '{key}' after sanitization! Value: {repr(value[:100])}")
+                            # Force removal at byte level
+                            value_bytes = value_bytes.replace(b'\x00', b'')
+                            entity_data[key] = value_bytes.decode('utf-8', errors='replace')
+                            logger.warning(f"[SIGNUP] Force-removed NULL bytes from '{key}' at byte level")
+                    except Exception as e:
+                        logger.error(f"[SIGNUP] Error checking NULL bytes in '{key}': {e}")
+            
+            # Final safety: create a completely new dict with sanitized values
+            # Also validate at byte level before passing to Prisma
+            final_entity_data = {}
+            
+            # Test each field individually to identify which one has NULL bytes
+            logger.info("[SIGNUP] Starting field-by-field NULL byte validation...")
+            for key, value in entity_data.items():
+                if isinstance(value, str):
+                    # Check for NULL bytes at byte level BEFORE any processing
+                    try:
+                        original_bytes = value.encode('utf-8', errors='replace')
+                        if b'\x00' in original_bytes:
+                            logger.error(f"[SIGNUP] NULL BYTE FOUND in '{key}' BEFORE sanitization! Length: {len(value)}, Bytes: {original_bytes[:100]}, String repr: {repr(value[:100])}")
+                    except Exception as e:
+                        logger.error(f"[SIGNUP] Error encoding '{key}' to bytes: {e}")
+                    
+                    # One more pass of sanitization
+                    sanitized_value = sanitize_null_bytes(value)
+                    
+                    # Validate at byte level - this is the final check
+                    try:
+                        test_bytes = sanitized_value.encode('utf-8', errors='strict')
+                        if b'\x00' in test_bytes:
+                            logger.error(f"[SIGNUP] CRITICAL ERROR: NULL byte STILL PRESENT in '{key}' after sanitization! Original: {repr(value[:100])}, Sanitized: {repr(sanitized_value[:100])}")
+                            # Emergency fallback: remove at byte level and decode
+                            test_bytes = test_bytes.replace(b'\x00', b'')
+                            sanitized_value = test_bytes.decode('utf-8', errors='replace')
+                            logger.warning(f"[SIGNUP] Emergency NULL byte removal from '{key}' succeeded")
+                        else:
+                            logger.debug(f"[SIGNUP] Field '{key}' validated - no NULL bytes")
+                    except UnicodeEncodeError as e:
+                        logger.error(f"[SIGNUP] UnicodeEncodeError for '{key}': {e}")
+                        # If encoding fails, use replace mode
+                        test_bytes = sanitized_value.encode('utf-8', errors='replace')
+                        test_bytes = test_bytes.replace(b'\x00', b'')
+                        sanitized_value = test_bytes.decode('utf-8', errors='replace')
+                    
+                    # Final verification
+                    final_bytes = sanitized_value.encode('utf-8', errors='replace')
+                    if b'\x00' in final_bytes:
+                        logger.error(f"[SIGNUP] FATAL: NULL byte still in '{key}' after all attempts! Using empty string.")
+                        sanitized_value = ""
+                    
+                    final_entity_data[key] = sanitized_value
+                    logger.info(f"[SIGNUP] Field '{key}' processed - final length: {len(sanitized_value)}")
+                elif value is None:
+                    final_entity_data[key] = None
+                    logger.debug(f"[SIGNUP] Field '{key}' is None")
+                else:
+                    # For non-string values, keep as-is (DateTime, etc.)
+                    final_entity_data[key] = value
+                    logger.debug(f"[SIGNUP] Field '{key}' is non-string type: {type(value)}")
+            
+            # Log all field values for debugging (truncated) - AFTER final sanitization
+            logger.info(f"[SIGNUP] Final entity data summary:")
+            for key, val in final_entity_data.items():
+                if isinstance(val, str):
+                    val_bytes = val.encode('utf-8', errors='replace')
+                    has_null = null_byte in val_bytes
+                    logger.info(f"  {key}: length={len(val)}, has_null_bytes={has_null}, preview={repr(val[:50])}")
+                else:
+                    logger.info(f"  {key}: {type(val).__name__} = {val}")
+            
+            # Try to identify problematic field by testing PostgreSQL encoding
+            import json
+            try:
+                # Test JSON serialization - this will help identify problematic fields
+                json_str = json.dumps(final_entity_data, default=str, ensure_ascii=False)
+                json_bytes = json_str.encode('utf-8')
+                if b'\x00' in json_bytes:
+                    logger.error(f"[SIGNUP] CRITICAL: NULL byte found in JSON serialization! JSON preview: {json_str[:500]}")
+                    # Try to find which field by checking each one
+                    for key, val in final_entity_data.items():
+                        if isinstance(val, str):
+                            test_json = json.dumps({key: val}, default=str)
+                            if b'\x00' in test_json.encode('utf-8'):
+                                logger.error(f"[SIGNUP] FOUND IT! Field '{key}' contains NULL byte in JSON: {repr(val[:200])}")
+            except Exception as json_error:
+                logger.error(f"[SIGNUP] JSON serialization failed: {json_error}")
+            
+            # One more comprehensive check - test each field with PostgreSQL-like encoding
+            problematic_fields = []
+            for key, val in final_entity_data.items():
+                if isinstance(val, str):
+                    try:
+                        # Simulate what PostgreSQL does - encode to UTF-8
+                        pg_bytes = val.encode('utf-8')
+                        if b'\x00' in pg_bytes:
+                            problematic_fields.append(key)
+                            logger.error(f"[SIGNUP] PROBLEMATIC FIELD DETECTED: '{key}' has NULL bytes! Value: {repr(val[:200])}")
+                            # Force fix
+                            pg_bytes = pg_bytes.replace(b'\x00', b'')
+                            final_entity_data[key] = pg_bytes.decode('utf-8', errors='replace')
+                            logger.warning(f"[SIGNUP] Fixed '{key}' by removing NULL bytes")
+                    except Exception as e:
+                        logger.error(f"[SIGNUP] Error testing field '{key}' for PostgreSQL: {e}")
+            
+            if problematic_fields:
+                logger.error(f"[SIGNUP] Found {len(problematic_fields)} problematic fields: {problematic_fields}")
+            else:
+                logger.info("[SIGNUP] All fields validated - no NULL bytes detected")
+            
+            # Final check: Serialize the data exactly as Prisma would to catch any NULL bytes
+            # that might be introduced during serialization
+            import json
+            try:
+                # Prisma uses JSON for serialization, so test that
+                test_json = json.dumps(final_entity_data, default=str, ensure_ascii=False)
+                test_json_bytes = test_json.encode('utf-8')
+                
+                # Log the actual JSON being sent (as ChatGPT suggested)
+                logger.info(f"[SIGNUP] DATA_GOING_TO_DB: {test_json}")
+                
+                if null_byte in test_json_bytes:
+                    logger.error(f"[SIGNUP] CRITICAL: NULL byte found in JSON serialization! This means Prisma will fail.")
+                    # Find which field causes it
+                    for key, val in final_entity_data.items():
+                        test_field_json = json.dumps({key: val}, default=str, ensure_ascii=False)
+                        test_field_bytes = test_field_json.encode('utf-8')
+                        if null_byte in test_field_bytes:
+                            logger.error(f"[SIGNUP] Field '{key}' causes NULL byte in JSON! Value: {repr(str(val)[:200])}, JSON: {test_field_json[:200]}")
+                            # Remove the problematic field or fix it
+                            if isinstance(val, str):
+                                fixed_val = val.encode('utf-8', errors='replace').replace(null_byte, b'').decode('utf-8', errors='replace')
+                                final_entity_data[key] = fixed_val
+                                logger.warning(f"[SIGNUP] Fixed field '{key}' by removing NULL bytes from JSON serialization")
+                else:
+                    logger.info("[SIGNUP] JSON serialization test passed - no NULL bytes in serialized data")
+            except Exception as json_test_error:
+                logger.error(f"[SIGNUP] JSON serialization test failed: {json_test_error}")
+                import traceback
+                logger.error(f"[SIGNUP] Traceback: {traceback.format_exc()}")
+            
+            # Additional check: Test each field's JSON serialization individually
+            logger.info("[SIGNUP] Testing each field's JSON serialization individually...")
+            for key, val in final_entity_data.items():
+                try:
+                    if isinstance(val, str):
+                        field_json = json.dumps({key: val}, default=str, ensure_ascii=False)
+                        field_bytes = field_json.encode('utf-8')
+                        if null_byte in field_bytes:
+                            null_pos = field_bytes.find(null_byte)
+                            logger.error(f"[SIGNUP] FIELD '{key}' HAS NULL BYTE IN JSON at position {null_pos}! JSON: {field_json[:500]}, Raw value: {repr(val)[:200]}")
+                            # Fix it immediately
+                            fixed_val = val.encode('utf-8', errors='replace').replace(null_byte, b'').decode('utf-8', errors='replace')
+                            final_entity_data[key] = fixed_val
+                            logger.warning(f"[SIGNUP] Fixed field '{key}' after JSON test")
+                        else:
+                            logger.debug(f"[SIGNUP] Field '{key}' JSON serialization OK")
+                except Exception as field_error:
+                    logger.error(f"[SIGNUP] Error serializing field '{key}': {field_error}")
+            
+            # Final byte-level check: Check the actual bytes that will be sent to Prisma
+            # Prisma might serialize differently than Python's json.dumps, so we need to be extra careful
+            logger.info("[SIGNUP] Performing final byte-level validation of all values...")
+            for key, val in final_entity_data.items():
+                if isinstance(val, str):
+                    # Check the actual string bytes
+                    val_bytes = val.encode('utf-8', errors='strict')
+                    if null_byte in val_bytes:
+                        null_pos = val_bytes.find(null_byte)
+                        logger.error(f"[SIGNUP] CRITICAL: Field '{key}' has NULL byte at position {null_pos} in UTF-8 encoding!")
+                        logger.error(f"[SIGNUP] Field '{key}' value (first 200 chars): {repr(val[:200])}")
+                        logger.error(f"[SIGNUP] Field '{key}' bytes (first 200): {val_bytes[:200]}")
+                        # Force fix
+                        fixed_bytes = val_bytes.replace(null_byte, b'')
+                        final_entity_data[key] = fixed_bytes.decode('utf-8', errors='replace')
+                        logger.warning(f"[SIGNUP] Fixed field '{key}' by removing NULL byte")
+                    # Also check if the string representation has any issues
+                    if '\x00' in val or '\u0000' in val:
+                        logger.error(f"[SIGNUP] CRITICAL: Field '{key}' contains NULL byte in string representation!")
+                        final_entity_data[key] = val.replace('\x00', '').replace('\u0000', '')
+                        logger.warning(f"[SIGNUP] Fixed field '{key}' by removing NULL byte from string")
+            
+            # One more check: Re-encode everything to ensure no NULL bytes slip through
+            logger.info("[SIGNUP] Re-encoding all string fields to ensure clean UTF-8...")
+            for key, val in final_entity_data.items():
+                if isinstance(val, str):
+                    try:
+                        # Encode and decode to force UTF-8 validation
+                        encoded = val.encode('utf-8', errors='strict')
+                        # Remove any NULL bytes that might have been introduced
+                        encoded = encoded.replace(null_byte, b'')
+                        decoded = encoded.decode('utf-8', errors='strict')
+                        if decoded != val:
+                            logger.warning(f"[SIGNUP] Field '{key}' was modified during re-encoding (NULL bytes removed)")
+                        final_entity_data[key] = decoded
+                    except UnicodeError as e:
+                        logger.error(f"[SIGNUP] Unicode error in field '{key}': {e}")
+                        # Fallback: use replace mode
+                        encoded = val.encode('utf-8', errors='replace')
+                        encoded = encoded.replace(null_byte, b'')
+                        final_entity_data[key] = encoded.decode('utf-8', errors='replace')
+            
+            # Try creating with minimal required fields first to isolate the problem
+            # If this works, we know the issue is with an optional field
+            minimal_data = {
+                "email": final_entity_data["email"],
+                "password": final_entity_data["password"],
+                "first_name": final_entity_data["first_name"],
+                "last_name": final_entity_data["last_name"],
+                "status": final_entity_data["status"],
+            }
+
+            # Log exactly what's in minimal_data before creating
+            logger.info(f"[SIGNUP] Minimal data fields: {list(minimal_data.keys())}")
+            for key, val in minimal_data.items():
+                if isinstance(val, str):
+                    val_bytes = val.encode('utf-8', errors='replace')
+                    has_null = null_byte in val_bytes
+                    logger.info(f"[SIGNUP] Minimal field '{key}': has_null={has_null}, length={len(val)}, bytes_sample={val_bytes[:50] if val_bytes else b''}")
+                else:
+                    logger.info(f"[SIGNUP] Minimal field '{key}': {type(val).__name__} = {val}")
+
+            # Add JSON logging
+            logger.info(f"[SIGNUP] Minimal data JSON: {json.dumps(minimal_data, default=str)}")
+
+            # Final manual check for NULL bytes in minimal data
+            logger.info("[SIGNUP] Manual NULL byte check on minimal data...")
+            for key, val in minimal_data.items():
+                if isinstance(val, str):
+                    # Check each character manually
+                    null_chars = []
+                    for i, char in enumerate(val):
+                        if ord(char) == 0:
+                            null_chars.append(i)
+
+                    if null_chars:
+                        logger.error(f"[SIGNUP] FOUND NULL CHARACTERS in '{key}' at positions: {null_chars}")
+                        logger.error(f"[SIGNUP] Full value: {repr(val)}")
+                    else:
+                        logger.info(f"[SIGNUP] No NULL characters found in '{key}' (length: {len(val)})")
+
+                    # Also check UTF-8 bytes
+                    val_bytes = val.encode('utf-8', errors='replace')
+                    null_positions = []
+                    for i, byte_val in enumerate(val_bytes):
+                        if byte_val == 0:
+                            null_positions.append(i)
+
+                    if null_positions:
+                        logger.error(f"[SIGNUP] FOUND NULL BYTES in '{key}' at byte positions: {null_positions}")
+                        logger.error(f"[SIGNUP] Bytes around null: {val_bytes[max(0, null_positions[0]-10):null_positions[0]+10]}")
+                    else:
+                        logger.info(f"[SIGNUP] No NULL bytes found in '{key}' UTF-8 encoding")
+
+            logger.info("[SIGNUP] Attempting entity creation with minimal required fields first...")
+            try:
+                logger.info("[SIGNUP] Attempting to create entity with minimal fields...")
+                entity = await tx.entities.create(data=minimal_data)
+                logger.info(f"[SIGNUP] Success with minimal fields! Entity ID: {entity.id}. Now updating with optional fields...")
+
+                # If minimal works, update with optional fields one by one to isolate which causes the issue
+                update_data = {}
+                if "date_of_birth" in final_entity_data:
+                    logger.info(f"[SIGNUP] Adding date_of_birth: {final_entity_data['date_of_birth']}")
+                    update_data["date_of_birth"] = final_entity_data["date_of_birth"]
+                if "nationality" in final_entity_data:
+                    logger.info(f"[SIGNUP] Adding nationality: {final_entity_data['nationality']}")
+                    update_data["nationality"] = final_entity_data["nationality"]
+                if "phone_number" in final_entity_data:
+                    logger.info(f"[SIGNUP] Adding phone_number: {final_entity_data['phone_number']}")
+                    update_data["phone_number"] = final_entity_data["phone_number"]
+                if "country_code" in final_entity_data:
+                    logger.info(f"[SIGNUP] Adding country_code: {final_entity_data['country_code']}")
+                    update_data["country_code"] = final_entity_data["country_code"]
+
+                if update_data:
+                    logger.info(f"[SIGNUP] Updating with optional fields: {list(update_data.keys())}")
+
+                    # Sanitize update_data before the update operation
+                    sanitized_update_data = {}
+                    for key, value in update_data.items():
+                        if isinstance(value, str):
+                            sanitized_value = sanitize_null_bytes(value)
+                            sanitized_update_data[key] = sanitized_value
+                            # Log if sanitization changed the value
+                            if sanitized_value != value:
+                                logger.warning(f"[SIGNUP] Field '{key}' was sanitized during update: '{value}' -> '{sanitized_value}'")
+                        elif hasattr(value, 'isoformat'):  # datetime objects
+                            # Check if datetime object serialization introduces NULL bytes
+                            try:
+                                # Try passing the datetime object directly first
+                                sanitized_update_data[key] = value
+                                logger.info(f"[SIGNUP] Using datetime object directly for '{key}': {value}")
+                            except Exception as dt_error:
+                                # If that fails, convert to string
+                                iso_string = value.isoformat()
+                                logger.warning(f"[SIGNUP] Datetime object failed, using ISO string: {dt_error}")
+                                sanitized_iso = sanitize_null_bytes(iso_string)
+                                sanitized_update_data[key] = sanitized_iso
+                        else:
+                            sanitized_update_data[key] = value
+
+                    # Log the sanitized update data
+                    logger.info(f"[SIGNUP] Sanitized update data: {json.dumps(sanitized_update_data, default=str)}")
+
+                    entity = await tx.entities.update(
+                        where={"id": entity.id},
+                        data=sanitized_update_data
+                    )
+                    logger.info("[SIGNUP] Successfully updated with optional fields")
+                else:
+                    logger.info("[SIGNUP] No optional fields to update")
+
+            except Exception as minimal_error:
+                logger.error(f"[SIGNUP] Failed even with minimal fields: {minimal_error}")
+                logger.error(f"[SIGNUP] Minimal error type: {type(minimal_error)}")
+                import traceback
+                logger.error(f"[SIGNUP] Minimal error traceback: {traceback.format_exc()}")
+
+                # If minimal fails, try with all fields (original behavior)
+                logger.info("[SIGNUP] Retrying with all fields...")
+                entity = await tx.entities.create(data=final_entity_data)
             # Transaction commits here, entity is now locked by unique constraint
 
         # Now call external API (outside transaction to avoid long-running transaction)
         # If this fails, we'll need to clean up the placeholder record
         zynk_payload = {
-            "firstName": first_name,
-            "lastName": last_name,
-            "email": email,
-            "dateOfBirth": zynk_date_of_birth,
-            "nationality": nationality,
-            "phoneNumber": phone_number,
-            "phoneNumberPrefix": phone_prefix,
-            "countryCode": country_code,
+            "firstName": sanitize_null_bytes(first_name),
+            "lastName": sanitize_null_bytes(last_name),
+            "email": sanitize_null_bytes(email),
+            "dateOfBirth": sanitize_null_bytes(zynk_date_of_birth) if zynk_date_of_birth else None,
+            "nationality": sanitize_null_bytes(nationality) if nationality else None,
+            "phoneNumber": sanitize_null_bytes(phone_number) if phone_number else None,
+            "phoneNumberPrefix": sanitize_null_bytes(phone_prefix) if phone_prefix else None,
+            "countryCode": sanitize_null_bytes(country_code) if country_code else None,
             "type": "individual"
         }
 
@@ -299,6 +800,8 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
                         "status": "ACTIVE",  # Set to ACTIVE after successful Zynk creation
                     }
                 )
+                # Transaction commits here - entity is now ACTIVE with zynk_entity_id
+            
         except Exception as e:
             # Cleanup: Delete placeholder record if external API fails
             try:

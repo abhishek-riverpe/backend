@@ -364,6 +364,149 @@ class EmailService:
             return False
 
 
+    async def send_funding_account_created_notification(
+        self,
+        email: str,
+        user_name: str,
+        account_details: Dict[str, Any]
+    ) -> bool:
+        """
+        Send funding account created notification email.
+        
+        Args:
+            email: Recipient email address
+            user_name: User's full name
+            account_details: Funding account details from Zynk API
+            
+        Returns:
+            bool: True if email sent successfully, False otherwise
+        """
+        # Extract account details
+        bank_name = account_details.get("bankName", "N/A")
+        account_number = account_details.get("bankAccountNumber", "N/A")
+        routing_number = account_details.get("bankRoutingNumber", "N/A")
+        currency = account_details.get("currency", "USD")
+        bank_address = account_details.get("bankAddress", "N/A")
+        beneficiary_name = account_details.get("bankBeneficiaryName", "N/A")
+        
+        # Create email HTML body
+        email_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background-color: #28a745; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
+        .content {{ background-color: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none; }}
+        .success-box {{ background-color: #d4edda; border-left: 4px solid #28a745; padding: 15px; margin: 20px 0; }}
+        .info-box {{ background-color: #e7f3ff; border-left: 4px solid #1F73FF; padding: 15px; margin: 15px 0; }}
+        .detail-row {{ margin: 10px 0; padding: 10px; background-color: white; border-radius: 4px; }}
+        .detail-label {{ font-weight: bold; color: #555; }}
+        .detail-value {{ color: #333; margin-top: 5px; font-family: monospace; }}
+        .footer {{ text-align: center; padding: 20px; color: #666; font-size: 12px; }}
+        .button {{ display: inline-block; padding: 12px 24px; background-color: #1F73FF; color: white; text-decoration: none; border-radius: 4px; margin: 20px 0; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✅ Funding Account Created</h1>
+        </div>
+        <div class="content">
+            <p>Hello {user_name},</p>
+            
+            <div class="success-box">
+                <strong>🎉 Great News!</strong><br>
+                Your funding account has been successfully created and is now ready to use.
+            </div>
+            
+            <p>You can now receive payments and manage your funds through RiverPe. Below are your funding account details:</p>
+            
+            <h3>Account Details:</h3>
+            <div class="info-box">
+                <div class="detail-row">
+                    <div class="detail-label">Bank Name:</div>
+                    <div class="detail-value">{bank_name}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Account Number:</div>
+                    <div class="detail-value">{account_number}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Routing Number:</div>
+                    <div class="detail-value">{routing_number}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Currency:</div>
+                    <div class="detail-value">{currency}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Beneficiary Name:</div>
+                    <div class="detail-value">{beneficiary_name}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Bank Address:</div>
+                    <div class="detail-value">{bank_address}</div>
+                </div>
+            </div>
+            
+            <h3>Next Steps:</h3>
+            <ul>
+                <li>You can now start receiving payments to this account</li>
+                <li>Use this account information to set up direct deposits</li>
+                <li>Monitor your transactions in the RiverPe app</li>
+                <li>Contact support if you have any questions</li>
+            </ul>
+            
+            <div class="info-box">
+                <strong>📋 Important Notes:</strong>
+                <ul style="margin: 10px 0; padding-left: 20px;">
+                    <li>Keep your account details secure and confidential</li>
+                    <li>Only share these details with trusted payment sources</li>
+                    <li>Report any suspicious activity immediately</li>
+                </ul>
+            </div>
+            
+            <p>If you have any questions or need assistance, our support team is here to help.</p>
+            
+            <p>Best regards,<br>
+            <strong>RiverPe Team</strong></p>
+        </div>
+        <div class="footer">
+            <p>This is an automated notification. Please do not reply to this email.</p>
+            <p>&copy; 2024 RiverPe. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+        """
+        
+        try:
+            if not self.mail_config:
+                logger.info(f"[EMAIL] MOCK - Funding account created notification to {email}")
+                logger.info(f"[EMAIL] Bank: {bank_name}, Account: {account_number}, Routing: {routing_number}")
+                return True
+            
+            # Create email message
+            message = MessageSchema(
+                subject="✅ Funding Account Created Successfully",
+                recipients=[email],
+                body=email_html,
+                subtype="html"
+            )
+            
+            # Send email
+            await self.fast_mail.send_message(message)
+            logger.info(f"[EMAIL] Funding account notification sent successfully to {email}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[EMAIL] Error sending funding account notification: {str(e)}", exc_info=True)
+            return False
+
+
 # Global instance
 email_service = EmailService()
 

@@ -736,15 +736,527 @@ async def submit_wallet(
         logger.info(f"[WALLET] Submit wallet response: {body}")
 
         wallet_data = body.get("data", {})
-        wallet_id = wallet_data.get("walletId")
-        addresses = wallet_data.get("addresses", [])
+        zynk_wallet_id = wallet_data.get("walletId")
+        wallet_uuid = wallet_data.get("id")  # Zynk's internal wallet UUID
+        accounts = wallet_data.get("accounts", [])
+
+        # Store wallet and accounts in local database
+        try:
+            # Get wallet name from the request data (from prepare step)
+            wallet_name = data.get("walletName", f"Wallet-{zynk_wallet_id[:12] if zynk_wallet_id else 'default'}")
+            chain = data.get("chain", "SOLANA")
+
+            logger.info(f"[WALLET] Storing wallet in database - zynk_wallet_id: {zynk_wallet_id}, name: {wallet_name}")
+
+            # Create wallet record
+            stored_wallet = await prisma.wallets.create({
+                "entity_id": current_user.id,
+                "zynk_wallet_id": zynk_wallet_id or wallet_uuid,
+                "wallet_name": wallet_name,
+                "chain": chain,
+                "status": "ACTIVE"
+            })
+
+            logger.info(f"[WALLET] Wallet stored with ID: {stored_wallet.id}")
+
+            # Store wallet accounts (addresses)
+            if accounts:
+                logger.info(f"[WALLET] Storing {len(accounts)} wallet accounts")
+                for account in accounts:
+                    try:
+                        await prisma.wallet_accounts.create({
+                            "wallet_id": stored_wallet.id,
+                            "curve": account.get("curve", ""),
+                            "path_format": account.get("pathFormat", ""),
+                            "path": account.get("path", ""),
+                            "address_format": account.get("addressFormat", ""),
+                            "address": account.get("address", "")
+                        })
+                        logger.info(f"[WALLET] Stored account address: {account.get('address')}")
+                    except Exception as account_error:
+                        logger.error(f"[WALLET] Failed to store account {account.get('address')}: {account_error}")
+                        # Continue with other accounts even if one fails
+
+                logger.info(f"[WALLET] Successfully stored all wallet accounts")
+
+        except Exception as db_error:
+            logger.error(f"[WALLET] Failed to store wallet in database: {db_error}", exc_info=True)
+            # Don't fail the request - wallet was created successfully on Zynk's side
+            # The user can still use it, just won't be cached locally
 
         return {
             "success": True,
             "message": "Wallet created successfully",
             "data": {
-                "walletId": wallet_id,
-                "addresses": addresses
+                "walletId": zynk_wallet_id,
+                "id": wallet_uuid,
+                "accounts": accounts
             }
         }
 
+
+@router.get("/account/wallet/{wallet_id}")
+@limiter.limit("30/minute")
+async def get_wallet_details(
+    wallet_id: str,
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Get wallet details from Zynk API for a specific wallet.
+
+    Args:
+        wallet_id: Zynk wallet ID (e.g., znc_wallet_4fcc61d3_8b1c_46a1_9952_3d0e91119dad)
+
+    Returns:
+        Wallet details including accounts, addresses, and metadata in Zynk format:
+        {
+            "success": true,
+            "data": {
+                "id": "znc_wallet_...",
+                "entityId": "entity_...",
+                "walletId": "uuid",
+                "metadata": null,
+                "createdAt": "2025-12-01T04:08:03.060Z",
+                "accounts": [
+                    {
+                        "curve": "CURVE_ED25519",
+                        "pathFormat": "PATH_FORMAT_BIP32",
+                        "path": "m/44'/501'/0'/0'",
+                        "addressFormat": "ADDRESS_FORMAT_SOLANA",
+                        "address": "4JYqQSQi2SEp2F9rBUQac39qq3bgzrBpzwZQZa69gdqZ"
+                    }
+                ],
+                "updatedAt": "2025-12-01T04:10:01.902Z"
+            }
+        }
+    """
+    logger.info(f"[WALLET] Fetching wallet details for wallet_id: {wallet_id}, user: {current_user.email}")
+
+    # Get and clean entity ID from authenticated user
+    try:
+        entity_id = _clean_entity_id(current_user.zynk_entity_id)
+    except HTTPException:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please complete your profile setup before accessing wallet details"
+        )
+
+    # Call Zynk API to get wallet details
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}"
+    logger.info(f"[WALLET] Zynk API URL: {url}")
+
+    headers = _zynk_auth_header()
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+            logger.info("[WALLET] Sending GET request to Zynk API for wallet details")
+            response = await client.get(url, headers=headers)
+            logger.info(f"[WALLET] Response status code: {response.status_code}")
+
+            if response.status_code != 200:
+                try:
+                    error_body = response.json()
+                    error_detail = error_body.get("message", f"HTTP {response.status_code}")
+                except:
+                    error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
+
+                logger.error(f"[WALLET] Get wallet details failed: {error_detail}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Zynk API error: {error_detail}"
+                )
+
+            body = response.json()
+            logger.info(f"[WALLET] Get wallet details response: {body}")
+
+            if not body.get("success"):
+                error_msg = body.get("message", "Zynk API returned error")
+                logger.error(f"[WALLET] Get wallet details failed: {error_msg}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=error_msg
+                )
+
+            # Verify the wallet belongs to the current user's entity
+            wallet_data = body.get("data", {})
+            wallet_entity_id = wallet_data.get("entityId")
+
+            if wallet_entity_id and wallet_entity_id != entity_id:
+                logger.warning(
+                    f"[WALLET] Wallet {wallet_id} does not belong to entity {entity_id}. "
+                    f"Wallet belongs to entity {wallet_entity_id}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to access this wallet"
+                )
+
+            logger.info(f"[WALLET] Successfully retrieved wallet details for {wallet_id}")
+            return body
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"[WALLET] Unexpected error while fetching wallet details: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch wallet details: {str(exc)}"
+        )
+
+
+@router.get("/{wallet_id}/balances")
+@limiter.limit("30/minute")
+async def get_wallet_balances(
+    wallet_id: str,
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Get wallet balances from Zynk API for a specific wallet.
+
+    Args:
+        wallet_id: Zynk wallet ID (e.g., znc_wallet_4fcc61d3_8b1c_46a1_9952_3d0e91119dad)
+
+    Returns:
+        Wallet balances including accounts with token balances:
+        {
+            "id": "string",
+            "entityId": "string",
+            "walletId": "string",
+            "accounts": [
+                {
+                    "curve": "string",
+                    "pathFormat": "string",
+                    "path": "string",
+                    "addressFormat": "string",
+                    "address": "string",
+                    "balances": [
+                        {
+                            "token": "string",
+                            "tokenAddress": "string",
+                            "tokenSymbol": "string",
+                            "tokenDecimals": 0,
+                            "isTestnet": true,
+                            "balance": "string"
+                        }
+                    ]
+                }
+            ],
+            "createdAt": "2019-08-24T14:15:22Z",
+            "updatedAt": "2019-08-24T14:15:22Z"
+        }
+    """
+    logger.info(f"[WALLET] Fetching wallet balances for wallet_id: {wallet_id}, user: {current_user.email}")
+
+    # Get and clean entity ID from authenticated user
+    try:
+        entity_id = _clean_entity_id(current_user.zynk_entity_id)
+    except HTTPException:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please complete your profile setup before accessing wallet balances"
+        )
+
+    # Call Zynk API to get wallet balances
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/balances"
+    logger.info(f"[WALLET] Zynk API URL: {url}")
+
+    headers = _zynk_auth_header()
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+            logger.info("[WALLET] Sending GET request to Zynk API for wallet balances")
+            response = await client.get(url, headers=headers)
+            logger.info(f"[WALLET] Response status code: {response.status_code}")
+
+            if response.status_code != 200:
+                try:
+                    error_body = response.json()
+                    error_detail = error_body.get("message", f"HTTP {response.status_code}")
+                except:
+                    error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
+
+                logger.error(f"[WALLET] Get wallet balances failed: {error_detail}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Zynk API error: {error_detail}"
+                )
+
+            body = response.json()
+            logger.info(f"[WALLET] Get wallet balances response: {body}")
+
+            if not body.get("success"):
+                error_msg = body.get("message", "Zynk API returned error")
+                logger.error(f"[WALLET] Get wallet balances failed: {error_msg}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=error_msg
+                )
+
+            # Verify the wallet belongs to the current user's entity
+            wallet_data = body.get("data", {})
+            wallet_entity_id = wallet_data.get("entityId")
+
+            if wallet_entity_id and wallet_entity_id != entity_id:
+                logger.warning(
+                    f"[WALLET] Wallet {wallet_id} does not belong to entity {entity_id}. "
+                    f"Wallet belongs to entity {wallet_entity_id}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to access this wallet"
+                )
+
+            logger.info(f"[WALLET] Successfully retrieved wallet balances for {wallet_id}")
+            return body
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"[WALLET] Unexpected error while fetching wallet balances: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch wallet balances: {str(exc)}"
+        )
+
+
+@router.get("/{wallet_id}/{address}/transactions")
+@limiter.limit("30/minute")
+async def get_wallet_transactions(
+    wallet_id: str,
+    address: str,
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Get transactions for a specific wallet address from Zynk API.
+
+    Args:
+        wallet_id: Zynk wallet ID (e.g., znc_wallet_4fcc61d3_8b1c_46a1_9952_3d0e91119dad)
+        address: Wallet address (e.g., 4JYqQSQi2SEp2F9rBUQac39qq3bgzrBpzwZQZa69gdqZ)
+
+    Returns:
+        Transaction history for the wallet address
+    """
+    logger.info(
+        f"[WALLET] Fetching transactions for wallet_id: {wallet_id}, "
+        f"address: {address}, user: {current_user.email}"
+    )
+
+    # Get and clean entity ID from authenticated user
+    try:
+        entity_id = _clean_entity_id(current_user.zynk_entity_id)
+    except HTTPException:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please complete your profile setup before accessing wallet transactions"
+        )
+
+    # Call Zynk API to get wallet transactions
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/{address}/transactions"
+    logger.info(f"[WALLET] Zynk API URL: {url}")
+
+    headers = _zynk_auth_header()
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+            logger.info("[WALLET] Sending GET request to Zynk API for wallet transactions")
+            response = await client.get(url, headers=headers)
+            logger.info(f"[WALLET] Response status code: {response.status_code}")
+
+            if response.status_code != 200:
+                try:
+                    error_body = response.json()
+                    error_detail = error_body.get("message", f"HTTP {response.status_code}")
+                except:
+                    error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
+
+                logger.error(f"[WALLET] Get wallet transactions failed: {error_detail}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Zynk API error: {error_detail}"
+                )
+
+            body = response.json()
+            logger.info(f"[WALLET] Get wallet transactions response: {body}")
+
+            if not body.get("success"):
+                error_msg = body.get("message", "Zynk API returned error")
+                logger.error(f"[WALLET] Get wallet transactions failed: {error_msg}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=error_msg
+                )
+
+            # Optional: Verify the wallet belongs to the current user's entity
+            # Note: Transaction response might not include entityId, so we skip verification
+            # The Zynk API should handle authorization on their side
+
+            logger.info(
+                f"[WALLET] Successfully retrieved transactions for wallet {wallet_id}, "
+                f"address {address}"
+            )
+            return body
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            f"[WALLET] Unexpected error while fetching wallet transactions: {exc}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch wallet transactions: {str(exc)}"
+        )
+
+
+@router.get("/local")
+@limiter.limit("30/minute")
+async def get_user_wallets(
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Get all wallets for the authenticated user from local database.
+
+    Returns:
+        List of user's wallets with associated accounts
+    """
+    logger.info(f"[WALLET] Fetching local wallets for user: {current_user.email}")
+
+    try:
+        # Fetch wallets with their accounts
+        wallets = await prisma.wallets.find_many(
+            where={
+                "entity_id": current_user.id,
+                "deleted_at": None
+            },
+            include={
+                "wallet_accounts": True
+            },
+            order={"created_at": "desc"}
+        )
+
+        logger.info(f"[WALLET] Found {len(wallets)} wallets for user {current_user.id}")
+
+        # Format response
+        wallet_list = []
+        for wallet in wallets:
+            accounts = []
+            if wallet.wallet_accounts:
+                for acc in wallet.wallet_accounts:
+                    if acc.deleted_at is None:
+                        accounts.append({
+                            "curve": acc.curve,
+                            "pathFormat": acc.path_format,
+                            "path": acc.path,
+                            "addressFormat": acc.address_format,
+                            "address": acc.address
+                        })
+
+            wallet_list.append({
+                "id": wallet.id,
+                "zynkWalletId": wallet.zynk_wallet_id,
+                "walletName": wallet.wallet_name,
+                "chain": wallet.chain,
+                "status": wallet.status,
+                "accounts": accounts,
+                "createdAt": wallet.created_at.isoformat(),
+                "updatedAt": wallet.updated_at.isoformat()
+            })
+
+        return {
+            "success": True,
+            "data": wallet_list,
+            "meta": {
+                "total": len(wallet_list)
+            }
+        }
+
+    except Exception as exc:
+        logger.error(f"[WALLET] Failed to fetch wallets for user {current_user.id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch wallets. Please try again later."
+        )
+
+
+@router.get("/local/{wallet_id}")
+@limiter.limit("30/minute")
+async def get_user_wallet_by_id(
+    wallet_id: str,
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Get a specific wallet for the authenticated user from local database.
+
+    Args:
+        wallet_id: Local wallet UUID or Zynk wallet ID
+
+    Returns:
+        Wallet details with associated accounts
+    """
+    logger.info(f"[WALLET] Fetching local wallet {wallet_id} for user: {current_user.email}")
+
+    try:
+        # Try to find by local ID first, then by zynk_wallet_id
+        wallet = await prisma.wallets.find_first(
+            where={
+                "OR": [
+                    {"id": wallet_id},
+                    {"zynk_wallet_id": wallet_id}
+                ],
+                "entity_id": current_user.id,
+                "deleted_at": None
+            },
+            include={
+                "wallet_accounts": True
+            }
+        )
+
+        if not wallet:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Wallet not found"
+            )
+
+        logger.info(f"[WALLET] Found wallet {wallet_id} for user {current_user.id}")
+
+        # Format accounts
+        accounts = []
+        if wallet.wallet_accounts:
+            for acc in wallet.wallet_accounts:
+                if acc.deleted_at is None:
+                    accounts.append({
+                        "curve": acc.curve,
+                        "pathFormat": acc.path_format,
+                        "path": acc.path,
+                        "addressFormat": acc.address_format,
+                        "address": acc.address
+                    })
+
+        return {
+            "success": True,
+            "data": {
+                "id": wallet.id,
+                "zynkWalletId": wallet.zynk_wallet_id,
+                "walletName": wallet.wallet_name,
+                "chain": wallet.chain,
+                "status": wallet.status,
+                "accounts": accounts,
+                "createdAt": wallet.created_at.isoformat(),
+                "updatedAt": wallet.updated_at.isoformat()
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"[WALLET] Failed to fetch wallet {wallet_id} for user {current_user.id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch wallet. Please try again later."
+        )

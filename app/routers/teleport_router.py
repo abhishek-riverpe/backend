@@ -32,12 +32,15 @@ async def create_teleport(
     Ensures that users can only create teleports for their own accounts.
     """
     # Ensure the entity has a zynk_entity_id set (means it's linked to ZyncLab)
-    # zynk_entity_id = getattr(current, "zynk_entity_id", None) or getattr(current, "external_entity_id", None)
-    # if not zynk_entity_id:
-    #     raise HTTPException(
-    #         status_code=404, 
-    #         detail="Entity not linked to external service. Please complete the entity creation process."
-    #     )
+    zynk_entity_id = getattr(current, "zynk_entity_id", None) or getattr(current, "external_entity_id", None)
+    if not zynk_entity_id:
+        raise HTTPException(
+            status_code=404, 
+            detail="Entity not linked to external service. Please complete the entity creation process."
+        )
+    
+    # Clean the entity ID to remove any whitespace/newlines
+    zynk_entity_id = str(zynk_entity_id).strip().replace('\n', '').replace('\r', '')
     
     # Construct the URL using the zynk_entity_id for the upstream call
     # Based on funding account pattern: /api/v1/transformer/accounts/{entity_id}/funding_accounts

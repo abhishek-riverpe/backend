@@ -181,7 +181,7 @@ async def get_current_entity(request: Request, token: Optional[str] = Depends(oa
                 login_attempts, locked_until, encrypted_data, encryption_key_id, status,
                 created_at, updated_at, deleted_at
             FROM entities
-            WHERE id = $1
+            WHERE id = $1::uuid
         """
         raw_user_data = await prisma.query_raw(raw_query, entity_id)
         if raw_user_data:
