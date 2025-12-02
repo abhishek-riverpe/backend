@@ -10,7 +10,7 @@ import uuid
 from typing import Optional, Dict, Any
 from ..core.config import settings
 from ..core.database import prisma
-from prisma.enums import WebhookEventCategory, KycStatusEnum
+from prisma.enums import WebhookEventCategory, KycStatusEnum, AccountStatusEnum
 from datetime import datetime, timezone
 try:
     from prisma import types
@@ -432,6 +432,86 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
             f"[WEBHOOK] Updated KYC session {kyc_session.id} status to {kyc_status.value} "
             f"(routing_id: {routing_id}, entity_id: {entity.id})"
         )
+        
+        # Automatically create funding account when KYC is approved
+        if kyc_status == KycStatusEnum.APPROVED:
+            try:
+                # Check if funding account already exists
+                existing_funding_account = await prisma.funding_accounts.find_first(
+                    where={"entity_id": str(entity.id), "deleted_at": None}
+                )
+                
+                if existing_funding_account:
+                    logger.info(
+                        f"[WEBHOOK] Funding account already exists for entity_id={entity.id}, "
+                        f"skipping auto-creation"
+                    )
+                elif entity.zynk_entity_id:
+                    # Import here to avoid circular dependencies
+                    from ..services.zynk_client import create_funding_account_from_zynk
+                    from ..services.funding_account_service import save_funding_account_to_db, US_FUNDING_JURISDICTION_ID
+                    from ..services.email_service import email_service
+                    
+                    logger.info(
+                        f"[WEBHOOK] KYC approved for entity_id={entity.id}. "
+                        f"Auto-creating funding account via Zynk Labs API."
+                    )
+                    
+                    # Create funding account via Zynk Labs
+                    zynk_response_data = await create_funding_account_from_zynk(
+                        entity.zynk_entity_id,
+                        US_FUNDING_JURISDICTION_ID
+                    )
+                    
+                    # Save to database using shared service function
+                    funding_account = await save_funding_account_to_db(str(entity.id), zynk_response_data)
+                    logger.info(
+                        f"[WEBHOOK] Successfully created funding account {funding_account.id} "
+                        f"for entity_id={entity.id} after KYC approval"
+                    )
+                    
+                    # Send email notification
+                    try:
+                        account_info = zynk_response_data.get("accountInfo", {})
+                        user_name = f"{entity.first_name or ''} {entity.last_name or ''}".strip() or "User"
+                        currency = account_info.get("currency", "USD").upper()
+                        email_sent = await email_service.send_funding_account_created_notification(
+                            email=entity.email,
+                            user_name=user_name,
+                            bank_name=account_info.get("bank_name", ""),
+                            bank_account_number=account_info.get("bank_account_number", ""),
+                            bank_routing_number=account_info.get("bank_routing_number", ""),
+                            currency=currency,
+                            timestamp=datetime.now(timezone.utc),
+                        )
+                        if email_sent:
+                            logger.info(
+                                f"[WEBHOOK] Funding account creation email sent to {entity.email}"
+                            )
+                        else:
+                            logger.warning(
+                                f"[WEBHOOK] Failed to send funding account creation email to {entity.email}"
+                            )
+                    except Exception as email_exc:
+                        # Don't fail webhook processing if email fails
+                        logger.error(
+                            f"[WEBHOOK] Error sending funding account creation email: {email_exc}",
+                            exc_info=email_exc,
+                        )
+                else:
+                    logger.warning(
+                        f"[WEBHOOK] Entity {entity.id} not linked to Zynk Labs. "
+                        f"Cannot auto-create funding account."
+                    )
+                    
+            except Exception as funding_exc:
+                # Log error but don't fail webhook processing
+                # Funding account creation can be retried later via manual endpoint
+                logger.error(
+                    f"[WEBHOOK] Error auto-creating funding account for entity_id={entity.id} "
+                    f"after KYC approval: {funding_exc}",
+                    exc_info=funding_exc,
+                )
         
     except Exception as e:
         logger.error(f"[WEBHOOK] Error updating KYC status from webhook: {e}", exc_info=True)

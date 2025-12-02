@@ -486,6 +486,140 @@ class EmailService:
             logger.error(f"[EMAIL] Error sending KYC link email: {str(e)}", exc_info=True)
             return False
 
+    async def send_funding_account_created_notification(
+        self,
+        email: str,
+        user_name: str,
+        bank_name: str,
+        bank_account_number: str,
+        bank_routing_number: str,
+        currency: str = "USD",
+        timestamp: Optional[datetime] = None
+    ) -> bool:
+        """
+        Send funding account creation notification email with account details.
+        
+        Args:
+            email: Recipient email address
+            user_name: User's full name
+            bank_name: Bank name
+            bank_account_number: Full bank account number (will be masked in email)
+            bank_routing_number: Bank routing number
+            currency: Account currency (default: USD)
+            timestamp: When the funding account was created
+            
+        Returns:
+            bool: True if email sent successfully, False otherwise
+        """
+        if not timestamp:
+            timestamp = datetime.now()
+        
+        # Format timestamp
+        formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
+        
+        # Mask account number (show only last 4 digits)
+        masked_account_number = f"****{bank_account_number[-4:]}" if len(bank_account_number) >= 4 else "****"
+        
+        # Create email HTML body
+        email_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background-color: #4CAF50; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
+        .content {{ background-color: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none; }}
+        .info-box {{ background-color: #e7f3ff; border-left: 4px solid #1F73FF; padding: 15px; margin: 15px 0; }}
+        .detail-row {{ margin: 10px 0; padding: 10px; background-color: white; border-radius: 4px; }}
+        .detail-label {{ font-weight: bold; color: #555; }}
+        .detail-value {{ color: #333; margin-top: 5px; }}
+        .footer {{ text-align: center; padding: 20px; color: #666; font-size: 12px; }}
+        .success-icon {{ font-size: 48px; margin: 10px 0; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✅ Funding Account Created</h1>
+        </div>
+        <div class="content">
+            <p>Hello {user_name},</p>
+            
+            <p>Great news! Your funding account has been successfully created and is now ready to use.</p>
+            
+            <div class="info-box">
+                <strong>📅 Account Created:</strong> {formatted_time}
+            </div>
+            
+            <h3>Account Details:</h3>
+            <div class="detail-row">
+                <div class="detail-label">Bank Name:</div>
+                <div class="detail-value">{bank_name}</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">Account Number:</div>
+                <div class="detail-value">{masked_account_number}</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">Routing Number:</div>
+                <div class="detail-value">{bank_routing_number}</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">Currency:</div>
+                <div class="detail-value">{currency.upper()}</div>
+            </div>
+            
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                <h3>💡 What's Next:</h3>
+                <ul>
+                    <li>You can now receive funds into this account</li>
+                    <li>Account is ready for immediate use</li>
+                    <li>You'll receive notifications for all account activity</li>
+                </ul>
+            </div>
+            
+            <p style="margin-top: 20px;"><strong>⚠️ Security Note:</strong> Please keep your account details secure and never share them with unauthorized parties.</p>
+            
+            <p>If you have any questions or need assistance, please contact our support team.</p>
+            
+            <p>Best regards,<br>
+            <strong>RiverPe Team</strong></p>
+        </div>
+        <div class="footer">
+            <p>This is an automated email. Please do not reply to this message.</p>
+            <p>If you didn't request this funding account, please contact our support team immediately.</p>
+            <p>&copy; 2024 RiverPe. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+        """
+        
+        try:
+            if not self.mail_config:
+                logger.info(f"[EMAIL] MOCK - Funding account created notification to {email}")
+                logger.info(f"[EMAIL] Bank: {bank_name}, Account: {masked_account_number}")
+                return True
+            
+            # Create email message
+            message = MessageSchema(
+                subject="✅ Funding Account Created - RiverPe",
+                recipients=[email],
+                body=email_html,
+                subtype="html"
+            )
+            
+            # Send email
+            await self.fast_mail.send_message(message)
+            logger.info(f"[EMAIL] Funding account created notification sent successfully to {email}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[EMAIL] Error sending funding account created notification: {str(e)}", exc_info=True)
+            return False
+
 
 # Global instance
 email_service = EmailService()

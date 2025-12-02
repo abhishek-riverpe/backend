@@ -1,91 +1,374 @@
-import httpx
-from fastapi import APIRouter, Depends, HTTPException
+"""
+Funding Account Router
+
+Handles funding account creation, retrieval, and management.
+"""
+import logging
+from typing import Any, Dict
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from prisma.errors import DataError
 from prisma.models import entities as Entities
+from prisma.enums import KycStatusEnum
+
+from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
+from ..schemas.funding_account import FundingAccountData, FundingAccountResponse
+from ..services.zynk_client import create_funding_account_from_zynk
+from ..services.email_service import email_service
+from ..services.funding_account_service import save_funding_account_to_db, US_FUNDING_JURISDICTION_ID
 from ..utils.errors import upstream_error
 
-router = APIRouter(prefix="/api/v1/funding_account", tags=["funding_account"])
+logger = logging.getLogger(__name__)
 
-def _auth_header():
-    """
-    Generate authentication header for ZyncLab API.
-    """
-    if not settings.zynk_api_key:
-        raise HTTPException(status_code=500, detail="ZyncLab API key not configured")
-    return {
-        "x-api-token": settings.zynk_api_key,
-    }
+router = APIRouter(prefix="/api/v1/account", tags=["funding_account"])
 
-@router.get("")
-async def get_funding_accounts(
-    current: Entities = Depends(auth.get_current_entity)
-):
-    """
-    Fetch all funding accounts for the authenticated entity from ZyncLab via their API.
-    Ensures that users can only access their own funding accounts for security.
-    Requires authentication and ownership validation in the banking system.
-    """
-    # Ensure the entity has a zynk_entity_id set (means it's linked to ZyncLab)
-    # Try both possible attribute names for compatibility
-    zynk_entity_id = getattr(current, "zynk_entity_id", None) or getattr(current, "external_entity_id", None)
-    if not zynk_entity_id:
-        raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
+# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
+limiter = Limiter(key_func=get_remote_address)
 
-    # Construct the URL using the zynk_entity_id for the upstream call
-    url = f"{settings.zynk_base_url}/api/v1/transformer/accounts/{zynk_entity_id}/funding_accounts"
-    headers = {**_auth_header(), "Accept": "application/json"}
-    
-    # Make the request to ZyncLab with retry logic
-    for attempt in range(2):  # 1 retry
-        try:
-            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-                resp = await client.get(url, headers=headers)
-        except httpx.RequestError as exc:
-            if attempt == 0:
-                continue
-            raise upstream_error(
-                log_message=f"[ZYNK] Request error while fetching funding accounts for entity {current.id} at {url}: {exc}",
-                user_message="Verification service is currently unreachable. Please try again later.",
-            )
 
-        try:
-            body = resp.json()
-        except ValueError:
-            raise upstream_error(
-                log_message=f"[ZYNK] Invalid JSON while fetching funding accounts for entity {current.id} at {url}. Response preview: {resp.text[:200]}",
-                user_message="Verification service returned an invalid response. Please try again later.",
-            )
-
-        if not (200 <= resp.status_code < 300):
-            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
-            if resp.status_code == 404:
-                # 404 is safe and useful to expose
-                raise HTTPException(status_code=404, detail="Funding accounts not found for the entity in external service.")
-            raise upstream_error(
-                log_message=f"[ZYNK] Upstream error {resp.status_code} while fetching funding accounts for entity {current.id} at {url}: {error_detail}",
-                user_message="Verification service is currently unavailable. Please try again later.",
-            )
-
-        if not isinstance(body, dict):
-            raise upstream_error(
-                log_message=f"[ZYNK] Unexpected response structure while fetching funding accounts for entity {current.id} at {url}: {body}",
-                user_message="Verification service returned an unexpected response. Please try again later.",
-            )
-
-        if body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Request was not successful"))
-            if "not found" in error_detail.lower():
-                raise HTTPException(status_code=404, detail="Funding accounts not found for the entity in external service.")
-            raise upstream_error(
-                log_message=f"[ZYNK] Funding accounts request rejected by upstream for entity {current.id} at {url}: {error_detail}",
-                user_message="Verification service rejected the request. Please contact support if this continues.",
-            )
-
-        # Return the upstream response as-is
-        return body
-
-    raise upstream_error(
-        log_message=f"[ZYNK] Failed to fetch funding accounts for entity {current.id} at {url} after multiple attempts",
-        user_message="Verification service is currently unavailable. Please try again later.",
+def _build_error_response(
+    message: str,
+    code: str,
+    *,
+    status_code: int,
+    error_details: Dict[str, Any] | None = None,
+) -> HTTPException:
+    """Build a standardized error response for the API"""
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "success": False,
+            "data": None,
+            "error": {"code": code, "message": message, "details": error_details or {}},
+            "meta": {},
+        },
     )
+
+
+async def _check_kyc_status(entity_id: str) -> bool:
+    """
+    Check if user's KYC is COMPLETED (APPROVED status).
+    
+    Returns:
+        True if KYC is APPROVED, False otherwise
+    """
+    try:
+        kyc_session = await prisma.kyc_sessions.find_first(
+            where={"entity_id": entity_id, "deleted_at": None}
+        )
+        
+        if not kyc_session:
+            return False
+        
+        return kyc_session.status == KycStatusEnum.APPROVED
+    except Exception as exc:
+        logger.error(f"[FUNDING] Error checking KYC status for entity_id={entity_id}", exc_info=exc)
+        return False
+
+
+def _map_funding_account_to_response(funding_account: Any) -> FundingAccountData:
+    """Map Prisma funding account model to Pydantic response schema"""
+    return FundingAccountData(
+        id=str(funding_account.id),
+        entity_id=str(funding_account.entity_id),
+        jurisdiction_id=funding_account.jurisdiction_id,
+        provider_id=funding_account.provider_id,
+        status=str(funding_account.status),
+        currency=funding_account.currency,
+        bank_name=funding_account.bank_name,
+        bank_address=funding_account.bank_address,
+        bank_routing_number=funding_account.bank_routing_number,
+        bank_account_number=funding_account.bank_account_number,
+        bank_beneficiary_name=funding_account.bank_beneficiary_name or "",
+        bank_beneficiary_address=funding_account.bank_beneficiary_address,
+        payment_rail=funding_account.payment_rail,
+        created_at=funding_account.created_at,
+        updated_at=funding_account.updated_at,
+    )
+
+
+async def _create_and_save_funding_account(
+    entity: Entities,
+    zynk_entity_id: str
+) -> Any:
+    """
+    Create funding account via Zynk Labs API and save to database.
+    
+    Returns:
+        Created funding account record from database
+    """
+    logger.info(f"[FUNDING] Creating funding account via Zynk Labs for entity_id={entity.id}, zynk_entity_id={zynk_entity_id}")
+    
+    # Call Zynk Labs API to create funding account
+    zynk_response_data = await create_funding_account_from_zynk(
+        zynk_entity_id,
+        US_FUNDING_JURISDICTION_ID
+    )
+    
+    # Save to database
+    funding_account = await save_funding_account_to_db(str(entity.id), zynk_response_data)
+    
+    # Send email notification
+    try:
+        account_info = zynk_response_data.get("accountInfo", {})
+        user_name = f"{entity.first_name or ''} {entity.last_name or ''}".strip() or "User"
+        email_sent = await email_service.send_funding_account_created_notification(
+            email=entity.email,
+            user_name=user_name,
+            bank_name=account_info.get("bank_name", ""),
+            bank_account_number=account_info.get("bank_account_number", ""),
+            bank_routing_number=account_info.get("bank_routing_number", ""),
+            currency=account_info.get("currency", "USD").upper(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        if email_sent:
+            logger.info(f"[FUNDING] Funding account creation email sent to {entity.email}")
+        else:
+            logger.warning(f"[FUNDING] Failed to send funding account creation email to {entity.email}")
+    except Exception as email_exc:
+        # Don't fail the request if email fails
+        logger.error(f"[FUNDING] Error sending funding account creation email: {email_exc}", exc_info=email_exc)
+    
+    return funding_account
+
+
+@router.get("/funding", response_model=FundingAccountResponse, status_code=status.HTTP_200_OK)
+@limiter.limit("30/minute")
+async def get_funding_account(
+    request: Request,  # pyright: ignore[reportUnusedParameter]
+    current_entity: Entities = Depends(auth.get_current_entity),
+) -> FundingAccountResponse:
+    """
+    Get funding account for the authenticated user.
+    
+    Flow:
+    1. Check if user's KYC is COMPLETED (APPROVED status)
+    2. Check if funding account exists in local DB
+    3. If exists → return account details
+    4. If not exists → attempt to create via Zynk Labs API
+       - If creation succeeds: save to DB, send email, return details
+       - If creation fails: return "system under maintenance" message
+    """
+    entity_id = current_entity.id
+    zynk_entity_id = current_entity.zynk_entity_id
+    
+    logger.info(
+        f"[FUNDING] Funding account request received - entity_id={entity_id}, "
+        f"zynk_entity_id={zynk_entity_id}"
+    )
+    
+    # Check KYC status - must be APPROVED
+    kyc_completed = await _check_kyc_status(str(entity_id))
+    if not kyc_completed:
+        logger.warning(
+            f"[FUNDING] KYC not completed for entity_id={entity_id}. Cannot access funding account."
+        )
+        raise _build_error_response(
+            "KYC verification must be completed before accessing funding account",
+            code="KYC_NOT_COMPLETED",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    
+    # Check if entity is linked to Zynk Labs
+    if not zynk_entity_id:
+        logger.warning(
+            f"[FUNDING] Entity {entity_id} not linked to ZynkLabs. "
+            f"User must complete profile setup first."
+        )
+        raise _build_error_response(
+            "Please complete your profile setup before accessing funding account",
+            code="ENTITY_NOT_LINKED",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    # Check if funding account exists in local DB
+    try:
+        funding_account = await prisma.funding_accounts.find_first(
+            where={"entity_id": str(entity_id), "deleted_at": None}
+        )
+    except DataError as exc:
+        logger.error(
+            f"[FUNDING] DataError while fetching funding account for entity_id={entity_id}",
+            exc_info=exc,
+        )
+        raise _build_error_response(
+            "Invalid entity identifier",
+            code="BAD_REQUEST",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as exc:
+        logger.error(
+            f"[FUNDING] Unexpected error while fetching funding account for entity_id={entity_id}",
+            exc_info=exc,
+        )
+        raise _build_error_response(
+            "Unable to fetch funding account. Please try again later.",
+            code="INTERNAL_ERROR",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    
+    # If funding account exists, return it
+    if funding_account:
+        logger.info(
+            f"[FUNDING] Returning existing funding account - id={funding_account.id}, entity_id={entity_id}"
+        )
+        account_data = _map_funding_account_to_response(funding_account)
+        return FundingAccountResponse(
+            success=True,
+            data=account_data,
+            error=None,
+            meta={},
+        )
+    
+    # No funding account exists - attempt to create
+    logger.info(
+        f"[FUNDING] No funding account found for entity_id={entity_id}. "
+        f"Attempting to create via Zynk Labs API."
+    )
+    
+    try:
+        funding_account = await _create_and_save_funding_account(current_entity, zynk_entity_id)
+        
+        logger.info(
+            f"[FUNDING] Successfully created funding account - id={funding_account.id}, entity_id={entity_id}"
+        )
+        
+        account_data = _map_funding_account_to_response(funding_account)
+        return FundingAccountResponse(
+            success=True,
+            data=account_data,
+            error=None,
+            meta={},
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as exc:
+        logger.error(
+            f"[FUNDING] Failed to create funding account for entity_id={entity_id}",
+            exc_info=exc,
+        )
+        # Return "system under maintenance" message as per requirements
+        raise _build_error_response(
+            "System under maintenance. Please try again later.",
+            code="SERVICE_UNAVAILABLE",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+
+@router.post("/funding/create", response_model=FundingAccountResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/minute")
+async def create_funding_account(
+    request: Request,  # pyright: ignore[reportUnusedParameter]
+    current_entity: Entities = Depends(auth.get_current_entity),
+) -> FundingAccountResponse:
+    """
+    Manually create funding account for the authenticated user.
+    
+    This endpoint allows users to manually trigger funding account creation
+    when clicking a button in the UI.
+    
+    Flow:
+    1. Check if user's KYC is COMPLETED
+    2. Check if funding account already exists
+    3. Call Zynk Labs API to create funding account
+    4. Save to database
+    5. Send email notification
+    6. Return account details
+    """
+    entity_id = current_entity.id
+    zynk_entity_id = current_entity.zynk_entity_id
+    
+    logger.info(
+        f"[FUNDING] Manual funding account creation request - entity_id={entity_id}, "
+        f"zynk_entity_id={zynk_entity_id}"
+    )
+    
+    # Check KYC status - must be APPROVED
+    kyc_completed = await _check_kyc_status(str(entity_id))
+    if not kyc_completed:
+        logger.warning(
+            f"[FUNDING] KYC not completed for entity_id={entity_id}. Cannot create funding account."
+        )
+        raise _build_error_response(
+            "KYC verification must be completed before creating funding account",
+            code="KYC_NOT_COMPLETED",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    
+    # Check if entity is linked to Zynk Labs
+    if not zynk_entity_id:
+        logger.warning(
+            f"[FUNDING] Entity {entity_id} not linked to ZynkLabs. "
+            f"User must complete profile setup first."
+        )
+        raise _build_error_response(
+            "Please complete your profile setup before creating funding account",
+            code="ENTITY_NOT_LINKED",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    # Check if funding account already exists
+    try:
+        existing_account = await prisma.funding_accounts.find_first(
+            where={"entity_id": str(entity_id), "deleted_at": None}
+        )
+    except Exception as exc:
+        logger.error(
+            f"[FUNDING] Error checking existing funding account for entity_id={entity_id}",
+            exc_info=exc,
+        )
+        raise _build_error_response(
+            "Unable to check existing funding account. Please try again later.",
+            code="INTERNAL_ERROR",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    
+    if existing_account:
+        logger.info(
+            f"[FUNDING] Funding account already exists for entity_id={entity_id}. "
+            f"Returning existing account."
+        )
+        account_data = _map_funding_account_to_response(existing_account)
+        return FundingAccountResponse(
+            success=True,
+            data=account_data,
+            error=None,
+            meta={},
+        )
+    
+    # Create funding account
+    try:
+        funding_account = await _create_and_save_funding_account(current_entity, zynk_entity_id)
+        
+        logger.info(
+            f"[FUNDING] Successfully created funding account via manual request - "
+            f"id={funding_account.id}, entity_id={entity_id}"
+        )
+        
+        account_data = _map_funding_account_to_response(funding_account)
+        return FundingAccountResponse(
+            success=True,
+            data=account_data,
+            error=None,
+            meta={},
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as exc:
+        logger.error(
+            f"[FUNDING] Failed to create funding account for entity_id={entity_id}",
+            exc_info=exc,
+        )
+        raise _build_error_response(
+            "Failed to create funding account. Please try again later.",
+            code="CREATION_FAILED",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
