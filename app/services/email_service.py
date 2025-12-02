@@ -363,6 +363,129 @@ class EmailService:
             logger.error(f"[EMAIL] Error sending failed login notification: {str(e)}", exc_info=True)
             return False
 
+    async def send_kyc_link_email(
+        self,
+        email: str,
+        user_name: str,
+        kyc_link: str,
+        timestamp: Optional[datetime] = None
+    ) -> bool:
+        """
+        Send KYC verification link email to the user.
+        
+        Args:
+            email: Recipient email address
+            user_name: User's full name
+            kyc_link: KYC verification link from Zynk Labs
+            timestamp: When the KYC link was generated
+            
+        Returns:
+            bool: True if email sent successfully, False otherwise
+        """
+        if not timestamp:
+            timestamp = datetime.now()
+        
+        # Format timestamp
+        formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
+        
+        # Create email HTML body
+        email_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background-color: #1F73FF; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
+        .content {{ background-color: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none; }}
+        .info-box {{ background-color: #e7f3ff; border-left: 4px solid #1F73FF; padding: 15px; margin: 15px 0; }}
+        .footer {{ text-align: center; padding: 20px; color: #666; font-size: 12px; }}
+        .button {{ display: inline-block; padding: 14px 32px; background-color: #1F73FF; color: white; text-decoration: none; border-radius: 6px; margin: 20px 0; font-weight: bold; }}
+        .link-text {{ word-break: break-all; color: #1F73FF; text-decoration: underline; }}
+        .instructions {{ background-color: white; padding: 15px; border-radius: 4px; margin: 15px 0; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✅ Start Your KYC Verification</h1>
+        </div>
+        <div class="content">
+            <p>Hello {user_name},</p>
+            
+            <p>Thank you for signing up with RiverPe! To complete your account setup and start using our services, please complete your identity verification (KYC).</p>
+            
+            <div class="info-box">
+                <strong>📅 Verification Requested:</strong> {formatted_time}
+            </div>
+            
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="{kyc_link}" class="button">Start KYC Verification</a>
+            </div>
+            
+            <div class="instructions">
+                <h3>What to expect:</h3>
+                <ol>
+                    <li>Click the button above or use the link below to access the verification portal</li>
+                    <li>Follow the on-screen instructions to submit your identity documents</li>
+                    <li>Our verification team will review your submission</li>
+                    <li>You'll receive an email notification once your verification is complete</li>
+                </ol>
+            </div>
+            
+            <p style="margin-top: 20px;"><strong>Or copy and paste this link into your browser:</strong></p>
+            <p class="link-text">{kyc_link}</p>
+            
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                <h3>📋 What you'll need:</h3>
+                <ul>
+                    <li>A valid government-issued ID (passport, driver's license, or national ID)</li>
+                    <li>A clear photo or scan of your ID document</li>
+                    <li>A few minutes to complete the process</li>
+                </ul>
+            </div>
+            
+            <p style="margin-top: 20px;"><strong>⚠️ Important:</strong> Please complete your verification within 7 days to avoid any service interruptions.</p>
+            
+            <p>If you have any questions or need assistance, please contact our support team.</p>
+            
+            <p>Best regards,<br>
+            <strong>RiverPe Team</strong></p>
+        </div>
+        <div class="footer">
+            <p>This is an automated email. Please do not reply to this message.</p>
+            <p>If you didn't request this verification link, please contact our support team immediately.</p>
+            <p>&copy; 2024 RiverPe. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+        """
+        
+        try:
+            if not self.mail_config:
+                logger.info(f"[EMAIL] MOCK - KYC link email to {email}")
+                logger.info(f"[EMAIL] KYC Link: {kyc_link}")
+                return True
+            
+            # Create email message
+            message = MessageSchema(
+                subject="✅ Complete Your Identity Verification - RiverPe KYC",
+                recipients=[email],
+                body=email_html,
+                subtype="html"
+            )
+            
+            # Send email
+            await self.fast_mail.send_message(message)
+            logger.info(f"[EMAIL] KYC link email sent successfully to {email}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[EMAIL] Error sending KYC link email: {str(e)}", exc_info=True)
+            return False
+
 
 # Global instance
 email_service = EmailService()
