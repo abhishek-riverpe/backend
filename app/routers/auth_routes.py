@@ -299,6 +299,24 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
                         "status": "ACTIVE",  # Set to ACTIVE after successful Zynk creation
                     }
                 )
+            
+            # Create KYC session with NOT_STARTED status as per requirements
+            try:
+                await prisma.kyc_sessions.create(
+                    data={
+                        "entity_id": entity.id,
+                        "status": "NOT_STARTED",
+                        "routing_enabled": False,
+                    }
+                )
+                logger.info(f"[SIGNUP] Created KYC session for entity_id={entity.id}, email={email[:3]}***")
+            except Exception as kyc_error:
+                # Log error but don't fail signup if KYC session creation fails
+                # KYC session can be created later when user accesses KYC endpoints
+                logger.warning(
+                    f"[SIGNUP] Failed to create KYC session for entity_id={entity.id}: {kyc_error}. "
+                    "User can still signup and KYC session will be created on first KYC access."
+                )
         except Exception as e:
             # Cleanup: Delete placeholder record if external API fails
             try:

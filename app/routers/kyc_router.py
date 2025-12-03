@@ -12,6 +12,7 @@ from ..core.database import prisma
 from ..core import auth
 from ..schemas.kyc import KycLinkData, KycLinkResponse, KycStatusData, KycStatusResponse
 from ..services.zynk_client import get_kyc_link_from_zynk
+from ..services.email_service import email_service
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,38 @@ async def get_kyc_link(
                 "Failed to persist KYC session. Please try again later.",
                 code="INTERNAL_ERROR",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Send email notification with KYC link
+        try:
+            user_name = f"{current_entity.first_name or ''} {current_entity.last_name or ''}".strip() or "User"
+            email_sent = await email_service.send_kyc_link_email(
+                email=current_entity.email,
+                user_name=user_name,
+                kyc_link=kyc_data["kycLink"],
+                timestamp=now,
+            )
+            if email_sent:
+                logger.info(
+                    "[KYC] KYC link email sent successfully to %s for entity_id=%s",
+                    current_entity.email,
+                    entity_id,
+                )
+            else:
+                logger.warning(
+                    "[KYC] Failed to send KYC link email to %s for entity_id=%s (but link was generated)",
+                    current_entity.email,
+                    entity_id,
+                )
+        except Exception as email_exc:
+            # Log error but don't fail the request if email sending fails
+            # The KYC link was successfully generated and stored, so we should return it
+            logger.error(
+                "[KYC] Error sending KYC link email to %s for entity_id=%s: %s",
+                current_entity.email,
+                entity_id,
+                str(email_exc),
+                exc_info=email_exc,
             )
 
         return KycLinkResponse(
