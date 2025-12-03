@@ -113,6 +113,7 @@ model entities {
   funding_accounts funding_accounts[]
 
   @@map("entities")
+  wallets wallets[]
 }
 
 model kyc_sessions {
@@ -263,4 +264,45 @@ model funding_accounts {
   entity                   entities          @relation(fields: [entity_id], references: [id], onDelete: Cascade)
 
   @@map("funding_accounts")
+}
+
+
+model wallets {
+  id               String            @id @default(uuid()) @db.Uuid
+  entity_id        String            @db.Uuid
+  zynk_wallet_id   String            @unique // Wallet ID from Zynk API (e.g., znc_wallet_...)
+  wallet_name      String
+  chain            String            // SOLANA, ETHEREUM, etc.
+  status           AccountStatusEnum @default(ACTIVE)
+  created_at       DateTime          @default(now())
+  updated_at       DateTime          @updatedAt
+  deleted_at       DateTime?
+
+  // Relations
+  entity           entities          @relation(fields: [entity_id], references: [id], onDelete: Cascade)
+  wallet_accounts  wallet_accounts[]
+
+  @@index([entity_id])
+  @@index([zynk_wallet_id])
+  @@map("wallets")
+}
+
+model wallet_accounts {
+  id              String   @id @default(uuid()) @db.Uuid
+  wallet_id       String   @db.Uuid
+  curve           String   // CURVE_ED25519, etc.
+  path_format     String   // PATH_FORMAT_BIP32, etc.
+  path            String   // m/44'/501'/0'/0', etc.
+  address_format  String   // ADDRESS_FORMAT_SOLANA, etc.
+  address         String   @unique // Blockchain address
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+  deleted_at      DateTime?
+
+  // Relations
+  wallet          wallets  @relation(fields: [wallet_id], references: [id], onDelete: Cascade)
+
+  @@index([wallet_id])
+  @@index([address])
+  @@map("wallet_accounts")
 }
