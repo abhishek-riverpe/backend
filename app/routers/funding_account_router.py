@@ -224,41 +224,18 @@ async def get_funding_account(
             meta={},
         )
     
-    # No funding account exists - attempt to create
+    # No funding account exists - return empty response (don't auto-create)
     logger.info(
         f"[FUNDING] No funding account found for entity_id={entity_id}. "
-        f"Attempting to create via Zynk Labs API."
+        f"Returning empty response."
     )
     
-    try:
-        funding_account = await _create_and_save_funding_account(current_entity, zynk_entity_id)
-        
-        logger.info(
-            f"[FUNDING] Successfully created funding account - id={funding_account.id}, entity_id={entity_id}"
-        )
-        
-        account_data = _map_funding_account_to_response(funding_account)
-        return FundingAccountResponse(
-            success=True,
-            data=account_data,
-            error=None,
-            meta={},
-        )
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
-    except Exception as exc:
-        logger.error(
-            f"[FUNDING] Failed to create funding account for entity_id={entity_id}",
-            exc_info=exc,
-        )
-        # Return "system under maintenance" message as per requirements
-        raise _build_error_response(
-            "System under maintenance. Please try again later.",
-            code="SERVICE_UNAVAILABLE",
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
+    return FundingAccountResponse(
+        success=True,
+        data=None,
+        error=None,
+        meta={},
+    )
 
 
 @router.post("/funding/create", response_model=FundingAccountResponse, status_code=status.HTTP_201_CREATED)
