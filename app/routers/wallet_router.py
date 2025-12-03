@@ -636,7 +636,7 @@ async def sign_payload(
     Returns:
         - signature: Base64URL-encoded signature
     """
-    logger.info(f"[WALLET] Sign payload request - keys: {list(data.keys())}")
+    logger.info(f"[WALLET] Sign payload request - keys: {data}")
 
     payload_to_sign = data.get("payload")
     session_private_key = data.get("sessionPrivateKey")
