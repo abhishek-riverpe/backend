@@ -80,22 +80,46 @@ async def get_kyc_status(
         )
 
     if not kyc_session:
+        # No existing KYC session: create a dummy NOT_STARTED record so subsequent
+        # calls and other flows (like link generation) see a consistent state.
         logger.info(
-            f"[KYC] No KYC session found for entity_id={entity_id}. Returning NOT_STARTED."
+            "[KYC] No KYC session found for entity_id=%s. Creating NOT_STARTED session.",
+            entity_id,
         )
-        return KycStatusResponse(
-            success=True,
-            data=KycStatusData(
-                status="NOT_STARTED",
-                routing_id=None,
-                kyc_link=None,
-                initiated_at=None,
-                completed_at=None,
-                rejection_reason=None,
-            ),
-            error=None,
-            meta={},
-        )
+        try:
+            kyc_session = await prisma.kyc_sessions.create(
+                data={
+                    "entity_id": entity_id,
+                    "status": "NOT_STARTED",
+                    "routing_enabled": False,
+                }
+            )
+            logger.info(
+                "[KYC] Created NOT_STARTED KYC session for entity_id=%s, session_id=%s",
+                entity_id,
+                kyc_session.id,
+            )
+        except Exception as exc:
+            logger.error(
+                "[KYC] Failed to create NOT_STARTED KYC session for entity_id=%s",
+                entity_id,
+                exc_info=exc,
+            )
+            # Fall back to returning a non-persisted NOT_STARTED status so the
+            # frontend still gets a usable response.
+            return KycStatusResponse(
+                success=True,
+                data=KycStatusData(
+                    status="NOT_STARTED",
+                    routing_id=None,
+                    kyc_link=None,
+                    initiated_at=None,
+                    completed_at=None,
+                    rejection_reason=None,
+                ),
+                error=None,
+                meta={},
+            )
 
     logger.info(
         "[KYC] Returning KYC status for entity_id=%s, session_id=%s, status=%s",
@@ -230,6 +254,7 @@ async def get_kyc_link(
         try:
             kyc_data = await get_kyc_link_from_zynk(zynk_entity_id, routing_id)
         except HTTPException:
+            # Propagate well-formed HTTP errors (e.g. auth misconfig)
             raise
         except Exception as exc:
             logger.error(
@@ -241,6 +266,44 @@ async def get_kyc_link(
                 "Failed to generate KYC link. Please try again later.",
                 code="INTERNAL_ERROR",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # If Zynk indicates KYC is already completed, mark session as APPROVED and
+        # return a friendly response without a link.
+        if kyc_data.get("kycCompleted"):
+            logger.info(
+                "[KYC] Zynk reports KYC already completed for entity_id=%s, "
+                "updating local session to APPROVED.",
+                entity_id,
+            )
+            now = datetime.now(timezone.utc)
+            try:
+                kyc_session = await prisma.kyc_sessions.update(
+                    where={"id": kyc_session.id},
+                    data={
+                        "status": "APPROVED",
+                        "completed_at": now,
+                    },
+                )
+            except Exception as exc:
+                logger.error(
+                    "[KYC] Failed to update KYC session to APPROVED for entity_id=%s",
+                    entity_id,
+                    exc_info=exc,
+                )
+                # Even if the DB update fails, still return a completed status to the client.
+            return KycLinkResponse(
+                success=True,
+                data=KycLinkData(
+                    message=kyc_data.get(
+                        "message", "KYC is already completed for this user."
+                    ),
+                    kycLink=None,
+                    tosLink=None,
+                    kycStatus="approved",
+                    tosStatus="accepted",
+                ),
+                error=None,
             )
 
         now = datetime.now(timezone.utc)
