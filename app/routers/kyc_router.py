@@ -397,9 +397,70 @@ async def get_kyc_link(
             error=None,
         )
 
-    # Any other status: do not expose link
-    logger.info(
-        "[KYC] KYC session is not eligible for link - entity_id=%s, session_id=%s, status=%s",
+    # If KYC is already APPROVED, return success response (no link needed)
+    if status_value == "APPROVED":
+        logger.info(
+            "[KYC] KYC already approved for entity_id=%s, session_id=%s - returning approved status",
+            entity_id,
+            kyc_session.id,
+        )
+        return KycLinkResponse(
+            success=True,
+            data=KycLinkData(
+                message="KYC verification is already completed for this user.",
+                kycLink=None,
+                tosLink=None,
+                kycStatus="approved",
+                tosStatus="accepted",
+            ),
+            error=None,
+        )
+
+    # For other statuses (REVIEWING, REJECTED, etc.), return appropriate response
+    # REVIEWING: KYC is in progress, no link available
+    if status_value == "REVIEWING":
+        logger.info(
+            "[KYC] KYC is under review for entity_id=%s, session_id=%s",
+            entity_id,
+            kyc_session.id,
+        )
+        return KycLinkResponse(
+            success=True,
+            data=KycLinkData(
+                message="Your KYC verification is currently under review. We will notify you once it's complete.",
+                kycLink=None,
+                tosLink=None,
+                kycStatus=status_value.lower(),
+                tosStatus="pending",
+            ),
+            error=None,
+        )
+
+    # REJECTED: KYC was rejected, user may need to restart
+    if status_value == "REJECTED":
+        logger.info(
+            "[KYC] KYC was rejected for entity_id=%s, session_id=%s",
+            entity_id,
+            kyc_session.id,
+        )
+        rejection_msg = "Your KYC verification was rejected."
+        if kyc_session.rejection_reason:
+            rejection_msg += f" Reason: {kyc_session.rejection_reason}"
+        return KycLinkResponse(
+            success=True,
+            data=KycLinkData(
+                message=rejection_msg,
+                kycLink=None,
+                tosLink=None,
+                kycStatus=status_value.lower(),
+                tosStatus="pending",
+            ),
+            error=None,
+        )
+
+    # Any other unexpected status: do not expose link
+    logger.warning(
+        "[KYC] KYC session has unexpected status - entity_id=%s, session_id=%s, status=%s",
         entity_id,
         kyc_session.id,
         status_value,

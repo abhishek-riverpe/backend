@@ -4,6 +4,7 @@ Funding Account Router
 Handles funding account creation, retrieval, and management.
 """
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
