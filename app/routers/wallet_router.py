@@ -618,6 +618,246 @@ async def prepare_wallet(
         }
 
 
+@router.get("/user")
+@limiter.limit("60/minute")
+async def get_user_wallet(
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Get user's wallet from database.
+    Returns the first active wallet for the authenticated user.
+    
+    Returns:
+        - walletId: Zynk wallet ID
+        - walletName: User-defined wallet name
+        - chain: Blockchain (SOLANA, etc.)
+        - addresses: List of addresses from wallet_accounts
+        - created_at: Wallet creation timestamp
+    """
+    logger.info(f"[WALLET] Fetching wallet for user: {current_user.email} (ID: {current_user.id})")
+    
+    try:
+        # Get user's wallet with its accounts
+        wallet = await prisma.wallets.find_first(
+            where={
+                "entity_id": str(current_user.id),
+                "deleted_at": None,
+                "status": "ACTIVE"
+            },
+            include={
+                "wallet_accounts": {
+                    "where": {
+                        "deleted_at": None
+                    }
+                }
+            },
+            order={
+                "created_at": "desc"
+            }
+        )
+        
+        if not wallet:
+            logger.info(f"[WALLET] No wallet found for user: {current_user.id}")
+            return {
+                "success": True,
+                "message": "No wallet found",
+                "data": None
+            }
+        
+        # Extract addresses from accounts
+        addresses = [account.address for account in wallet.wallet_accounts] if wallet.wallet_accounts else []
+        
+        logger.info(f"[WALLET] Found wallet: {wallet.zynk_wallet_id} with {len(addresses)} addresses")
+        
+        return {
+            "success": True,
+            "message": "Wallet retrieved successfully",
+            "data": {
+                "walletId": wallet.zynk_wallet_id,
+                "walletName": wallet.wallet_name,
+                "chain": wallet.chain,
+                "addresses": addresses,
+                "status": wallet.status,
+                "createdAt": wallet.created_at.isoformat() if wallet.created_at else None
+            }
+        }
+    except Exception as e:
+        logger.error(f"[WALLET] Error fetching user wallet: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch wallet"
+        )
+
+
+@router.get("/{wallet_id}")
+@limiter.limit("60/minute")
+async def get_wallet_details(
+    wallet_id: str,
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Get wallet details from Zynk API.
+    
+    Path:
+        - wallet_id: Zynk wallet ID
+    
+    Returns:
+        Wallet details from Zynk API
+    """
+    logger.info(f"[WALLET] Fetching wallet details from Zynk - wallet_id: {wallet_id}, user: {current_user.email}")
+    
+    # Verify wallet belongs to user
+    wallet = await prisma.wallets.find_first(
+        where={
+            "zynk_wallet_id": wallet_id,
+            "entity_id": str(current_user.id),
+            "deleted_at": None
+        }
+    )
+    
+    if not wallet:
+        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {wallet_id}, user: {current_user.id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Wallet not found or unauthorized"
+        )
+    
+    # Call Zynk API
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}"
+    logger.info(f"[WALLET] Calling Zynk API: {url}")
+    
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        response = await client.get(url, headers=_zynk_auth_header())
+        
+        if response.status_code != 200:
+            logger.error(f"[WALLET] Zynk API error: {response.status_code}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch wallet details from Zynk API"
+            )
+        
+        body = response.json()
+        logger.info(f"[WALLET] Wallet details retrieved successfully")
+        return body
+
+
+@router.get("/{wallet_id}/balances")
+@limiter.limit("60/minute")
+async def get_wallet_balances(
+    wallet_id: str,
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Get wallet balances from Zynk API.
+    
+    Path:
+        - wallet_id: Zynk wallet ID
+    
+    Returns:
+        Wallet balances for all tokens
+    """
+    logger.info(f"[WALLET] Fetching wallet balances from Zynk - wallet_id: {wallet_id}, user: {current_user.email}")
+    
+    # Verify wallet belongs to user
+    wallet = await prisma.wallets.find_first(
+        where={
+            "zynk_wallet_id": wallet_id,
+            "entity_id": str(current_user.id),
+            "deleted_at": None
+        }
+    )
+    
+    if not wallet:
+        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {wallet_id}, user: {current_user.id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Wallet not found or unauthorized"
+        )
+    
+    # Call Zynk API
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/balances"
+    logger.info(f"[WALLET] Calling Zynk API: {url}")
+    
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        response = await client.get(url, headers=_zynk_auth_header())
+        
+        if response.status_code != 200:
+            logger.error(f"[WALLET] Zynk API error: {response.status_code}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch wallet balances from Zynk API"
+            )
+        
+        body = response.json()
+        logger.info(f"[WALLET] Wallet balances retrieved successfully")
+        return body
+
+
+@router.get("/{wallet_id}/{address}/transactions")
+@limiter.limit("60/minute")
+async def get_wallet_transactions(
+    wallet_id: str,
+    address: str,
+    request: Request,
+    current_user: Entities = Depends(get_current_entity),
+    limit: int = 10,
+    offset: int = 0
+):
+    """
+    Get wallet transactions from Zynk API.
+    
+    Path:
+        - wallet_id: Zynk wallet ID
+        - address: Wallet address
+    
+    Query:
+        - limit: Number of transactions (default: 10)
+        - offset: Pagination offset (default: 0)
+    
+    Returns:
+        Transaction history
+    """
+    logger.info(f"[WALLET] Fetching wallet transactions from Zynk - wallet_id: {wallet_id}, address: {address}, user: {current_user.email}")
+    
+    # Verify wallet belongs to user
+    wallet = await prisma.wallets.find_first(
+        where={
+            "zynk_wallet_id": wallet_id,
+            "entity_id": str(current_user.id),
+            "deleted_at": None
+        }
+    )
+    
+    if not wallet:
+        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {wallet_id}, user: {current_user.id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Wallet not found or unauthorized"
+        )
+    
+    # Call Zynk API
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/{address}/transactions"
+    params = {"limit": limit, "offset": offset}
+    logger.info(f"[WALLET] Calling Zynk API: {url} with params: {params}")
+    
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        response = await client.get(url, headers=_zynk_auth_header(), params=params)
+        
+        if response.status_code != 200:
+            logger.error(f"[WALLET] Zynk API error: {response.status_code}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch wallet transactions from Zynk API"
+            )
+        
+        body = response.json()
+        logger.info(f"[WALLET] Wallet transactions retrieved successfully")
+        return body
+
+
 @router.post("/sign-payload")
 @limiter.limit("30/minute")
 async def sign_payload(
@@ -636,7 +876,7 @@ async def sign_payload(
     Returns:
         - signature: Base64URL-encoded signature
     """
-    logger.info(f"[WALLET] Sign payload request - keys: {list(data.keys())}")
+    logger.info(f"[WALLET] Sign payload request - keys: {data}")
 
     payload_to_sign = data.get("payload")
     session_private_key = data.get("sessionPrivateKey")
@@ -655,6 +895,8 @@ async def sign_payload(
     signature = sign_payload_with_api_key(payload_to_sign, session_private_key, session_public_key)
 
     logger.info(f"[WALLET] Payload signed successfully - signature: {len(signature)} chars")
+    logger.info(f"[WALLET] 🔐 Signature (first 80 chars): {signature[:80]}...")
+    logger.info(f"[WALLET] 🔐 Signature (last 80 chars): ...{signature[-80:]}")
 
     return {
         "success": True,
@@ -672,22 +914,29 @@ async def submit_wallet(
     current_user: Entities = Depends(get_current_entity)
 ):
     """
-    Submit signed wallet creation.
+    Submit signed wallet creation and automatically create account.
 
     Body:
         - payloadId: Payload ID from prepare step
         - signatureType: "ApiKey"
         - signature: Base64URL-encoded signature from sign step
+        - sessionPrivateKey: Session private key (for automatic account creation)
+        - sessionPublicKey: Session public key (for automatic account creation)
+        - walletName: Wallet name (optional, for saving)
+        - chain: Blockchain chain (optional, defaults to SOLANA)
 
     Returns:
         - walletId: Created wallet ID
         - addresses: Wallet addresses for the chain
+        - account: Account details (if auto-created)
     """
     logger.info(f"[WALLET] Submit wallet request - keys: {list(data.keys())}")
 
     payload_id = data.get("payloadId")
     signature_type = data.get("signatureType", "ApiKey")
     signature = data.get("signature")
+    session_private_key = data.get("sessionPrivateKey")
+    session_public_key = data.get("sessionPublicKey")
 
     if not all([payload_id, signature]):
         raise HTTPException(
@@ -696,6 +945,7 @@ async def submit_wallet(
         )
 
     logger.info(f"[WALLET] Input - payloadId: {payload_id}, signature: {len(signature)} chars")
+    logger.info(f"[WALLET] Session keys provided: {bool(session_private_key)}/{bool(session_public_key)}")
 
     # Call Zynk submit wallet creation endpoint
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/create/submit"
@@ -739,12 +989,423 @@ async def submit_wallet(
         wallet_id = wallet_data.get("walletId")
         addresses = wallet_data.get("addresses", [])
 
+        # Save wallet to database
+        logger.info(f"[WALLET] Saving wallet to database - ID: {wallet_id}, Entity: {current_user.id}")
+        try:
+            # Get wallet name from original request (or use default)
+            wallet_name = data.get("walletName", "Solana Wallet")
+            chain = data.get("chain", "SOLANA")
+            
+            # Create wallet record
+            wallet = await prisma.wallets.create(
+                data={
+                    "entity_id": str(current_user.id),
+                    "zynk_wallet_id": wallet_id,
+                    "wallet_name": wallet_name,
+                    "chain": chain,
+                    "status": "ACTIVE"
+                }
+            )
+            logger.info(f"[WALLET] Wallet saved to database successfully - DB ID: {wallet.id}")
+            
+            # Save the first address if available
+            if addresses and len(addresses) > 0:
+                # For initial wallet creation, we might not have full account details
+                # These will be saved when accounts are created via /accounts/submit
+                logger.info(f"[WALLET] Initial address from wallet creation: {addresses[0]}")
+        except Exception as db_error:
+            logger.error(f"[WALLET] Failed to save wallet to database: {db_error}")
+            # Don't fail the request if DB save fails - wallet is already created in Zynk
+            # Return success but log the error
+
+        # Automatically prepare and create account if session keys provided
+        logger.info(f"[WALLET] ✅ Wallet created successfully. Now preparing account creation...")
+        account_prepare_data = None
+        account_created = None
+        
+        try:
+            # Call Zynk prepare account creation endpoint
+            prepare_url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/accounts/prepare"
+            prepare_payload = {"chain": chain}
+            
+            logger.info(f"[WALLET] Calling account prepare: {prepare_url}")
+            
+            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+                prepare_response = await client.post(
+                    prepare_url,
+                    json=prepare_payload,
+                    headers=_zynk_auth_header()
+                )
+                
+                if prepare_response.status_code == 200:
+                    prepare_body = prepare_response.json()
+                    if prepare_body.get("success"):
+                        account_prepare_data = prepare_body.get("data", {})
+                        logger.info(f"[WALLET] ✅ Account preparation successful - payloadId: {account_prepare_data.get('payloadId')}")
+                        logger.info(f"[WALLET] 📦 Account Prepare Response:")
+                        logger.info(f"[WALLET]    - payloadId: {account_prepare_data.get('payloadId')}")
+                        logger.info(f"[WALLET]    - payloadToSign (first 100 chars): {account_prepare_data.get('payloadToSign', '')[:100]}")
+                        logger.info(f"❤️❤️❤️❤️❤️❤️❤️❤️")
+                        # logger.info(session_private_key, session_public_key, account_prepare_data)
+                        
+                        # If session keys provided, automatically sign and submit account
+                        if session_private_key and session_public_key and account_prepare_data:
+                            logger.info(f"[WALLET] 🔐 Session keys provided - automatically signing and submitting account...")
+                            
+                            try:
+                                # Sign the account payload
+                                account_payload_to_sign = account_prepare_data.get('payloadToSign')
+                                account_payload_id = account_prepare_data.get('payloadId')
+                                
+                                logger.info(f"[WALLET] Signing account payload...")
+                                account_signature = sign_payload_with_api_key(
+                                    account_payload_to_sign,
+                                    session_private_key,
+                                    session_public_key
+                                )
+                                logger.info(f"[WALLET] ✅ Account payload signed - signature length: {len(account_signature)}")
+                                
+                                # Submit the account
+                                logger.info(f"[WALLET] Submitting account to Zynk...")
+                                submit_url = f"{ZYNK_BASE_URL}/api/v1/wallets/accounts/submit"
+                                submit_payload = {
+                                    "payloadId": account_payload_id,
+                                    "signatureType": "ApiKey",
+                                    "signature": account_signature
+                                }
+                                
+                                submit_response = await client.post(
+                                    submit_url,
+                                    json=submit_payload,
+                                    headers=_zynk_auth_header()
+                                )
+                                
+                                if submit_response.status_code == 200:
+                                    submit_body = submit_response.json()
+                                    if submit_body.get("success"):
+                                        account_data = submit_body.get("data", {})
+                                        account_wallet_id = account_data.get("walletId")
+                                        account_details = account_data.get("account", {})
+                                        account_address = account_data.get("address") or account_details.get("address")
+                                        
+                                        logger.info(f"[WALLET] ✅ Account created successfully!")
+                                        logger.info(f"[WALLET] 📦 Account Details:")
+                                        logger.info(f"[WALLET]    - walletId: {account_wallet_id}")
+                                        logger.info(f"[WALLET]    - address: {account_address}")
+                                        logger.info(f"[WALLET]    - curve: {account_details.get('curve')}")
+                                        logger.info(f"[WALLET]    - path: {account_details.get('path')}")
+                                        
+                                        # Save account to database
+                                        logger.info(f"[WALLET] 💾 Saving account to database...")
+                                        try:
+                                            wallet_account = await prisma.wallet_accounts.create(
+                                                data={
+                                                    "wallet_id": wallet.id,
+                                                    "curve": account_details.get("curve", ""),
+                                                    "path_format": account_details.get("pathFormat", ""),
+                                                    "path": account_details.get("path", ""),
+                                                    "address_format": account_details.get("addressFormat", ""),
+                                                    "address": account_address
+                                                }
+                                            )
+                                            logger.info(f"[WALLET] ✅ Account saved to database - DB ID: {wallet_account.id}")
+                                            account_created = {
+                                                "address": account_address,
+                                                "curve": account_details.get("curve"),
+                                                "path": account_details.get("path"),
+                                                "pathFormat": account_details.get("pathFormat"),
+                                                "addressFormat": account_details.get("addressFormat")
+                                            }
+                                        except Exception as db_error:
+                                            logger.error(f"[WALLET] Failed to save account to database: {db_error}")
+                                    else:
+                                        logger.error(f"[WALLET] Account submit returned unsuccessful: {submit_body}")
+                                else:
+                                    logger.error(f"[WALLET] Account submit failed with status {submit_response.status_code}")
+                            except Exception as account_error:
+                                logger.error(f"[WALLET] Failed to sign/submit account: {account_error}")
+                                logger.error(f"[WALLET] Error details:", exc_info=True)
+                    else:
+                        logger.warning(f"[WALLET] Account preparation returned unsuccessful: {prepare_body}")
+                else:
+                    logger.warning(f"[WALLET] Account preparation failed with status {prepare_response.status_code}")
+        except Exception as prepare_error:
+            logger.error(f"[WALLET] Failed to prepare account: {prepare_error}")
+            # Don't fail the wallet creation if account prepare fails
+            # User can manually call the prepare endpoint later
+
+        # Build response
+        response_data = {
+            "walletId": wallet_id,
+            "addresses": addresses
+        }
+        
+        # Include account data if created
+        if account_created:
+            response_data["account"] = account_created
+            logger.info(f"[WALLET] ✅ Returning wallet + account data")
+            logger.info(f"[WALLET] 📦 Response includes: walletId={wallet_id}, account.address={account_created.get('address')}")
+            message = "Wallet and account created successfully"
+        # Otherwise include account preparation data if available
+        elif account_prepare_data:
+            response_data["accountPrepare"] = account_prepare_data
+            logger.info(f"[WALLET] ✅ Returning wallet creation + account preparation data")
+            logger.info(f"[WALLET] 📦 Response includes: walletId={wallet_id}, accountPrepare.payloadId={account_prepare_data.get('payloadId')}")
+            message = "Wallet created successfully and account preparation ready"
+        else:
+            message = "Wallet created successfully"
+        
         return {
             "success": True,
-            "message": "Wallet created successfully",
+            "message": message,
+            "data": response_data
+        }
+
+
+@router.post("/{wallet_id}/accounts/prepare")
+@limiter.limit("30/minute")
+async def prepare_account(
+    wallet_id: str,
+    data: dict,
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Prepare wallet account creation challenge.
+    
+    Path:
+        - wallet_id: Zynk wallet ID (e.g., znc_wallet_...)
+    
+    Body:
+        - chain: Blockchain (SOLANA, ETHEREUM, etc.)
+    
+    Returns:
+        - payloadId: Unique identifier for this challenge
+        - payloadToSign: JSON string to sign
+        - rpId: Relying Party ID
+    """
+    logger.info(f"[WALLET] Prepare account request - wallet_id: {wallet_id}, keys: {list(data.keys())}")
+    
+    chain = data.get("chain", "SOLANA")
+    
+    # Verify wallet belongs to current user
+    wallet = await prisma.wallets.find_first(
+        where={
+            "zynk_wallet_id": wallet_id,
+            "entity_id": str(current_user.id),
+            "deleted_at": None
+        }
+    )
+    
+    if not wallet:
+        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {wallet_id}, user: {current_user.id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Wallet not found or unauthorized"
+        )
+    
+    logger.info(f"[WALLET] Preparing account - Chain: {chain}, Wallet ID: {wallet_id}")
+    
+    # Call Zynk prepare account creation endpoint
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/accounts/prepare"
+    payload = {
+        "chain": chain
+    }
+    
+    logger.info(f"[WALLET] Prepare account URL: {url}")
+    logger.info(f"[WALLET] Prepare account payload: {payload}")
+    
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        response = await client.post(
+            url,
+            json=payload,
+            headers=_zynk_auth_header()
+        )
+        
+        logger.info(f"[WALLET] Prepare account response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            try:
+                error_detail = response.json().get("message", f"HTTP {response.status_code}")
+            except:
+                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
+            logger.error(f"[WALLET] Zynk API error: {error_detail}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Zynk API error: {error_detail}"
+            )
+        
+        body = response.json()
+        if not body.get("success"):
+            error_msg = body.get("message", "Zynk API returned error")
+            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=error_msg
+            )
+        
+        logger.info(f"[WALLET] Prepare account response: {body}")
+        
+        data_response = body.get("data", {})
+        payload_id = data_response.get("payloadId")
+        payload_to_sign = data_response.get("payloadToSign")
+        rp_id = data_response.get("rpId")
+        
+        if not all([payload_id, payload_to_sign]):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Zynk API did not return complete challenge data"
+            )
+        
+        return {
+            "success": True,
+            "data": {
+                "payloadId": payload_id,
+                "payloadToSign": payload_to_sign,
+                "rpId": rp_id
+            }
+        }
+
+
+@router.post("/accounts/submit")
+@limiter.limit("30/minute")
+async def submit_account(
+    data: dict,
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Submit signed wallet account creation.
+    
+    Body:
+        - payloadId: Payload ID from prepare step
+        - signatureType: "ApiKey"
+        - signature: Base64URL-encoded signature from sign step
+    
+    Returns:
+        - walletId: Wallet ID
+        - account: Account details (curve, path, addressFormat, address)
+        - address: Blockchain address
+    """
+    logger.info(f"[WALLET] ========================================")
+    logger.info(f"[WALLET] 🔵 ACCOUNT SUBMIT REQUEST RECEIVED")
+    logger.info(f"[WALLET] Request keys: {list(data.keys())}")
+    logger.info(f"[WALLET] User: {current_user.email} (ID: {current_user.id})")
+    logger.info(f"[WALLET] ========================================")
+    
+    payload_id = data.get("payloadId")
+    signature_type = data.get("signatureType", "ApiKey")
+    signature = data.get("signature")
+    
+    if not all([payload_id, signature]):
+        logger.error(f"[WALLET] ❌ Missing required fields - payloadId: {bool(payload_id)}, signature: {bool(signature)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="payloadId and signature are required"
+        )
+    
+    logger.info(f"[WALLET] Validated input - payloadId: {payload_id}, signatureType: {signature_type}, signature: {len(signature)} chars")
+    
+    # Call Zynk submit account creation endpoint
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/accounts/submit"
+    payload = {
+        "payloadId": payload_id,
+        "signatureType": signature_type,
+        "signature": signature
+    }
+    
+    logger.info(f"[WALLET] Submit account payload: {payload}")
+    
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        response = await client.post(
+            url,
+            json=payload,
+            headers=_zynk_auth_header()
+        )
+        
+        logger.info(f"[WALLET] Submit account response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            try:
+                error_detail = response.json().get("message", f"HTTP {response.status_code}")
+            except:
+                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
+            logger.error(f"[WALLET] Zynk API error: {error_detail}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Zynk API error: {error_detail}"
+            )
+        
+        body = response.json()
+        if not body.get("success"):
+            error_msg = body.get("message", "Zynk API returned error")
+            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=error_msg
+            )
+        
+        logger.info(f"[WALLET] ✅ Submit account response received from Zynk API")
+        logger.info(f"[WALLET] 📦 Submit Account Response:")
+        logger.info(f"[WALLET]    - success: {body.get('success')}")
+        logger.info(f"[WALLET]    - Full response: {body}")
+        
+        account_data = body.get("data", {})
+        wallet_id = account_data.get("walletId")
+        account = account_data.get("account", {})
+        address = account_data.get("address") or account.get("address")
+        
+        logger.info(f"[WALLET] 📦 Parsed Account Data:")
+        logger.info(f"[WALLET]    - walletId: {wallet_id}")
+        logger.info(f"[WALLET]    - address: {address}")
+        logger.info(f"[WALLET]    - curve: {account.get('curve')}")
+        logger.info(f"[WALLET]    - path: {account.get('path')}")
+        logger.info(f"[WALLET]    - addressFormat: {account.get('addressFormat')}")
+        
+        # Save account to database
+        logger.info(f"[WALLET] 💾 Saving account to database - Wallet ID: {wallet_id}, Address: {address}")
+        try:
+            # Find the wallet in our database
+            wallet = await prisma.wallets.find_first(
+                where={
+                    "zynk_wallet_id": wallet_id,
+                    "entity_id": str(current_user.id),
+                    "deleted_at": None
+                }
+            )
+            
+            if not wallet:
+                logger.error(f"[WALLET] Wallet not found in database for saving account - wallet_id: {wallet_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Wallet not found in database"
+                )
+            
+            # Create wallet account record
+            wallet_account = await prisma.wallet_accounts.create(
+                data={
+                    "wallet_id": wallet.id,
+                    "curve": account.get("curve", ""),
+                    "path_format": account.get("pathFormat", ""),
+                    "path": account.get("path", ""),
+                    "address_format": account.get("addressFormat", ""),
+                    "address": address
+                }
+            )
+            logger.info(f"[WALLET] Account saved to database successfully - DB ID: {wallet_account.id}")
+            
+        except Exception as db_error:
+            logger.error(f"[WALLET] Failed to save account to database: {db_error}")
+            # Don't fail the request if DB save fails - account is already created in Zynk
+            # Return success but log the error
+        
+        return {
+            "success": True,
+            "message": "Wallet account created successfully",
             "data": {
                 "walletId": wallet_id,
-                "addresses": addresses
+                "account": account,
+                "address": address
             }
         }
 
