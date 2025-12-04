@@ -136,6 +136,66 @@ async def _initiate_otp_internal(entity_id: str, user_email: str) -> dict:
         return body
 
 
+@router.get("/can-create")
+@limiter.limit("30/minute")
+async def can_create_wallet(
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+    """
+    Check if user can create a wallet.
+    Requires: Active funding account.
+    
+    Returns:
+        - canCreate: boolean
+        - reason: string (if cannot create)
+        - hasFundingAccount: boolean
+    """
+    logger.info(f"[WALLET] Checking wallet creation eligibility for user: {current_user.email}")
+    
+    # Check for funding account
+    funding_account = await prisma.funding_accounts.find_first(
+        where={
+            "entity_id": str(current_user.id),
+            "deleted_at": None,
+            "status": "ACTIVE"
+        }
+    )
+    
+    has_funding_account = funding_account is not None
+    
+    # Check if user already has a wallet
+    existing_wallet = await prisma.wallets.find_first(
+        where={
+            "entity_id": str(current_user.id),
+            "deleted_at": None,
+            "status": "ACTIVE"
+        }
+    )
+    
+    has_wallet = existing_wallet is not None
+    
+    can_create = has_funding_account and not has_wallet
+    reason = None
+    
+    if not has_funding_account:
+        reason = "You must link a bank account before creating a wallet"
+    elif has_wallet:
+        reason = "You already have a wallet"
+    
+    logger.info(f"[WALLET] Eligibility check: canCreate={can_create}, hasFundingAccount={has_funding_account}, hasWallet={has_wallet}")
+    
+    return {
+        "success": True,
+        "data": {
+            "canCreate": can_create,
+            "reason": reason,
+            "hasFundingAccount": has_funding_account,
+            "hasWallet": has_wallet
+        }
+    }
+
+
 @router.post("/register-auth")
 @limiter.limit("10/minute")
 async def register_auth(
@@ -144,6 +204,7 @@ async def register_auth(
 ):
     """
     Register auth for wallet creation.
+    Requires user to have a funding account before wallet creation.
     Always proceeds to next step regardless of response.
 
     Returns:
@@ -151,6 +212,25 @@ async def register_auth(
     """
     logger.info("[WALLET] ========== REGISTER AUTH START ==========")
     logger.info(f"[WALLET] Step 1: Received register-auth request from user: {current_user.email}")
+
+    # Check if user has a funding account
+    logger.info("[WALLET] Checking if user has a funding account...")
+    funding_account = await prisma.funding_accounts.find_first(
+        where={
+            "entity_id": str(current_user.id),
+            "deleted_at": None,
+            "status": "ACTIVE"
+        }
+    )
+    
+    if not funding_account:
+        logger.warning(f"[WALLET] User {current_user.email} attempted wallet creation without funding account")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must have an active funding account before creating a wallet. Please link a bank account first."
+        )
+    
+    logger.info(f"[WALLET] ✅ User has funding account (ID: {funding_account.id})")
 
     # Get and clean entity ID from authenticated user
     logger.info("[WALLET] Step 2: Getting and cleaning entity ID")
