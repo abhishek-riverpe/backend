@@ -114,6 +114,7 @@ model entities {
 
   @@map("entities")
   wallets wallets[]
+  externalAccounts external_accounts[]
 }
 
 model kyc_sessions {
@@ -306,4 +307,23 @@ model wallet_accounts {
   @@index([wallet_id])
   @@index([address])
   @@map("wallet_accounts")
+  externalAccounts external_accounts[]
+}
+
+model external_accounts {
+  id                       String            @id @default(uuid()) @db.Uuid
+  zynk_external_account_id String            @unique 
+  entity_id                String            @db.Uuid
+  wallet_account_id        String            @db.Uuid
+  wallet_address           String
+  jurisdiction_id          String
+  status                   AccountStatusEnum @default(INACTIVE)
+  created_at               DateTime          @default(now())
+  updated_at               DateTime          @updatedAt
+  deleted_at               DateTime?
+  // Relations
+  entity                   entities          @relation(fields: [entity_id], references: [id], onDelete: Cascade)
+  wallet_account           wallet_accounts   @relation(fields: [wallet_account_id], references: [id], onDelete: Cascade)
+
+  @@map("external_accounts")
 }
