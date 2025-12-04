@@ -491,7 +491,10 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
     # If no user, do NOT reveal which part failed
     if not user:
+        logger.warning(f"[AUTH] User not found for email: {email}")
         invalid_credentials()
+
+    logger.info(f"[AUTH] User found: {email} (ID: {user.id}, Status: {user.status})")
 
     # Check locked state
     now = datetime.now(timezone.utc)
@@ -549,12 +552,16 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
     # Verify password (your `password` column stores the hash)
     try:
+        logger.info(f"[AUTH] Attempting password verification for user: {email}")
         ok = pwd_context.verify(password, user.password)
-    except Exception:
+        logger.info(f"[AUTH] Password verification result: {'SUCCESS' if ok else 'FAILED'}")
+    except Exception as e:
         # Any verification error should be treated as invalid creds
+        logger.error(f"[AUTH] Password verification exception: {type(e).__name__}: {str(e)}")
         ok = False
 
     if not ok:
+        logger.warning(f"[AUTH] Signin failed - Invalid credentials for email: {email}")
         # Increment attempts; lock if threshold reached
         attempts = (user.login_attempts or 0) + 1
         lock_until = None
@@ -810,14 +817,25 @@ async def confirm_password_reset(payload: schemas.ForgotPasswordConfirm):
     }
 
 @router.post("/refresh", response_model=schemas.AuthResponse)
-async def refresh_token(request: Request, response: Response):
+async def refresh_token(request: Request, response: Response, body: dict = None):
     """
-    Issue a new access/refresh token pair using the HttpOnly refresh cookie.
+    Issue a new access/refresh token pair using the HttpOnly refresh cookie or request body.
+    Supports both web (cookies) and mobile (request body) clients.
     Returns unified response; sets a fresh refresh cookie.
     """
+    # Try to get refresh token from cookies (web) or request body (mobile)
     rt = request.cookies.get("rp_refresh")
+    
+    # If not in cookies, try to get from request body (for mobile apps)
     if not rt:
-        logger.warning("[AUTH] Refresh token missing from cookies")
+        try:
+            body_data = await request.json() if body is None else body
+            rt = body_data.get("refresh_token")
+        except Exception:
+            pass  # Body parsing failed, continue without body token
+    
+    if not rt:
+        logger.warning("[AUTH] Refresh token missing from both cookies and request body")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
 
     try:

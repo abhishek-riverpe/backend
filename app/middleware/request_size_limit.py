@@ -1,8 +1,12 @@
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import UploadFile
+from starlette.requests import ClientDisconnect
+import logging
 
 from ..core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Request size limit in bytes
 MAX_REQUEST_SIZE = settings.max_request_size_mb * 1024 * 1024
@@ -53,6 +57,12 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
             
             # Replace the receive function
             request._receive = receive
+        except ClientDisconnect:
+            # Client disconnected before we could read the body
+            # This is normal behavior (timeout, network issue, app closed)
+            logger.warning(f"[MIDDLEWARE] Client disconnected during request: {request.method} {request.url.path}")
+            # Let the exception propagate - Starlette will handle it gracefully
+            raise
         except RuntimeError:
             # Body already consumed, skip validation
             pass
