@@ -45,6 +45,7 @@ async def save_funding_account_to_db(
     funding_account_data = {
         "id": str(uuid.uuid4()),  # Generate new UUID for our DB
         "entity_id": entity_id,
+        "zynk_funding_account_id": zynk_response_data.get("id"),  # Store Zynk funding account ID
         "jurisdiction_id": zynk_response_data.get("jurisdictionId") or US_FUNDING_JURISDICTION_ID,
         "provider_id": zynk_response_data.get("providerId", ""),
         "status": db_status,

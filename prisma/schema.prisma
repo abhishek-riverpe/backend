@@ -245,6 +245,7 @@ model login_sessions {
 
 model funding_accounts {
   id                       String            @id @default(uuid()) @db.Uuid
+  zynk_funding_account_id  String?           @unique
   entity_id                String            @db.Uuid
   jurisdiction_id          String
   provider_id              String
