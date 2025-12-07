@@ -665,8 +665,18 @@ async def get_user_wallet(
                 "data": None
             }
         
-        # Extract addresses from accounts
+        # Extract addresses and account details
         addresses = [account.address for account in wallet.wallet_accounts] if wallet.wallet_accounts else []
+        wallet_accounts = [
+            {
+                "id": str(account.id),
+                "address": account.address,
+                "chain": wallet.chain,
+                "wallet_name": wallet.wallet_name,
+                "wallet_id": wallet.zynk_wallet_id,
+            }
+            for account in wallet.wallet_accounts
+        ] if wallet.wallet_accounts else []
         
         logger.info(f"[WALLET] Found wallet: {wallet.zynk_wallet_id} with {len(addresses)} addresses")
         
@@ -678,6 +688,7 @@ async def get_user_wallet(
                 "walletName": wallet.wallet_name,
                 "chain": wallet.chain,
                 "addresses": addresses,
+                "wallet_accounts": wallet_accounts,
                 "status": wallet.status,
                 "createdAt": wallet.created_at.isoformat() if wallet.created_at else None
             }

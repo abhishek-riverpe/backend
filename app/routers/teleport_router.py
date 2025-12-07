@@ -2,10 +2,19 @@ import httpx
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import entities as Entities
+from prisma.enums import AccountStatusEnum
 from ..core import auth
 from ..core.config import settings
+from ..core.database import prisma
 from ..utils.errors import upstream_error
-from ..schemas.teleport import CreateTeleportRequest
+from ..schemas.teleport import (
+    CreateTeleportRequest,
+    CreateTeleportResponse,
+    TeleportDetailsResponse,
+    TeleportDetailsData,
+    FundingAccountInfo,
+    WalletAccountInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,37 +30,216 @@ def _auth_header():
         "x-api-token": settings.zynk_api_key,
     }
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.get("", response_model=TeleportDetailsResponse, status_code=status.HTTP_200_OK)
+async def get_teleport_details(
+    current: Entities = Depends(auth.get_current_entity)
+):
+    """
+    Get teleport details for the authenticated entity.
+    Returns funding account and wallet account information.
+    """
+    entity_id = str(current.id)
+    
+    logger.info(f"[TELEPORT] Fetching teleport details for entity {entity_id}")
+    
+    # Get funding account
+    funding_account = await prisma.funding_accounts.find_first(
+        where={"entity_id": entity_id, "deleted_at": None}
+    )
+    
+    if not funding_account:
+        return TeleportDetailsResponse(
+            success=True,
+            message="No funding account found",
+            data=TeleportDetailsData(
+                teleportId=None,
+                fundingAccount=None,
+                walletAccount=None,
+            ),
+            error=None,
+            meta={},
+        )
+    
+    # Get wallet accounts
+    wallets = await prisma.wallets.find_many(
+        where={"entity_id": entity_id, "deleted_at": None},
+        include={"wallet_accounts": True},
+    )
+    
+    # Get first active wallet account
+    wallet_account = None
+    wallet = None
+    for w in wallets:
+        for account in w.wallet_accounts:
+            if account.deleted_at is None:
+                wallet_account = account
+                wallet = w
+                break
+        if wallet_account:
+            break
+    
+    funding_account_info = None
+    if funding_account:
+        funding_account_info = FundingAccountInfo(
+            id=str(funding_account.id),
+            bank_name=funding_account.bank_name,
+            bank_account_number=funding_account.bank_account_number,
+            bank_routing_number=funding_account.bank_routing_number,
+            currency=funding_account.currency,
+            status=str(funding_account.status),
+        )
+    
+    wallet_account_info = None
+    if wallet_account and wallet:
+        wallet_account_info = WalletAccountInfo(
+            id=str(wallet_account.id),
+            address=wallet_account.address,
+            chain=wallet.chain,
+            wallet_name=wallet.wallet_name or "Wallet",
+        )
+    
+    # Try to fetch teleport details from Zynk Labs if we have zynk_entity_id
+    teleport_id = None
+    if current.zynk_entity_id:
+        try:
+            url = f"{settings.zynk_base_url}/transformer/teleport/entity/{current.zynk_entity_id}"
+            headers = {**_auth_header(), "Accept": "application/json"}
+            
+            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+                resp = await client.get(url, headers=headers)
+            
+            if resp.status_code == 200:
+                body = resp.json()
+                if body.get("success") and body.get("data"):
+                    teleports = body.get("data", [])
+                    if teleports and len(teleports) > 0:
+                        teleport_id = teleports[0].get("teleportId")
+        except Exception as exc:
+            logger.warning(f"[TELEPORT] Failed to fetch teleport from Zynk: {exc}")
+            # Continue without teleport ID
+    
+    return TeleportDetailsResponse(
+        success=True,
+        message="Teleport details fetched successfully",
+        data=TeleportDetailsData(
+            teleportId=teleport_id,
+            fundingAccount=funding_account_info,
+            walletAccount=wallet_account_info,
+        ),
+        error=None,
+        meta={},
+    )
+
+@router.post("", response_model=CreateTeleportResponse, status_code=status.HTTP_201_CREATED)
 async def create_teleport(
     payload: CreateTeleportRequest,
     current: Entities = Depends(auth.get_current_entity)
 ):
     """
     Create a teleport route for the authenticated entity.
-    Wraps ZynkLabs API and returns unified response format.
-    Ensures that users can only create teleports for their own accounts.
+    Automatically gets funding account ID and wallet account address from database.
     """
-    # Ensure the entity has a zynk_entity_id set (means it's linked to ZyncLab)
-    # zynk_entity_id = getattr(current, "zynk_entity_id", None) or getattr(current, "external_entity_id", None)
-    # if not zynk_entity_id:
-    #     raise HTTPException(
-    #         status_code=404, 
-    #         detail="Entity not linked to external service. Please complete the entity creation process."
-    #     )
+    entity_id = str(current.id)
     
-    # Construct the URL using the zynk_entity_id for the upstream call
-    # Based on funding account pattern: /api/v1/transformer/accounts/{entity_id}/funding_accounts
-    # Teleport likely follows: /api/v1/transformer/accounts/{entity_id}/teleports
-    url = f"{settings.zynk_base_url}/api/v1/transformer/accounts/{zynk_entity_id}/teleports"
+    logger.info(f"[TELEPORT] Creating teleport for entity {entity_id}")
+    
+    # Get funding account
+    funding_account = await prisma.funding_accounts.find_first(
+        where={"entity_id": entity_id, "deleted_at": None}
+    )
+    
+    if not funding_account:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "success": False,
+                "message": "Funding account not found. Please create a funding account first.",
+                "error": {"code": "FUNDING_ACCOUNT_NOT_FOUND"},
+            }
+        )
+    
+    if not funding_account.zynk_funding_account_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "success": False,
+                "message": "Funding account is not properly configured. Please contact support.",
+                "error": {"code": "FUNDING_ACCOUNT_INVALID"},
+            }
+        )
+    
+    # Get wallet account
+    wallet_account = None
+    if payload.walletAccountId:
+        # Use specified wallet account
+        wallet_account = await prisma.wallet_accounts.find_first(
+            where={
+                "id": payload.walletAccountId,
+                "deleted_at": None,
+            },
+            include={"wallet": True},
+        )
+        
+        if not wallet_account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "success": False,
+                    "message": "Wallet account not found.",
+                    "error": {"code": "WALLET_ACCOUNT_NOT_FOUND"},
+                }
+            )
+        
+        # Validate wallet belongs to entity
+        if str(wallet_account.wallet.entity_id) != entity_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "success": False,
+                    "message": "Access denied. Wallet account does not belong to you.",
+                    "error": {"code": "ACCESS_DENIED"},
+                }
+            )
+    else:
+        # Get first active wallet account
+        wallets = await prisma.wallets.find_many(
+            where={"entity_id": entity_id, "deleted_at": None},
+            include={"wallet_accounts": True},
+        )
+        
+        for wallet in wallets:
+            for account in wallet.wallet_accounts:
+                if account.deleted_at is None:
+                    wallet_account = account
+                    break
+            if wallet_account:
+                break
+    
+    if not wallet_account:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "success": False,
+                "message": "No wallet account found. Please create a wallet first.",
+                "error": {"code": "WALLET_ACCOUNT_NOT_FOUND"},
+            }
+        )
+    
+    # Use correct Zynk Labs endpoint
+    url = f"{settings.zynk_base_url}/api/v1/transformer/teleport/create"
     headers = {**_auth_header(), "Content-Type": "application/json", "Accept": "application/json"}
     
     # Prepare request body for ZynkLabs
     request_body = {
-        "fundingAccountId": payload.fundingAccountId,
-        "externalAccountId": payload.externalAccountId,
+        "fundingAccountId": funding_account.zynk_funding_account_id,
+        "externalAccountId": wallet_account.address,
     }
     
-    logger.info(f"[TELEPORT] Creating teleport for entity {current.id} (zynk_entity_id: {zynk_entity_id})")
+    logger.info(
+        f"[TELEPORT] Creating teleport for entity {entity_id} - "
+        f"fundingAccountId: {funding_account.zynk_funding_account_id}, "
+        f"externalAccountId: {wallet_account.address}"
+    )
     
     # Make the request to ZyncLab with retry logic
     for attempt in range(2):  # 1 retry
@@ -62,7 +250,7 @@ async def create_teleport(
             if attempt == 0:
                 continue
             raise upstream_error(
-                log_message=f"[ZYNK] Request error while creating teleport for entity {current.id} at {url}: {exc}",
+                log_message=f"[ZYNK] Request error while creating teleport for entity {entity_id} at {url}: {exc}",
                 user_message="Verification service is currently unreachable. Please try again later.",
             )
         
@@ -70,27 +258,27 @@ async def create_teleport(
             body = resp.json()
         except ValueError:
             raise upstream_error(
-                log_message=f"[ZYNK] Invalid JSON while creating teleport for entity {current.id} at {url}. Response preview: {resp.text[:200]}",
+                log_message=f"[ZYNK] Invalid JSON while creating teleport for entity {entity_id} at {url}. Response preview: {resp.text[:200]}",
                 user_message="Verification service returned an invalid response. Please try again later.",
             )
         
         if not (200 <= resp.status_code < 300):
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             raise upstream_error(
-                log_message=f"[ZYNK] Upstream error {resp.status_code} while creating teleport for entity {current.id} at {url}: {error_detail}",
+                log_message=f"[ZYNK] Upstream error {resp.status_code} while creating teleport for entity {entity_id} at {url}: {error_detail}",
                 user_message="Verification service is currently unavailable. Please try again later.",
             )
         
         if not isinstance(body, dict):
             raise upstream_error(
-                log_message=f"[ZYNK] Unexpected response structure while creating teleport for entity {current.id} at {url}: {body}",
+                log_message=f"[ZYNK] Unexpected response structure while creating teleport for entity {entity_id} at {url}: {body}",
                 user_message="Verification service returned an unexpected response. Please try again later.",
             )
         
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
             raise upstream_error(
-                log_message=f"[ZYNK] Teleport creation rejected by upstream for entity {current.id} at {url}: {error_detail}",
+                log_message=f"[ZYNK] Teleport creation rejected by upstream for entity {entity_id} at {url}: {error_detail}",
                 user_message="Verification service rejected the request. Please contact support if this continues.",
             )
         
@@ -104,24 +292,22 @@ async def create_teleport(
         
         if not teleport_id:
             raise upstream_error(
-                log_message=f"[ZYNK] Missing teleportId in ZynkLabs response for entity {current.id} at {url}: {body}",
+                log_message=f"[ZYNK] Missing teleportId in ZynkLabs response for entity {entity_id} at {url}: {body}",
                 user_message="Verification service returned an incomplete response. Please try again later.",
             )
         
-        logger.info(f"[TELEPORT] Successfully created teleport {teleport_id} for entity {current.id}")
+        logger.info(f"[TELEPORT] Successfully created teleport {teleport_id} for entity {entity_id}")
         
-        return {
-            "success": True,
-            "message": zynk_data.get("message", "Teleport created successfully"),
-            "data": {
-                "teleportId": teleport_id
-            },
-            "error": None,
-            "meta": {},
-        }
+        return CreateTeleportResponse(
+            success=True,
+            message=zynk_data.get("message", "Teleport created successfully"),
+            data={"teleportId": teleport_id},
+            error=None,
+            meta={},
+        )
     
     raise upstream_error(
-        log_message=f"[ZYNK] Failed to create teleport for entity {current.id} at {url} after multiple attempts",
+        log_message=f"[ZYNK] Failed to create teleport for entity {entity_id} at {url} after multiple attempts",
         user_message="Verification service is currently unavailable. Please try again later.",
     )
 

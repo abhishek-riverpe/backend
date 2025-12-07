@@ -73,6 +73,27 @@ async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[s
             )
 
         if not (200 <= response.status_code < 300):
+            # Handle special case where Zynk indicates KYC is already completed
+            # Example body:
+            #   {'success': False,
+            #    'error': {'code': 400, 'message': 'Bad Request',
+            #              'details': 'KYC for this entity has already been done'}}
+            error_obj = body.get("error") or {}
+            error_details = (error_obj.get("details") or body.get("message") or "").lower()
+            if (
+                response.status_code == 400
+                and "kyc for this entity has already been done" in error_details
+            ):
+                logger.info(
+                    "[ZYNK] KYC already completed for entity=%s; treating as already verified.",
+                    zynk_entity_id,
+                )
+                # Surface a clean marker back to the router instead of raising.
+                return {
+                    "kycCompleted": True,
+                    "message": "KYC for this entity has already been completed.",
+                }
+
             error_msg = body.get("message") or body.get("error") or "Unknown error"
             logger.error(
                 "[ZYNK] Upstream error on KYC link call: status=%s, error=%s, body=%s",
