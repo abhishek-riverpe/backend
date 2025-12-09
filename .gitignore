@@ -15,7 +15,7 @@ ENV/
 
 # --- Environment Variables ---
 .env
-.env.*
+.env.local
 !.env.example  # Keep a sample env file for reference
 
 # --- Logs and Temp Files ---
