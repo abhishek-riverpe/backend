@@ -442,7 +442,7 @@ def _validate_captcha_if_required(
     response: Response,
 ) -> None:
     """Validate CAPTCHA if required based on login attempts."""
-    captcha_required = False  # Currently disabled
+    captcha_required = current_attempts >= CAPTCHA_REQUIRED_ATTEMPTS
     
     if captcha_required:
         if not payload.captcha_id or not payload.captcha_code:
