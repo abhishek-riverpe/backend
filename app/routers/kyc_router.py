@@ -44,6 +44,9 @@ def _build_error_response(
 # Fixed routing id for US-based KYC flow
 US_KYC_ROUTING_ID = "infrap_f2a15c0b_89cf_4041_83fb_8ba064083706"
 
+# Error message constants
+INVALID_ENTITY_IDENTIFIER_MSG = "Invalid entity identifier"
+
 
 @router.get("/status", response_model=KycStatusResponse, status_code=status.HTTP_200_OK)
 @limiter.limit("30/minute")  # Reuse KYC rate limiting to avoid status polling abuse
@@ -64,7 +67,7 @@ async def get_kyc_status(
             exc_info=exc,
         )
         raise _build_error_response(
-            "Invalid entity identifier",
+            INVALID_ENTITY_IDENTIFIER_MSG,
             code="BAD_REQUEST",
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -176,8 +179,8 @@ async def get_kyc_link(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    zynk_entity_id = current_entity.zynk_entity_id
     entity_id = current_entity.id
+    zynk_entity_id = current_entity.zynk_entity_id
 
     logger.info(
         "[KYC] KYC link request - entity_id=%s, email=%s, zynk_entity_id=%s",
@@ -186,7 +189,48 @@ async def get_kyc_link(
         zynk_entity_id,
     )
 
-    # Look up existing KYC session (normally created at entity creation time)
+    # Get or create KYC session
+    kyc_session = await _get_or_create_kyc_session_for_link(entity_id)
+    status_value = str(kyc_session.status)
+
+    # Route to appropriate handler based on status
+    if status_value == "NOT_STARTED":
+        return await _handle_not_started_status(
+            kyc_session, zynk_entity_id, entity_id, current_entity
+        )
+    
+    if status_value == "INITIATED" and kyc_session.kyc_link:
+        return _handle_initiated_status(kyc_session, status_value, entity_id)
+    
+    if status_value == "APPROVED":
+        return _handle_approved_status(kyc_session, entity_id)
+    
+    if status_value == "REVIEWING":
+        return _handle_reviewing_status(kyc_session, status_value, entity_id)
+    
+    if status_value == "REJECTED":
+        return _handle_rejected_status(kyc_session, status_value, entity_id)
+
+    # Any other unexpected status: do not expose link
+    logger.warning(
+        "[KYC] KYC session has unexpected status - entity_id=%s, session_id=%s, status=%s",
+        entity_id,
+        kyc_session.id,
+        status_value,
+    )
+    raise _build_error_response(
+        "No active KYC link found for this user",
+        code="KYC_LINK_NOT_FOUND",
+        status_code=status.HTTP_404_NOT_FOUND,
+    )
+
+
+async def _get_or_create_kyc_session_for_link(entity_id: str):
+    """
+    Get existing KYC session or create a new one for link generation.
+    Returns the KYC session object.
+    Raises HTTPException on errors.
+    """
     try:
         kyc_session = await prisma.kyc_sessions.find_first(
             where={"entity_id": entity_id, "deleted_at": None}
@@ -196,7 +240,7 @@ async def get_kyc_link(
             "[KYC] DataError while looking up KYC session for entity_id=%s", entity_id, exc_info=exc
         )
         raise _build_error_response(
-            "Invalid entity identifier",
+            INVALID_ENTITY_IDENTIFIER_MSG,
             code="BAD_REQUEST",
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -212,7 +256,6 @@ async def get_kyc_link(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    # If no session exists (should be rare), treat as NOT_STARTED and create one
     if not kyc_session:
         logger.info(
             "[KYC] No KYC session found for entity_id=%s. Creating NOT_STARTED session.",
@@ -237,238 +280,279 @@ async def get_kyc_link(
                 code="INTERNAL_ERROR",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+    
+    return kyc_session
 
-    status_value = str(kyc_session.status)
 
-    # If KYC has not started yet, trigger Zynk and move to INITIATED
-    if status_value == "NOT_STARTED":
-        routing_id = US_KYC_ROUTING_ID
-        logger.info(
-            "[KYC] Status NOT_STARTED - generating new KYC link from Zynk "
-            "- entity_id=%s, zynk_entity_id=%s, routing_id=%s",
+async def _handle_kyc_already_completed(
+    kyc_session: Any,
+    kyc_data: Dict[str, Any],
+    entity_id: str,
+) -> KycLinkResponse:
+    """Handle case where Zynk reports KYC is already completed."""
+    logger.info(
+        "[KYC] Zynk reports KYC already completed for entity_id=%s, "
+        "updating local session to APPROVED.",
+        entity_id,
+    )
+    now = datetime.now(timezone.utc)
+    try:
+        await prisma.kyc_sessions.update(
+            where={"id": kyc_session.id},
+            data={
+                "status": "APPROVED",
+                "completed_at": now,
+            },
+        )
+    except Exception as exc:
+        logger.error(
+            "[KYC] Failed to update KYC session to APPROVED for entity_id=%s",
             entity_id,
-            zynk_entity_id,
-            routing_id,
+            exc_info=exc,
+        )
+        # Even if the DB update fails, still return a completed status to the client.
+    
+    return KycLinkResponse(
+        success=True,
+        data=KycLinkData(
+            message=kyc_data.get("message", "KYC is already completed for this user."),
+            kycLink=None,
+            tosLink=None,
+            kycStatus="approved",
+            tosStatus="accepted",
+        ),
+        error=None,
+    )
+
+
+async def _update_session_to_initiated(
+    kyc_session: Any,
+    routing_id: str,
+    kyc_link: str,
+    entity_id: str,
+) -> None:
+    """Update KYC session to INITIATED status with link."""
+    now = datetime.now(timezone.utc)
+    try:
+        await prisma.kyc_sessions.update(
+            where={"id": kyc_session.id},
+            data={
+                "status": "INITIATED",
+                "routing_id": routing_id,
+                "kyc_link": kyc_link,
+                "initiated_at": now,
+            },
+        )
+        logger.info(
+            "[KYC] Updated KYC session to INITIATED - entity_id=%s, session_id=%s",
+            entity_id,
+            kyc_session.id,
+        )
+    except Exception as exc:
+        logger.error(
+            "[KYC] Failed to update KYC session to INITIATED for entity_id=%s",
+            entity_id,
+            exc_info=exc,
+        )
+        raise _build_error_response(
+            "Failed to persist KYC session. Please try again later.",
+            code="INTERNAL_ERROR",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-        try:
-            kyc_data = await get_kyc_link_from_zynk(zynk_entity_id, routing_id)
-        except HTTPException:
-            # Propagate well-formed HTTP errors (e.g. auth misconfig)
-            raise
-        except Exception as exc:
-            logger.error(
-                "[KYC] Failed to generate KYC link from Zynk for zynk_entity_id=%s",
-                zynk_entity_id,
-                exc_info=exc,
-            )
-            raise _build_error_response(
-                "Failed to generate KYC link. Please try again later.",
-                code="INTERNAL_ERROR",
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
 
-        # If Zynk indicates KYC is already completed, mark session as APPROVED and
-        # return a friendly response without a link.
-        if kyc_data.get("kycCompleted"):
+async def _send_kyc_link_email(
+    current_entity: Entities,
+    kyc_link: str,
+    entity_id: str,
+) -> None:
+    """Send KYC link email notification (non-blocking)."""
+    try:
+        user_name = (
+            f"{current_entity.first_name or ''} {current_entity.last_name or ''}".strip()
+            or "User"
+        )
+        email_sent = await email_service.send_kyc_link_email(
+            email=current_entity.email,
+            user_name=user_name,
+            kyc_link=kyc_link,
+            timestamp=datetime.now(timezone.utc),
+        )
+        if email_sent:
             logger.info(
-                "[KYC] Zynk reports KYC already completed for entity_id=%s, "
-                "updating local session to APPROVED.",
-                entity_id,
-            )
-            now = datetime.now(timezone.utc)
-            try:
-                kyc_session = await prisma.kyc_sessions.update(
-                    where={"id": kyc_session.id},
-                    data={
-                        "status": "APPROVED",
-                        "completed_at": now,
-                    },
-                )
-            except Exception as exc:
-                logger.error(
-                    "[KYC] Failed to update KYC session to APPROVED for entity_id=%s",
-                    entity_id,
-                    exc_info=exc,
-                )
-                # Even if the DB update fails, still return a completed status to the client.
-            return KycLinkResponse(
-                success=True,
-                data=KycLinkData(
-                    message=kyc_data.get(
-                        "message", "KYC is already completed for this user."
-                    ),
-                    kycLink=None,
-                    tosLink=None,
-                    kycStatus="approved",
-                    tosStatus="accepted",
-                ),
-                error=None,
-            )
-
-        now = datetime.now(timezone.utc)
-        try:
-            kyc_session = await prisma.kyc_sessions.update(
-                where={"id": kyc_session.id},
-                data={
-                    "status": "INITIATED",
-                    "routing_id": routing_id,
-                    "kyc_link": kyc_data["kycLink"],
-                    "initiated_at": now,
-                },
-            )
-            logger.info(
-                "[KYC] Updated KYC session to INITIATED - entity_id=%s, session_id=%s",
-                entity_id,
-                kyc_session.id,
-            )
-        except Exception as exc:
-            logger.error(
-                "[KYC] Failed to update KYC session to INITIATED for entity_id=%s",
-                entity_id,
-                exc_info=exc,
-            )
-            raise _build_error_response(
-                "Failed to persist KYC session. Please try again later.",
-                code="INTERNAL_ERROR",
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        # Send email notification with KYC link
-        try:
-            user_name = f"{current_entity.first_name or ''} {current_entity.last_name or ''}".strip() or "User"
-            email_sent = await email_service.send_kyc_link_email(
-                email=current_entity.email,
-                user_name=user_name,
-                kyc_link=kyc_data["kycLink"],
-                timestamp=now,
-            )
-            if email_sent:
-                logger.info(
-                    "[KYC] KYC link email sent successfully to %s for entity_id=%s",
-                    current_entity.email,
-                    entity_id,
-                )
-            else:
-                logger.warning(
-                    "[KYC] Failed to send KYC link email to %s for entity_id=%s (but link was generated)",
-                    current_entity.email,
-                    entity_id,
-                )
-        except Exception as email_exc:
-            # Log error but don't fail the request if email sending fails
-            # The KYC link was successfully generated and stored, so we should return it
-            logger.error(
-                "[KYC] Error sending KYC link email to %s for entity_id=%s: %s",
+                "[KYC] KYC link email sent successfully to %s for entity_id=%s",
                 current_entity.email,
                 entity_id,
-                str(email_exc),
-                exc_info=email_exc,
             )
-
-        return KycLinkResponse(
-            success=True,
-            data=KycLinkData(
-                message=kyc_data.get("message", "KYC link generated successfully"),
-                kycLink=kyc_data["kycLink"],
-                tosLink=kyc_data.get("tosLink"),
-                kycStatus=kyc_data.get("kycStatus", "initiated"),
-                tosStatus=kyc_data.get("tosStatus", "pending"),
-            ),
-            error=None,
-        )
-
-    # If already INITIATED with a link, just return it
-    if status_value == "INITIATED" and kyc_session.kyc_link:
-        logger.info(
-            "[KYC] Returning existing INITIATED KYC link - entity_id=%s, session_id=%s",
+        else:
+            logger.warning(
+                "[KYC] Failed to send KYC link email to %s for entity_id=%s (but link was generated)",
+                current_entity.email,
+                entity_id,
+            )
+    except Exception as email_exc:
+        # Log error but don't fail the request if email sending fails
+        # The KYC link was successfully generated and stored, so we should return it
+        logger.error(
+            "[KYC] Error sending KYC link email to %s for entity_id=%s: %s",
+            current_entity.email,
             entity_id,
-            kyc_session.id,
-        )
-        return KycLinkResponse(
-            success=True,
-            data=KycLinkData(
-                message="KYC link retrieved successfully",
-                kycLink=kyc_session.kyc_link,
-                tosLink=None,
-                kycStatus=status_value.lower(),
-                tosStatus="pending",
-            ),
-            error=None,
+            str(email_exc),
+            exc_info=email_exc,
         )
 
-    # If KYC is already APPROVED, return success response (no link needed)
-    if status_value == "APPROVED":
-        logger.info(
-            "[KYC] KYC already approved for entity_id=%s, session_id=%s - returning approved status",
-            entity_id,
-            kyc_session.id,
+
+async def _handle_not_started_status(
+    kyc_session: Any,
+    zynk_entity_id: str,
+    entity_id: str,
+    current_entity: Entities,
+) -> KycLinkResponse:
+    """Handle NOT_STARTED status by generating new KYC link from Zynk."""
+    routing_id = US_KYC_ROUTING_ID
+    logger.info(
+        "[KYC] Status NOT_STARTED - generating new KYC link from Zynk "
+        "- entity_id=%s, zynk_entity_id=%s, routing_id=%s",
+        entity_id,
+        zynk_entity_id,
+        routing_id,
+    )
+
+    try:
+        kyc_data = await get_kyc_link_from_zynk(zynk_entity_id, routing_id)
+    except HTTPException:
+        # Propagate well-formed HTTP errors (e.g. auth misconfig)
+        raise
+    except Exception as exc:
+        logger.error(
+            "[KYC] Failed to generate KYC link from Zynk for zynk_entity_id=%s",
+            zynk_entity_id,
+            exc_info=exc,
         )
-        return KycLinkResponse(
-            success=True,
-            data=KycLinkData(
-                message="KYC verification is already completed for this user.",
-                kycLink=None,
-                tosLink=None,
-                kycStatus="approved",
-                tosStatus="accepted",
-            ),
-            error=None,
+        raise _build_error_response(
+            "Failed to generate KYC link. Please try again later.",
+            code="INTERNAL_ERROR",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    # For other statuses (REVIEWING, REJECTED, etc.), return appropriate response
-    # REVIEWING: KYC is in progress, no link available
-    if status_value == "REVIEWING":
-        logger.info(
-            "[KYC] KYC is under review for entity_id=%s, session_id=%s",
-            entity_id,
-            kyc_session.id,
-        )
-        return KycLinkResponse(
-            success=True,
-            data=KycLinkData(
-                message="Your KYC verification is currently under review. We will notify you once it's complete.",
-                kycLink=None,
-                tosLink=None,
-                kycStatus=status_value.lower(),
-                tosStatus="pending",
-            ),
-            error=None,
-        )
+    # If Zynk indicates KYC is already completed, handle it separately
+    if kyc_data.get("kycCompleted"):
+        return await _handle_kyc_already_completed(kyc_session, kyc_data, entity_id)
 
-    # REJECTED: KYC was rejected, user may need to restart
-    if status_value == "REJECTED":
-        logger.info(
-            "[KYC] KYC was rejected for entity_id=%s, session_id=%s",
-            entity_id,
-            kyc_session.id,
-        )
-        rejection_msg = "Your KYC verification was rejected."
-        if kyc_session.rejection_reason:
-            rejection_msg += f" Reason: {kyc_session.rejection_reason}"
-        return KycLinkResponse(
-            success=True,
-            data=KycLinkData(
-                message=rejection_msg,
-                kycLink=None,
-                tosLink=None,
-                kycStatus=status_value.lower(),
-                tosStatus="pending",
-            ),
-            error=None,
-        )
+    # Update session to INITIATED and send email
+    await _update_session_to_initiated(
+        kyc_session, routing_id, kyc_data["kycLink"], entity_id
+    )
+    await _send_kyc_link_email(current_entity, kyc_data["kycLink"], entity_id)
 
-    # Any other unexpected status: do not expose link
-    logger.warning(
-        "[KYC] KYC session has unexpected status - entity_id=%s, session_id=%s, status=%s",
+    return KycLinkResponse(
+        success=True,
+        data=KycLinkData(
+            message=kyc_data.get("message", "KYC link generated successfully"),
+            kycLink=kyc_data["kycLink"],
+            tosLink=kyc_data.get("tosLink"),
+            kycStatus=kyc_data.get("kycStatus", "initiated"),
+            tosStatus=kyc_data.get("tosStatus", "pending"),
+        ),
+        error=None,
+    )
+
+
+def _handle_initiated_status(
+    kyc_session: Any,
+    status_value: str,
+    entity_id: str,
+) -> KycLinkResponse:
+    """Handle INITIATED status by returning existing link."""
+    logger.info(
+        "[KYC] Returning existing INITIATED KYC link - entity_id=%s, session_id=%s",
         entity_id,
         kyc_session.id,
-        status_value,
     )
-    raise _build_error_response(
-        "No active KYC link found for this user",
-        code="KYC_LINK_NOT_FOUND",
-        status_code=status.HTTP_404_NOT_FOUND,
+    return KycLinkResponse(
+        success=True,
+        data=KycLinkData(
+            message="KYC link retrieved successfully",
+            kycLink=kyc_session.kyc_link,
+            tosLink=None,
+            kycStatus=status_value.lower(),
+            tosStatus="pending",
+        ),
+        error=None,
+    )
+
+
+def _handle_approved_status(
+    kyc_session: Any,
+    entity_id: str,
+) -> KycLinkResponse:
+    """Handle APPROVED status."""
+    logger.info(
+        "[KYC] KYC already approved for entity_id=%s, session_id=%s - returning approved status",
+        entity_id,
+        kyc_session.id,
+    )
+    return KycLinkResponse(
+        success=True,
+        data=KycLinkData(
+            message="KYC verification is already completed for this user.",
+            kycLink=None,
+            tosLink=None,
+            kycStatus="approved",
+            tosStatus="accepted",
+        ),
+        error=None,
+    )
+
+
+def _handle_reviewing_status(
+    kyc_session: Any,
+    status_value: str,
+    entity_id: str,
+) -> KycLinkResponse:
+    """Handle REVIEWING status."""
+    logger.info(
+        "[KYC] KYC is under review for entity_id=%s, session_id=%s",
+        entity_id,
+        kyc_session.id,
+    )
+    return KycLinkResponse(
+        success=True,
+        data=KycLinkData(
+            message="Your KYC verification is currently under review. We will notify you once it's complete.",
+            kycLink=None,
+            tosLink=None,
+            kycStatus=status_value.lower(),
+            tosStatus="pending",
+        ),
+        error=None,
+    )
+
+
+def _handle_rejected_status(
+    kyc_session: Any,
+    status_value: str,
+    entity_id: str,
+) -> KycLinkResponse:
+    """Handle REJECTED status."""
+    logger.info(
+        "[KYC] KYC was rejected for entity_id=%s, session_id=%s",
+        entity_id,
+        kyc_session.id,
+    )
+    rejection_msg = "Your KYC verification was rejected."
+    if kyc_session.rejection_reason:
+        rejection_msg += f" Reason: {kyc_session.rejection_reason}"
+    return KycLinkResponse(
+        success=True,
+        data=KycLinkData(
+            message=rejection_msg,
+            kycLink=None,
+            tosLink=None,
+            kycStatus=status_value.lower(),
+            tosStatus="pending",
+        ),
+        error=None,
     )
 
 
@@ -508,7 +592,7 @@ async def _get_or_create_kyc_session(entity_id: str):
     except DataError as exc:
         logger.error(f"[KYC] DataError while accessing KYC session for entity_id={entity_id}", exc_info=exc)
         raise _build_error_response(
-            "Invalid entity identifier",
+            INVALID_ENTITY_IDENTIFIER_MSG,
             code="BAD_REQUEST",
             status_code=status.HTTP_400_BAD_REQUEST,
         )
