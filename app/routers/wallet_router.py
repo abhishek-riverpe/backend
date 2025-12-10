@@ -106,7 +106,7 @@ async def _initiate_otp_internal(entity_id: str, user_email: str) -> dict:
             try:
                 error_body = response.json()
                 error_detail = error_body.get("message", f"HTTP {response.status_code}")
-            except (ValueError, json.JSONDecodeError):
+            except ValueError:
                 error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
             
             logger.error(f"[WALLET] Initiate OTP failed: {error_detail}")
@@ -191,7 +191,7 @@ def _parse_error_response(response: httpx.Response) -> str:
     """Parse error response from Zynk API."""
     try:
         return response.json().get("message", f"HTTP {response.status_code}")
-    except (ValueError, json.JSONDecodeError):
+    except ValueError:
         return f"HTTP {response.status_code}: {response.text[:200]}"
 
 
@@ -439,7 +439,7 @@ async def start_session(
                 error_body = response.json()
                 error_detail = error_body.get("message", f"HTTP {response.status_code}")
                 logger.error(f"[WALLET] Zynk API error response: {error_body}")
-            except (ValueError, json.JSONDecodeError):
+            except ValueError:
                 error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
                 logger.error(f"[WALLET] Zynk API error (non-JSON): {error_detail}")
             
@@ -1076,7 +1076,7 @@ async def _save_account_to_db(submit_body: dict, wallet: Any) -> Optional[dict]:
                 "address": account_address
             }
         )
-        logger.info(f"[WALLET] ✅ Account saved to database")
+        logger.info("[WALLET] ✅ Account saved to database")
         return {
             "address": account_address,
             "curve": account_details.get("curve"),
@@ -1293,7 +1293,7 @@ async def prepare_account(
         if response.status_code != 200:
             try:
                 error_detail = response.json().get("message", f"HTTP {response.status_code}")
-            except (ValueError, json.JSONDecodeError):
+            except ValueError:
                 error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
             logger.error(f"[WALLET] Zynk API error: {error_detail}")
             raise HTTPException(
@@ -1394,7 +1394,7 @@ async def submit_account(
         if response.status_code != 200:
             try:
                 error_detail = response.json().get("message", f"HTTP {response.status_code}")
-            except (ValueError, json.JSONDecodeError):
+            except ValueError:
                 error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
             logger.error(f"[WALLET] Zynk API error: {error_detail}")
             raise HTTPException(
