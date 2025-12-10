@@ -209,6 +209,69 @@ async def _get_wallet_account_for_entity(entity_id: str, wallet_account_id: Opti
     return wallet_account
 
 
+def _extract_error_detail_from_response(body: dict, status_code: int) -> str:
+    """Extract error detail from response body."""
+    return body.get(
+        "message",
+        body.get("error", f"HTTP {status_code}: Unknown upstream error"),
+    )
+
+
+def _validate_teleport_response(
+    resp: httpx.Response, body: dict, url: str, entity_id: str
+) -> None:
+    """Validate teleport creation response and raise appropriate errors."""
+    if not (200 <= resp.status_code < 300):
+        error_detail = _extract_error_detail_from_response(body, resp.status_code)
+        raise upstream_error(
+            log_message=(
+                f"[ZYNK] Upstream error {resp.status_code} while creating teleport "
+                f"for entity {entity_id} at {url}: {error_detail}"
+            ),
+            user_message="Verification service is currently unavailable. Please try again later.",
+        )
+
+    if not isinstance(body, dict):
+        raise upstream_error(
+            log_message=(
+                f"[ZYNK] Unexpected response structure while creating teleport "
+                f"for entity {entity_id} at {url}: {body}"
+            ),
+            user_message="Verification service returned an unexpected response. Please try again later.",
+        )
+
+    if body.get("success") is not True:
+        error_detail = body.get("message", body.get("error", "Request was not successful"))
+        raise upstream_error(
+            log_message=(
+                f"[ZYNK] Teleport creation rejected by upstream for entity {entity_id} at {url}: {error_detail}"
+            ),
+            user_message=(
+                "Verification service rejected the request. Please contact support if this continues."
+            ),
+        )
+
+
+def _extract_teleport_id_from_response(
+    body: dict, url: str, entity_id: str
+) -> Tuple[str, str]:
+    """Extract teleport ID and message from response body."""
+    zynk_data = body.get("data", {})
+    zynk_inner_data = zynk_data.get("data", {})
+    teleport_id = zynk_inner_data.get("teleportId")
+
+    if not teleport_id:
+        raise upstream_error(
+            log_message=(
+                f"[ZYNK] Missing teleportId in ZynkLabs response for entity {entity_id} at {url}: {body}"
+            ),
+            user_message="Verification service returned an incomplete response. Please try again later.",
+        )
+
+    message = zynk_data.get("message", "Teleport created successfully")
+    return teleport_id, message
+
+
 async def _create_teleport_upstream(
     url: str, headers: dict, request_body: dict, entity_id: str
 ) -> Tuple[str, str]:
@@ -241,53 +304,8 @@ async def _create_teleport_upstream(
                 user_message="Verification service returned an invalid response. Please try again later.",
             )
 
-        if not (200 <= resp.status_code < 300):
-            error_detail = body.get(
-                "message",
-                body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"),
-            )
-            raise upstream_error(
-                log_message=(
-                    f"[ZYNK] Upstream error {resp.status_code} while creating teleport "
-                    f"for entity {entity_id} at {url}: {error_detail}"
-                ),
-                user_message="Verification service is currently unavailable. Please try again later.",
-            )
-
-        if not isinstance(body, dict):
-            raise upstream_error(
-                log_message=(
-                    f"[ZYNK] Unexpected response structure while creating teleport "
-                    f"for entity {entity_id} at {url}: {body}"
-                ),
-                user_message="Verification service returned an unexpected response. Please try again later.",
-            )
-
-        if body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Request was not successful"))
-            raise upstream_error(
-                log_message=(
-                    f"[ZYNK] Teleport creation rejected by upstream for entity {entity_id} at {url}: {error_detail}"
-                ),
-                user_message=(
-                    "Verification service rejected the request. Please contact support if this continues."
-                ),
-            )
-
-        zynk_data = body.get("data", {})
-        zynk_inner_data = zynk_data.get("data", {})
-        teleport_id = zynk_inner_data.get("teleportId")
-
-        if not teleport_id:
-            raise upstream_error(
-                log_message=(
-                    f"[ZYNK] Missing teleportId in ZynkLabs response for entity {entity_id} at {url}: {body}"
-                ),
-                user_message="Verification service returned an incomplete response. Please try again later.",
-            )
-
-        message = zynk_data.get("message", "Teleport created successfully")
-        return teleport_id, message
+        _validate_teleport_response(resp, body, url, entity_id)
+        return _extract_teleport_id_from_response(body, url, entity_id)
 
     raise upstream_error(
         log_message=(
