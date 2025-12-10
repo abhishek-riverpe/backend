@@ -46,7 +46,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
             # Create a new receive function that returns the cached body
             # This allows FastAPI to read the body multiple times if needed
             body_sent = False
-            async def receive():
+            def receive():
                 nonlocal body_sent
                 if not body_sent:
                     body_sent = True
