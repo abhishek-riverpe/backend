@@ -91,7 +91,7 @@ def _validate_webhook_timestamp(body: dict, client_ip: str) -> None:
         logger.warning(f"[WEBHOOK] Invalid timestamp format from {client_ip}")
 
 
-async def _process_webhook_event(body: dict, event_category: str, client_ip: str) -> None:
+async def _process_webhook_event(body: dict, event_category: str) -> None:
     """Process webhook event based on category."""
     if event_category == "webhook":
         await _handle_webhook_config_event(body)
@@ -219,7 +219,7 @@ async def receive_zynk_webhook(request: Request):
     event_category = body.get("eventCategory")
     logger.info(f"[WEBHOOK] Verified webhook received from {client_ip}. Event: {event_category}")
     
-    await _process_webhook_event(body, event_category, client_ip)
+    await _process_webhook_event(body, event_category)
     
     return {"success": True, "message": "Webhook received and verified"}
 
