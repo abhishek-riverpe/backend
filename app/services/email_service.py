@@ -12,9 +12,48 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Constants
+UNKNOWN_OS = "Unknown OS"
+UNKNOWN_BROWSER = "Unknown Browser"
+DATE_FORMAT = "%B %d, %Y at %I:%M %p UTC"
+
 
 class EmailService:
     """Service for sending transactional emails"""
+    
+    @staticmethod
+    def _format_device_description(device_info: Dict[str, Any]) -> str:
+        """Format device information into a readable description."""
+        device_type = device_info.get("device_type") or "Unknown Device"
+        os_name = device_info.get("os_name") or UNKNOWN_OS
+        os_version = device_info.get("os_version") or ""
+        browser_name = device_info.get("browser_name") or UNKNOWN_BROWSER
+        browser_version = device_info.get("browser_version") or ""
+        
+        device_description = f"{device_type}"
+        if os_name != UNKNOWN_OS:
+            device_description += f" ({os_name}"
+            if os_version:
+                device_description += f" {os_version}"
+            device_description += ")"
+        if browser_name != UNKNOWN_BROWSER:
+            device_description += f" - {browser_name}"
+            if browser_version:
+                device_description += f" {browser_version}"
+        
+        return device_description
+    
+    @staticmethod
+    def _format_location_description(location_info: Dict[str, Any]) -> str:
+        """Format location information into a readable description."""
+        city = location_info.get("city") or "Unknown City"
+        country = location_info.get("country") or "Unknown Country"
+        return f"{city}, {country}"
+    
+    @staticmethod
+    def _format_timestamp(timestamp: datetime) -> str:
+        """Format timestamp into a readable string."""
+        return timestamp.strftime(DATE_FORMAT)
     
     def __init__(self):
         # Initialize FastMail configuration
@@ -62,31 +101,9 @@ class EmailService:
         if not timestamp:
             timestamp = datetime.now()
         
-        # Format device information
-        device_type = device_info.get("device_type") or "Unknown Device"
-        os_name = device_info.get("os_name") or "Unknown OS"
-        os_version = device_info.get("os_version") or ""
-        browser_name = device_info.get("browser_name") or "Unknown Browser"
-        browser_version = device_info.get("browser_version") or ""
-        
-        device_description = f"{device_type}"
-        if os_name != "Unknown OS":
-            device_description += f" ({os_name}"
-            if os_version:
-                device_description += f" {os_version}"
-            device_description += ")"
-        if browser_name != "Unknown Browser":
-            device_description += f" - {browser_name}"
-            if browser_version:
-                device_description += f" {browser_version}"
-        
-        # Format location information
-        city = location_info.get("city") or "Unknown City"
-        country = location_info.get("country") or "Unknown Country"
-        location_description = f"{city}, {country}"
-        
-        # Format timestamp
-        formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
+        device_description = self._format_device_description(device_info)
+        location_description = self._format_location_description(location_info)
+        formatted_time = self._format_timestamp(timestamp)
         
         # Create email HTML body
         email_html = f"""
@@ -215,31 +232,9 @@ class EmailService:
         if not timestamp:
             timestamp = datetime.now()
         
-        # Format device information
-        device_type = device_info.get("device_type") or "Unknown Device"
-        os_name = device_info.get("os_name") or "Unknown OS"
-        os_version = device_info.get("os_version") or ""
-        browser_name = device_info.get("browser_name") or "Unknown Browser"
-        browser_version = device_info.get("browser_version") or ""
-        
-        device_description = f"{device_type}"
-        if os_name != "Unknown OS":
-            device_description += f" ({os_name}"
-            if os_version:
-                device_description += f" {os_version}"
-            device_description += ")"
-        if browser_name != "Unknown Browser":
-            device_description += f" - {browser_name}"
-            if browser_version:
-                device_description += f" {browser_version}"
-        
-        # Format location information
-        city = location_info.get("city") or "Unknown City"
-        country = location_info.get("country") or "Unknown Country"
-        location_description = f"{city}, {country}"
-        
-        # Format timestamp
-        formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
+        device_description = self._format_device_description(device_info)
+        location_description = self._format_location_description(location_info)
+        formatted_time = self._format_timestamp(timestamp)
         
         # Create email HTML body
         email_html = f"""
@@ -385,8 +380,7 @@ class EmailService:
         if not timestamp:
             timestamp = datetime.now()
         
-        # Format timestamp
-        formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
+        formatted_time = self._format_timestamp(timestamp)
         
         # Create email HTML body
         email_html = f"""
@@ -514,8 +508,7 @@ class EmailService:
         if not timestamp:
             timestamp = datetime.now()
         
-        # Format timestamp
-        formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
+        formatted_time = self._format_timestamp(timestamp)
         
         # Mask account number (show only last 4 digits)
         masked_account_number = f"****{bank_account_number[-4:]}" if len(bank_account_number) >= 4 else "****"
