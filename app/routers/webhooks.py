@@ -24,6 +24,128 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
 
+async def _validate_webhook_request(request: Request) -> tuple[str, dict]:
+    """Validate webhook request and return client_ip and parsed body."""
+    client_ip = request.client.host if request.client else "unknown"
+    
+    received_signature = request.headers.get("z-webhook-signature")
+    if not received_signature:
+        logger.warning(f"[WEBHOOK] Missing signature header from {client_ip}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing webhook signature"
+        )
+    
+    if not settings.zynk_webhook_secret:
+        logger.error("[WEBHOOK] Webhook secret not configured in settings")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Webhook verification not configured"
+        )
+    
+    raw_body = await request.body()
+    try:
+        body = json.loads(raw_body)
+    except json.JSONDecodeError as e:
+        logger.warning(f"[WEBHOOK] Invalid JSON from {client_ip}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON payload"
+        )
+    
+    return client_ip, body
+
+
+def _validate_webhook_signature(body: dict, received_signature: str, client_ip: str) -> None:
+    """Validate webhook signature."""
+    if not verify_webhook_signature(body, received_signature, settings.zynk_webhook_secret):
+        logger.warning(
+            f"[WEBHOOK] Invalid signature from {client_ip}. "
+            f"Event: {body.get('eventCategory', 'unknown')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid webhook signature"
+        )
+
+
+def _validate_webhook_timestamp(body: dict, client_ip: str) -> None:
+    """Validate webhook timestamp to prevent replay attacks."""
+    signed_at = body.get("signedAt")
+    if not signed_at:
+        return
+    
+    try:
+        timestamp = int(signed_at)
+        current_time = int(time.time())
+        if abs(current_time - timestamp) > 300:
+            logger.warning(
+                f"[WEBHOOK] Expired webhook from {client_ip}. "
+                f"Timestamp: {timestamp}, Current: {current_time}, Diff: {abs(current_time - timestamp)}s"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Webhook timestamp expired or too far in future"
+            )
+    except (ValueError, TypeError):
+        logger.warning(f"[WEBHOOK] Invalid timestamp format from {client_ip}")
+
+
+async def _process_webhook_event(body: dict, event_category: str, client_ip: str) -> None:
+    """Process webhook event based on category."""
+    if event_category == "webhook":
+        await _handle_webhook_config_event(body, client_ip)
+    elif event_category == "kyc":
+        await _handle_kyc_event(body, client_ip)
+    elif event_category == "TRANSFER":
+        await _handle_transfer_event(body, client_ip)
+    else:
+        await _handle_unknown_event(body, event_category, client_ip)
+
+
+async def _handle_webhook_config_event(body: dict, client_ip: str) -> None:
+    """Handle webhook configuration event."""
+    logger.info(f"[WEBHOOK] Webhook configuration event: {body}")
+    try:
+        await _save_webhook_event(body, WebhookEventCategory.WEBHOOK)
+    except Exception as e:
+        logger.error(f"[WEBHOOK] Failed to save webhook event to database: {e}", exc_info=True)
+
+
+async def _handle_kyc_event(body: dict, client_ip: str) -> None:
+    """Handle KYC event."""
+    logger.info(f"[WEBHOOK] KYC event received: {body}")
+    try:
+        await _save_webhook_event(body, WebhookEventCategory.KYC)
+    except Exception as e:
+        logger.error(f"[WEBHOOK] Failed to save KYC webhook event to database: {e}", exc_info=True)
+    
+    try:
+        await _update_kyc_status_from_webhook(body)
+    except Exception as e:
+        logger.error(f"[WEBHOOK] Failed to update KYC status from webhook: {e}", exc_info=True)
+
+
+async def _handle_transfer_event(body: dict, client_ip: str) -> None:
+    """Handle transfer event."""
+    logger.info(f"[WEBHOOK] Transfer event received: {body}")
+    try:
+        await _save_webhook_event(body, WebhookEventCategory.TRANSFER)
+    except Exception as e:
+        logger.error(f"[WEBHOOK] Failed to save TRANSFER webhook event to database: {e}", exc_info=True)
+    # Transfer processing logic can be implemented here when needed
+    # For now, we just save the event to the database
+
+
+async def _handle_unknown_event(body: dict, event_category: str, client_ip: str) -> None:
+    """Handle unknown event category."""
+    logger.warning(f"[WEBHOOK] Unknown event category: {event_category} with payload: {body}")
+    try:
+        await _save_webhook_event(body, WebhookEventCategory.WEBHOOK)
+    except Exception as e:
+        logger.error(f"[WEBHOOK] Failed to save unknown webhook event to database: {e}", exc_info=True)
+
+
 def verify_webhook_signature(payload: dict, received_signature: str, secret: str) -> bool:
     """
     Verify webhook signature according to Zynk API documentation.
@@ -88,111 +210,16 @@ async def receive_zynk_webhook(request: Request):
     
     SECURITY: Verifies webhook signature before processing to prevent forged webhooks.
     """
-    # Get client IP for logging
-    client_ip = request.client.host if request.client else "unknown"
-    
-    # 1. Get signature from header
+    client_ip, body = await _validate_webhook_request(request)
     received_signature = request.headers.get("z-webhook-signature")
-    if not received_signature:
-        logger.warning(f"[WEBHOOK] Missing signature header from {client_ip}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing webhook signature"
-        )
     
-    # 2. Check if webhook secret is configured
-    if not settings.zynk_webhook_secret:
-        logger.error("[WEBHOOK] Webhook secret not configured in settings")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Webhook verification not configured"
-        )
+    _validate_webhook_signature(body, received_signature, client_ip)
+    _validate_webhook_timestamp(body, client_ip)
     
-    # 3. Get raw body and parse payload
-    raw_body = await request.body()
-    try:
-        body = json.loads(raw_body)
-    except json.JSONDecodeError as e:
-        logger.warning(f"[WEBHOOK] Invalid JSON from {client_ip}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid JSON payload"
-        )
-    
-    # 4. Verify signature
-    if not verify_webhook_signature(body, received_signature, settings.zynk_webhook_secret):
-        logger.warning(
-            f"[WEBHOOK] Invalid signature from {client_ip}. "
-            f"Event: {body.get('eventCategory', 'unknown')}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid webhook signature"
-        )
-    
-    # 5. Validate timestamp to prevent replay attacks (if present in payload)
-    # Note: Zynk may include timestamp in the payload, but we verify it's within reasonable window
-    signed_at = body.get("signedAt")
-    if signed_at:
-        try:
-            timestamp = int(signed_at)
-            current_time = int(time.time())
-            # Allow 5 minute window for clock skew and processing delays
-            if abs(current_time - timestamp) > 300:
-                logger.warning(
-                    f"[WEBHOOK] Expired webhook from {client_ip}. "
-                    f"Timestamp: {timestamp}, Current: {current_time}, Diff: {abs(current_time - timestamp)}s"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Webhook timestamp expired or too far in future"
-                )
-        except (ValueError, TypeError):
-            logger.warning(f"[WEBHOOK] Invalid timestamp format from {client_ip}")
-            # Don't fail if timestamp is invalid format, just log it
-    
-    # 6. Process webhook (signature verified)
     event_category = body.get("eventCategory")
     logger.info(f"[WEBHOOK] Verified webhook received from {client_ip}. Event: {event_category}")
     
-    if event_category == "webhook":
-        logger.info(f"[WEBHOOK] Webhook configuration event: {body}")
-        # Save webhook event to database
-        try:
-            await _save_webhook_event(body, WebhookEventCategory.WEBHOOK, client_ip)
-        except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to save webhook event to database: {e}", exc_info=True)
-        # Process webhook configuration event
-    elif event_category == "kyc":
-        logger.info(f"[WEBHOOK] KYC event received: {body}")
-        # Save webhook event to database
-        try:
-            await _save_webhook_event(body, WebhookEventCategory.KYC, client_ip)
-        except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to save KYC webhook event to database: {e}", exc_info=True)
-        
-        # Process KYC event - Update KYC session status
-        try:
-            await _update_kyc_status_from_webhook(body)
-        except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to update KYC status from webhook: {e}", exc_info=True)
-            # Don't raise - webhook event is already saved, status update failure is logged
-    elif event_category == "TRANSFER":
-        logger.info(f"[WEBHOOK] Transfer event received: {body}")
-        # Save webhook event to database
-        try:
-            await _save_webhook_event(body, WebhookEventCategory.TRANSFER, client_ip)
-        except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to save TRANSFER webhook event to database: {e}", exc_info=True)
-        # Process transfer event
-        # TODO: Implement transfer processing logic here
-    else:
-        logger.warning(f"[WEBHOOK] Unknown event category: {event_category} with payload: {body}")
-        # Save unknown event category as WEBHOOK for now
-        try:
-            await _save_webhook_event(body, WebhookEventCategory.WEBHOOK, client_ip)
-        except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to save unknown webhook event to database: {e}", exc_info=True)
+    await _process_webhook_event(body, event_category, client_ip)
     
     return {"success": True, "message": "Webhook received and verified"}
 
@@ -274,15 +301,13 @@ def _extract_teleport_id_from_payload(payload: Dict[str, Any]) -> Optional[str]:
     
     # Try in eventObject
     event_object = payload.get("eventObject", {})
-    if isinstance(event_object, dict):
-        if "teleportId" in event_object:
-            return event_object["teleportId"]
+    if isinstance(event_object, dict) and "teleportId" in event_object:
+        return event_object["teleportId"]
     
     # Try in data field
     data = payload.get("data", {})
-    if isinstance(data, dict):
-        if "teleportId" in data:
-            return data["teleportId"]
+    if isinstance(data, dict) and "teleportId" in data:
+        return data["teleportId"]
     
     return None
 
@@ -314,6 +339,119 @@ def _map_webhook_status_to_kyc_status(webhook_status: str) -> Optional[KycStatus
     return status_mapping.get(normalized_status) if normalized_status else None
 
 
+async def _find_entity_by_id(entity_id_str: str):
+    """Find entity by zynk_entity_id or internal UUID."""
+    try:
+        entity = await prisma.entities.find_unique(
+            where={"zynk_entity_id": entity_id_str}
+        )
+        if not entity:
+            try:
+                uuid.UUID(entity_id_str)
+                entity = await prisma.entities.find_unique(where={"id": entity_id_str})
+            except ValueError:
+                pass
+        return entity
+    except Exception as e:
+        logger.warning(f"[WEBHOOK] Error looking up entity for KYC update: {e}")
+        return None
+
+
+def _prepare_kyc_update_data(
+    event_object: dict,
+    kyc_status: KycStatusEnum,
+    kyc_session: Any,
+) -> dict:
+    """Prepare update data for KYC session."""
+    update_data = {"status": kyc_status}
+    
+    routing_enabled = event_object.get("routingEnabled")
+    if routing_enabled is not None:
+        update_data["routing_enabled"] = bool(routing_enabled)
+    
+    if kyc_status in [KycStatusEnum.APPROVED, KycStatusEnum.REJECTED]:
+        if not kyc_session.completed_at:
+            update_data["completed_at"] = datetime.now(timezone.utc)
+    
+    if kyc_status == KycStatusEnum.REJECTED:
+        rejection_reasons = event_object.get("rejectionReasons") or event_object.get("rejection_reasons")
+        comments = event_object.get("comments") or event_object.get("comment")
+        rejection_reason = rejection_reasons or comments
+        if rejection_reason:
+            update_data["rejection_reason"] = str(rejection_reason)
+        elif not kyc_session.rejection_reason:
+            update_data["rejection_reason"] = "KYC verification rejected"
+    
+    if kyc_status == KycStatusEnum.INITIATED and not kyc_session.initiated_at:
+        update_data["initiated_at"] = datetime.now(timezone.utc)
+    
+    return update_data
+
+
+async def _create_funding_account_on_kyc_approval(entity: Any) -> None:
+    """Create funding account when KYC is approved."""
+    existing_funding_account = await prisma.funding_accounts.find_first(
+        where={"entity_id": str(entity.id), "deleted_at": None}
+    )
+    
+    if existing_funding_account:
+        logger.info(
+            f"[WEBHOOK] Funding account already exists for entity_id={entity.id}, "
+            f"skipping auto-creation"
+        )
+        return
+    
+    if not entity.zynk_entity_id:
+        logger.warning(
+            f"[WEBHOOK] Entity {entity.id} not linked to Zynk Labs. "
+            f"Cannot auto-create funding account."
+        )
+        return
+    
+    from ..services.zynk_client import create_funding_account_from_zynk
+    from ..services.funding_account_service import save_funding_account_to_db, US_FUNDING_JURISDICTION_ID
+    from ..services.email_service import email_service
+    
+    logger.info(
+        f"[WEBHOOK] KYC approved for entity_id={entity.id}. "
+        f"Auto-creating funding account via Zynk Labs API."
+    )
+    
+    zynk_response_data = await create_funding_account_from_zynk(
+        entity.zynk_entity_id,
+        US_FUNDING_JURISDICTION_ID
+    )
+    
+    funding_account = await save_funding_account_to_db(str(entity.id), zynk_response_data)
+    logger.info(
+        f"[WEBHOOK] Successfully created funding account {funding_account.id} "
+        f"for entity_id={entity.id} after KYC approval"
+    )
+    
+    try:
+        account_info = zynk_response_data.get("accountInfo", {})
+        user_name = f"{entity.first_name or ''} {entity.last_name or ''}".strip() or "User"
+        currency = account_info.get("currency", "USD").upper()
+        email_sent = await email_service.send_funding_account_created_notification(
+            email=entity.email,
+            user_name=user_name,
+            bank_name=account_info.get("bank_name", ""),
+            bank_account_number=account_info.get("bank_account_number", ""),
+            bank_routing_number=account_info.get("bank_routing_number", ""),
+            currency=currency,
+            timestamp=datetime.now(timezone.utc),
+        )
+        if email_sent:
+            logger.info(f"[WEBHOOK] Funding account creation email sent to {entity.email}")
+        else:
+            logger.warning(f"[WEBHOOK] Failed to send funding account creation email to {entity.email}")
+    except Exception as email_exc:
+        logger.error(
+            f"[WEBHOOK] Error sending funding account creation email: {email_exc}",
+            exc_info=email_exc,
+        )
+
+
 async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
     """
     Update KYC session status based on webhook payload.
@@ -322,47 +460,26 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
         payload: The verified KYC webhook payload
     """
     try:
-        # Extract eventObject which contains KYC status information
         event_object = payload.get("eventObject", {})
         if not event_object:
             logger.warning("[WEBHOOK] KYC webhook missing eventObject, skipping status update")
             return
         
-        # Extract routing_id (used to find KYC session)
         routing_id = event_object.get("routingId") or event_object.get("routing_id")
         if not routing_id:
             logger.warning("[WEBHOOK] KYC webhook missing routingId, cannot update status")
             return
         
-        # Extract entity_id (zynk entity ID)
         entity_id_str = _extract_entity_id_from_payload(payload)
         if not entity_id_str:
             logger.warning("[WEBHOOK] KYC webhook missing entityId, cannot update status")
             return
         
-        # Find internal entity_id
-        entity = None
-        try:
-            # Try as zynk_entity_id first
-            entity = await prisma.entities.find_unique(
-                where={"zynk_entity_id": entity_id_str}
-            )
-            if not entity:
-                # Try as internal UUID
-                try:
-                    uuid.UUID(entity_id_str)
-                    entity = await prisma.entities.find_unique(where={"id": entity_id_str})
-                except ValueError:
-                    pass
-        except Exception as e:
-            logger.warning(f"[WEBHOOK] Error looking up entity for KYC update: {e}")
-            return
-        
+        entity = await _find_entity_by_id(entity_id_str)
         if not entity:
             logger.warning(f"[WEBHOOK] Entity not found for KYC update: {entity_id_str}")
             return
         
-        # Find KYC session by routing_id and entity_id
         kyc_session = await prisma.kyc_sessions.find_first(
             where={
                 "routing_id": routing_id,
@@ -378,51 +495,18 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
             )
             return
         
-        # Extract status from eventObject
         webhook_status = event_object.get("status")
         if not webhook_status:
             logger.warning("[WEBHOOK] KYC webhook missing status in eventObject")
             return
         
-        # Map webhook status to internal enum
         kyc_status = _map_webhook_status_to_kyc_status(webhook_status)
         if not kyc_status:
             logger.warning(f"[WEBHOOK] Unknown KYC status from webhook: {webhook_status}")
             return
         
-        # Prepare update data
-        update_data = {
-            "status": kyc_status,
-        }
+        update_data = _prepare_kyc_update_data(event_object, kyc_status, kyc_session)
         
-        # Update routing_enabled if provided
-        routing_enabled = event_object.get("routingEnabled")
-        if routing_enabled is not None:
-            update_data["routing_enabled"] = bool(routing_enabled)
-        
-        # Update completed_at if status is APPROVED or REJECTED
-        if kyc_status in [KycStatusEnum.APPROVED, KycStatusEnum.REJECTED]:
-            if not kyc_session.completed_at:  # Only update if not already set
-                update_data["completed_at"] = datetime.now(timezone.utc)
-        
-        # Update rejection_reason if status is REJECTED
-        if kyc_status == KycStatusEnum.REJECTED:
-            rejection_reasons = event_object.get("rejectionReasons") or event_object.get("rejection_reasons")
-            comments = event_object.get("comments") or event_object.get("comment")
-            
-            # Use rejectionReasons if available, otherwise use comments
-            rejection_reason = rejection_reasons or comments
-            if rejection_reason:
-                update_data["rejection_reason"] = str(rejection_reason)
-            elif not kyc_session.rejection_reason:
-                # Set a default message if no reason provided
-                update_data["rejection_reason"] = "KYC verification rejected"
-        
-        # Update initiated_at if status is INITIATED and not already set
-        if kyc_status == KycStatusEnum.INITIATED and not kyc_session.initiated_at:
-            update_data["initiated_at"] = datetime.now(timezone.utc)
-        
-        # Update KYC session
         await prisma.kyc_sessions.update(
             where={"id": kyc_session.id},
             data=update_data
@@ -433,80 +517,10 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
             f"(routing_id: {routing_id}, entity_id: {entity.id})"
         )
         
-        # Automatically create funding account when KYC is approved
         if kyc_status == KycStatusEnum.APPROVED:
             try:
-                # Check if funding account already exists
-                existing_funding_account = await prisma.funding_accounts.find_first(
-                    where={"entity_id": str(entity.id), "deleted_at": None}
-                )
-                
-                if existing_funding_account:
-                    logger.info(
-                        f"[WEBHOOK] Funding account already exists for entity_id={entity.id}, "
-                        f"skipping auto-creation"
-                    )
-                elif entity.zynk_entity_id:
-                    # Import here to avoid circular dependencies
-                    from ..services.zynk_client import create_funding_account_from_zynk
-                    from ..services.funding_account_service import save_funding_account_to_db, US_FUNDING_JURISDICTION_ID
-                    from ..services.email_service import email_service
-                    
-                    logger.info(
-                        f"[WEBHOOK] KYC approved for entity_id={entity.id}. "
-                        f"Auto-creating funding account via Zynk Labs API."
-                    )
-                    
-                    # Create funding account via Zynk Labs
-                    zynk_response_data = await create_funding_account_from_zynk(
-                        entity.zynk_entity_id,
-                        US_FUNDING_JURISDICTION_ID
-                    )
-                    
-                    # Save to database using shared service function
-                    funding_account = await save_funding_account_to_db(str(entity.id), zynk_response_data)
-                    logger.info(
-                        f"[WEBHOOK] Successfully created funding account {funding_account.id} "
-                        f"for entity_id={entity.id} after KYC approval"
-                    )
-                    
-                    # Send email notification
-                    try:
-                        account_info = zynk_response_data.get("accountInfo", {})
-                        user_name = f"{entity.first_name or ''} {entity.last_name or ''}".strip() or "User"
-                        currency = account_info.get("currency", "USD").upper()
-                        email_sent = await email_service.send_funding_account_created_notification(
-                            email=entity.email,
-                            user_name=user_name,
-                            bank_name=account_info.get("bank_name", ""),
-                            bank_account_number=account_info.get("bank_account_number", ""),
-                            bank_routing_number=account_info.get("bank_routing_number", ""),
-                            currency=currency,
-                            timestamp=datetime.now(timezone.utc),
-                        )
-                        if email_sent:
-                            logger.info(
-                                f"[WEBHOOK] Funding account creation email sent to {entity.email}"
-                            )
-                        else:
-                            logger.warning(
-                                f"[WEBHOOK] Failed to send funding account creation email to {entity.email}"
-                            )
-                    except Exception as email_exc:
-                        # Don't fail webhook processing if email fails
-                        logger.error(
-                            f"[WEBHOOK] Error sending funding account creation email: {email_exc}",
-                            exc_info=email_exc,
-                        )
-                else:
-                    logger.warning(
-                        f"[WEBHOOK] Entity {entity.id} not linked to Zynk Labs. "
-                        f"Cannot auto-create funding account."
-                    )
-                    
+                await _create_funding_account_on_kyc_approval(entity)
             except Exception as funding_exc:
-                # Log error but don't fail webhook processing
-                # Funding account creation can be retried later via manual endpoint
                 logger.error(
                     f"[WEBHOOK] Error auto-creating funding account for entity_id={entity.id} "
                     f"after KYC approval: {funding_exc}",
@@ -518,10 +532,63 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
         raise
 
 
+async def _find_entity_id_from_payload(entity_id_str: Optional[str]) -> Optional[str]:
+    """Find internal entity_id from zynk_entity_id or UUID."""
+    if not entity_id_str:
+        return None
+    
+    try:
+        try:
+            uuid.UUID(entity_id_str)
+            entity = await prisma.entities.find_unique(where={"id": entity_id_str})
+            if entity:
+                return entity_id_str
+        except ValueError:
+            pass
+        
+        entity = await prisma.entities.find_unique(
+            where={"zynk_entity_id": entity_id_str}
+        )
+        if entity:
+            return str(entity.id)
+        logger.debug(f"[WEBHOOK] Entity not found for zynk_entity_id: {entity_id_str}")
+    except Exception as e:
+        logger.warning(f"[WEBHOOK] Error looking up entity: {e}")
+    
+    return None
+
+
+async def _find_kyc_session_id_from_payload(
+    kyc_session_id_str: Optional[str],
+    entity_id: Optional[str],
+) -> Optional[str]:
+    """Find internal kyc_session_id from routing_id."""
+    if not kyc_session_id_str or not entity_id:
+        return None
+    
+    try:
+        kyc_session = await prisma.kyc_sessions.find_first(
+            where={
+                "routing_id": kyc_session_id_str,
+                "entity_id": entity_id,
+                "deleted_at": None
+            }
+        )
+        if kyc_session:
+            return str(kyc_session.id)
+        logger.debug(
+            f"[WEBHOOK] KYC session not found for routing_id: {kyc_session_id_str}, "
+            f"entity_id: {entity_id}"
+        )
+    except Exception as e:
+        logger.warning(f"[WEBHOOK] Error looking up KYC session: {e}")
+    
+    return None
+
+
 async def _save_webhook_event(
     payload: Dict[str, Any], 
-    event_category: WebhookEventCategory, 
-    client_ip: str
+    event_category: WebhookEventCategory,
 ) -> None:
     """
     Save webhook event to database after verification.
@@ -529,79 +596,20 @@ async def _save_webhook_event(
     Args:
         payload: The verified webhook payload
         event_category: The event category enum
-        client_ip: IP address of the webhook sender
     """
     try:
-        # Extract event type (required field)
-        event_type = payload.get("eventType", "unknown")
-        if not event_type:
-            event_type = "unknown"
-        
-        # Extract event status (optional)
+        event_type = payload.get("eventType", "unknown") or "unknown"
         event_status = payload.get("eventStatus")
         
-        # Extract entity_id, kyc_session_id, and teleport_id
         entity_id_str = _extract_entity_id_from_payload(payload)
         kyc_session_id_str = _extract_kyc_session_id_from_payload(payload)
         teleport_id_str = _extract_teleport_id_from_payload(payload)
         
-        # Try to find entity_id in database if we have zynk_entity_id
-        entity_id = None
-        if entity_id_str:
-            try:
-                # First, check if it's already a UUID (our internal entity ID)
-                try:
-                    # Try to parse as UUID - if successful, it might be our internal ID
-                    uuid.UUID(entity_id_str)
-                    # Check if this UUID exists in our entities table
-                    entity = await prisma.entities.find_unique(where={"id": entity_id_str})
-                    if entity:
-                        entity_id = entity_id_str
-                    else:
-                        # Not found as internal ID, try as zynk_entity_id
-                        entity = await prisma.entities.find_unique(
-                            where={"zynk_entity_id": entity_id_str}
-                        )
-                        if entity:
-                            entity_id = str(entity.id)
-                except ValueError:
-                    # Not a UUID, try as zynk_entity_id
-                    entity = await prisma.entities.find_unique(
-                        where={"zynk_entity_id": entity_id_str}
-                    )
-                    if entity:
-                        entity_id = str(entity.id)
-                    else:
-                        logger.debug(f"[WEBHOOK] Entity not found for zynk_entity_id: {entity_id_str}")
-            except Exception as e:
-                logger.warning(f"[WEBHOOK] Error looking up entity: {e}")
+        entity_id = await _find_entity_id_from_payload(entity_id_str)
+        kyc_session_id = await _find_kyc_session_id_from_payload(kyc_session_id_str, entity_id)
         
-        # Try to find kyc_session_id in database if we have routing_id
-        kyc_session_id = None
-        if kyc_session_id_str and entity_id:
-            try:
-                # Look up KYC session by routing_id and entity_id
-                kyc_session = await prisma.kyc_sessions.find_first(
-                    where={
-                        "routing_id": kyc_session_id_str,
-                        "entity_id": entity_id,
-                        "deleted_at": None
-                    }
-                )
-                if kyc_session:
-                    kyc_session_id = str(kyc_session.id)
-                else:
-                    logger.debug(f"[WEBHOOK] KYC session not found for routing_id: {kyc_session_id_str}, entity_id: {entity_id}")
-            except Exception as e:
-                logger.warning(f"[WEBHOOK] Error looking up KYC session: {e}")
+        event_payload_json = json.dumps(payload, default=str)
         
-        # Store the full payload as JSON
-        # Ensure payload is JSON-serializable
-        event_payload_json = json.dumps(payload, default=str)  # default=str handles any non-serializable types
-        
-        # Build SQL query with parameters to safely insert JSON data
-        # Using raw SQL as workaround for Prisma Python Json field type issue
-        # Cast event_category to enum type and event_payload to jsonb
         query = """
             INSERT INTO webhook_events (
                 id, event_category, event_type, event_status, 
@@ -611,32 +619,27 @@ async def _save_webhook_event(
             ) RETURNING id
         """
         
-        # Execute raw query with parameters
-        # Use query_raw for INSERT ... RETURNING (execute_raw returns int, not result set)
         result = await prisma.query_raw(
             query,
-            event_category.value,  # Convert enum to string value
+            event_category.value,
             event_type,
             event_status,
             entity_id,
             kyc_session_id,
             teleport_id_str,
-            event_payload_json,  # Pass as JSON string, PostgreSQL will parse it
+            event_payload_json,
         )
         
-        # Get the created record ID from result
-        # query_raw returns a list of rows (result set)
-        if result and len(result) > 0:
-            row = result[0]
-            # Handle both dict and tuple results
-            if isinstance(row, dict):
-                webhook_event_id = row.get('id')
-            elif isinstance(row, (list, tuple)):
-                webhook_event_id = row[0]
-            else:
-                webhook_event_id = str(row)
+        if not result or len(result) == 0:
+            raise RuntimeError("Failed to create webhook event - no ID returned")
+        
+        row = result[0]
+        if isinstance(row, dict):
+            webhook_event_id = row.get('id')
+        elif isinstance(row, (list, tuple)):
+            webhook_event_id = row[0]
         else:
-            raise Exception("Failed to create webhook event - no ID returned")
+            webhook_event_id = str(row)
         
         logger.info(
             f"[WEBHOOK] Saved webhook event to database: "
@@ -644,6 +647,6 @@ async def _save_webhook_event(
             f"entity_id={entity_id}, kyc_session_id={kyc_session_id}"
         )
         
-    except Exception as e:
+    except (RuntimeError, ValueError, TypeError) as e:
         logger.error(f"[WEBHOOK] Error saving webhook event to database: {e}", exc_info=True)
         raise
