@@ -94,16 +94,16 @@ def _validate_webhook_timestamp(body: dict, client_ip: str) -> None:
 async def _process_webhook_event(body: dict, event_category: str, client_ip: str) -> None:
     """Process webhook event based on category."""
     if event_category == "webhook":
-        await _handle_webhook_config_event(body, client_ip)
+        await _handle_webhook_config_event(body)
     elif event_category == "kyc":
-        await _handle_kyc_event(body, client_ip)
+        await _handle_kyc_event(body)
     elif event_category == "TRANSFER":
-        await _handle_transfer_event(body, client_ip)
+        await _handle_transfer_event(body)
     else:
-        await _handle_unknown_event(body, event_category, client_ip)
+        await _handle_unknown_event(body, event_category)
 
 
-async def _handle_webhook_config_event(body: dict, client_ip: str) -> None:
+async def _handle_webhook_config_event(body: dict) -> None:
     """Handle webhook configuration event."""
     logger.info(f"[WEBHOOK] Webhook configuration event: {body}")
     try:
@@ -112,7 +112,7 @@ async def _handle_webhook_config_event(body: dict, client_ip: str) -> None:
         logger.error(f"[WEBHOOK] Failed to save webhook event to database: {e}", exc_info=True)
 
 
-async def _handle_kyc_event(body: dict, client_ip: str) -> None:
+async def _handle_kyc_event(body: dict) -> None:
     """Handle KYC event."""
     logger.info(f"[WEBHOOK] KYC event received: {body}")
     try:
@@ -126,7 +126,7 @@ async def _handle_kyc_event(body: dict, client_ip: str) -> None:
         logger.error(f"[WEBHOOK] Failed to update KYC status from webhook: {e}", exc_info=True)
 
 
-async def _handle_transfer_event(body: dict, client_ip: str) -> None:
+async def _handle_transfer_event(body: dict) -> None:
     """Handle transfer event."""
     logger.info(f"[WEBHOOK] Transfer event received: {body}")
     try:
@@ -137,7 +137,7 @@ async def _handle_transfer_event(body: dict, client_ip: str) -> None:
     # For now, we just save the event to the database
 
 
-async def _handle_unknown_event(body: dict, event_category: str, client_ip: str) -> None:
+async def _handle_unknown_event(body: dict, event_category: str) -> None:
     """Handle unknown event category."""
     logger.warning(f"[WEBHOOK] Unknown event category: {event_category} with payload: {body}")
     try:
