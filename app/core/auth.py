@@ -167,7 +167,7 @@ async def get_current_entity(request: Request, token: Optional[str] = Depends(oa
     entity = None
     try:
         entity = await prisma.entities.find_unique(where={"id": entity_id})
-    except DataError as e:
+    except DataError:
         # Handle database data inconsistency (e.g., date_of_birth stored as string)
         # Fallback to raw SQL if Prisma fails due to data inconsistency
         raw_query = """

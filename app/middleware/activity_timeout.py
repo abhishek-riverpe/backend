@@ -25,7 +25,6 @@ class ActivityTimeoutMiddleware(BaseHTTPMiddleware):
         
         if token:
             try:
-                payload = auth.verify_token_type(token, "access")
                 # If token valid, enforce inactivity on this session token
                 service = SessionService(prisma)
                 active = await service.enforce_and_update_activity(token)
