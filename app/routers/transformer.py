@@ -4,6 +4,8 @@ import uuid
 import io
 import os
 import logging
+import re
+from typing import Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -139,15 +141,45 @@ async def _create_entity_in_zynk(payload: dict) -> dict:
     context = "while creating entity"
     return await _make_zynk_request("POST", url, headers, payload, context)
 
+def _validate_response_status(resp: httpx.Response, body: dict, url: str, context: str, handle_404: bool, not_found_message: Optional[str]) -> None:
+    """Validate HTTP response status code."""
+    if not (200 <= resp.status_code < 300):
+        error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
+        if handle_404 and resp.status_code == 404:
+            raise HTTPException(status_code=404, detail=not_found_message or ERR_ENTITY_NOT_FOUND)
+        raise upstream_error(
+            log_message=f"[ZYNK] Upstream error {resp.status_code} {context} at {url}: {error_detail}",
+            user_message=ERR_VERIFICATION_UNAVAILABLE,
+        )
+
+
+def _validate_response_body(body: dict, url: str, context: str, handle_404: bool, not_found_message: Optional[str]) -> None:
+    """Validate response body structure and success status."""
+    if not isinstance(body, dict):
+        raise upstream_error(
+            log_message=f"[ZYNK] Unexpected response structure {context} at {url}: {body}",
+            user_message=ERR_VERIFICATION_UNEXPECTED,
+        )
+
+    if body.get("success") is not True:
+        error_detail = body.get("message", body.get("error", ERR_REQUEST_NOT_SUCCESSFUL))
+        if handle_404 and ERR_NOT_FOUND in error_detail.lower():
+            raise HTTPException(status_code=404, detail=not_found_message or ERR_ENTITY_NOT_FOUND)
+        raise upstream_error(
+            log_message=f"[ZYNK] Request rejected {context} at {url}: {error_detail}",
+            user_message=ERR_VERIFICATION_REJECTED,
+        )
+
+
 async def _make_zynk_request(
     method: str,
     url: str,
-    headers: dict,
-    json_payload: dict = None,
+    headers: Dict[str, str],
+    json_payload: Optional[Dict] = None,
     context: str = "",
     handle_404: bool = False,
-    not_found_message: str = None,
-) -> dict:
+    not_found_message: Optional[str] = None,
+) -> Dict:
     """
     Make a request to Zynk API with retry logic and response validation.
     Returns the response body as dict.
@@ -175,29 +207,8 @@ async def _make_zynk_request(
                 user_message=ERR_VERIFICATION_INVALID_RESPONSE,
             )
 
-        if not (200 <= resp.status_code < 300):
-            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
-            if handle_404 and resp.status_code == 404:
-                raise HTTPException(status_code=404, detail=not_found_message or ERR_ENTITY_NOT_FOUND)
-            raise upstream_error(
-                log_message=f"[ZYNK] Upstream error {resp.status_code} {context} at {url}: {error_detail}",
-                user_message=ERR_VERIFICATION_UNAVAILABLE,
-            )
-
-        if not isinstance(body, dict):
-            raise upstream_error(
-                log_message=f"[ZYNK] Unexpected response structure {context} at {url}: {body}",
-                user_message=ERR_VERIFICATION_UNEXPECTED,
-            )
-
-        if body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", ERR_REQUEST_NOT_SUCCESSFUL))
-            if handle_404 and ERR_NOT_FOUND in error_detail.lower():
-                raise HTTPException(status_code=404, detail=not_found_message or ERR_ENTITY_NOT_FOUND)
-            raise upstream_error(
-                log_message=f"[ZYNK] Request rejected {context} at {url}: {error_detail}",
-                user_message=ERR_VERIFICATION_REJECTED,
-            )
+        _validate_response_status(resp, body, url, context, handle_404, not_found_message)
+        _validate_response_body(body, url, context, handle_404, not_found_message)
 
         return body
 
@@ -207,10 +218,33 @@ async def _make_zynk_request(
     )
 
 
+def _validate_path_parameter(param: str, param_name: str) -> None:
+    """
+    Validate path parameter to prevent path traversal and injection attacks.
+    Only allows alphanumeric characters, hyphens, and underscores (UUID format).
+    """
+    if not param or not isinstance(param, str):
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: must be a non-empty string")
+    # Allow UUID format: alphanumeric, hyphens, underscores
+    if not re.match(r'^[a-zA-Z0-9_-]+$', param):
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: contains invalid characters")
+
+
+def _validate_entities_response(body: Dict) -> None:
+    """Validate entities response has required fields."""
+    data = body.get("data")
+    if data is None or "entities" not in data or "paginationData" not in data or "message" not in data:
+        raise HTTPException(status_code=502, detail=ERR_UPSTREAM_DATA_STRUCTURE)
+
+
 async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) -> dict:
     """
     Submit KYC documents to ZynkLabs API.
     """
+    # SECURITY: Validate path parameters before constructing URL
+    _validate_path_parameter(entity_id, "entity_id")
+    _validate_path_parameter(routing_id, "routing_id")
+    
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{entity_id}/{routing_id}"
     headers = {**_auth_header(), "Content-Type": CONTENT_TYPE_JSON}
     context = f"while submitting KYC for entity {entity_id} routing {routing_id}"
@@ -244,14 +278,17 @@ async def get_entity_by_id(
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail=ERR_ENTITY_NOT_LINKED)
 
+    # SECURITY: Validate path parameter before using
+    _validate_path_parameter(entity_id, "entity_id")
+    
     # FIXED: HIGH-02 - BOLA Protection: Explicit ownership validation
     # Security check: Ensure the requested entity belongs to the authenticated user
     # Prevents Broken Object Level Authorization (OWASP API #1 risk)
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own entity data.")
 
-
-    # Construct the URL using the zynk_entity_id for the upstream call
+    # SECURITY: Use validated zynk_entity_id from authenticated user, not user-provided entity_id
+    _validate_path_parameter(current.zynk_entity_id, "zynk_entity_id")
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.zynk_entity_id}"
     headers = {**_auth_header(), "Accept": CONTENT_TYPE_JSON}
 
@@ -325,7 +362,7 @@ async def get_entity_by_id(
 
     raise upstream_error(
         log_message=f"[ZYNK] Failed to fetch entity {entity_id} at {url} after multiple attempts",
-        user_message="Verification service is currently unavailable. Please try again later.",
+        user_message=ERR_VERIFICATION_UNAVAILABLE,
     )
 
 @router.post("/entity/kyc/{entity_id}/{routing_id}", response_model=KycUploadResponse)
@@ -345,6 +382,10 @@ async def upload_kyc_documents(
     Upload KYC documents to S3 and submit to ZynkLabs API.
     Requires authentication and ownership validation for security.
     """
+    # SECURITY: Validate path parameters before using
+    _validate_path_parameter(entity_id, "entity_id")
+    _validate_path_parameter(routing_id, "routing_id")
+    
     # Ensure the entity has an zynk_entity_id set
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail=ERR_ENTITY_NOT_LINKED)
@@ -540,7 +581,7 @@ async def get_entity_kyc_status(
 
     raise upstream_error(
         log_message=f"[ZYNK] Failed to fetch KYC status for entity {entity_id} at {url} after multiple attempts",
-        user_message="Verification service is currently unavailable. Please try again later.",
+        user_message=ERR_VERIFICATION_UNAVAILABLE,
     )
 
 @router.get("/entity/kyc/requirements/{entity_id}/{routing_id}", response_model=ZynkKycRequirementsResponse)
@@ -560,13 +601,18 @@ async def get_entity_kyc_requirements(
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail=ERR_ENTITY_NOT_LINKED)
 
+    # SECURITY: Validate path parameters before using in URL
+    _validate_path_parameter(entity_id, "entity_id")
+    _validate_path_parameter(routing_id, "routing_id")
+    
     # FIXED: HIGH-02 - BOLA Protection: Explicit ownership validation
     # Security check: Ensure the requested entity belongs to the authenticated user
     # Prevents Broken Object Level Authorization (OWASP API #1 risk)
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC requirements.")
 
-    # Construct the URL using the zynk_entity_id and routing_id for the upstream call
+    # SECURITY: Use validated zynk_entity_id from authenticated user, validate routing_id
+    _validate_path_parameter(current.zynk_entity_id, "zynk_entity_id")
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{current.zynk_entity_id}/{routing_id}"
     headers = {**_auth_header(), "Accept": CONTENT_TYPE_JSON}
 
@@ -630,7 +676,7 @@ async def get_entity_kyc_requirements(
 
     raise upstream_error(
         log_message=f"[ZYNK] Failed to fetch KYC requirements for entity {entity_id} routing {routing_id} at {url} after multiple attempts",
-        user_message="Verification service is currently unavailable. Please try again later.",
+        user_message=ERR_VERIFICATION_UNAVAILABLE,
     )
 
 @router.get("/entity/{entity_id}/kyc/documents", response_model=ZynkKycDocumentsResponse)
@@ -719,7 +765,7 @@ async def get_entity_kyc_documents(
 
     raise upstream_error(
         log_message=f"[ZYNK] Failed to fetch KYC documents for entity {current.id} at {url} after multiple attempts",
-        user_message="Verification service is currently unavailable. Please try again later.",
+        user_message=ERR_VERIFICATION_UNAVAILABLE,
     )
 
 @router.get("/entity/email/{email}", response_model=ZynkEntityResponse)
@@ -812,5 +858,5 @@ async def get_entity_by_email(
 
     raise upstream_error(
         log_message=f"[ZYNK] Failed to fetch entity by email {email} at {url} after multiple attempts",
-        user_message="Verification service is currently unavailable. Please try again later.",
+        user_message=ERR_VERIFICATION_UNAVAILABLE,
     )
