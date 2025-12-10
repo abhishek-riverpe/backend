@@ -5,6 +5,7 @@ import io
 import os
 import logging
 import re
+from urllib.parse import quote
 from typing import Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File, Request
 from slowapi import Limiter
@@ -184,6 +185,19 @@ async def _make_zynk_request(
     Make a request to Zynk API with retry logic and response validation.
     Returns the response body as dict.
     """
+    # SECURITY: Validate URL to prevent SSRF and path traversal
+    # Use httpx.URL to safely parse and validate the URL
+    try:
+        parsed_url = httpx.URL(url)
+        # Ensure URL uses allowed scheme (http/https)
+        if parsed_url.scheme not in ("http", "https"):
+            raise HTTPException(status_code=400, detail="Invalid URL scheme")
+        # Ensure URL points to configured Zynk base URL
+        if not url.startswith(settings.zynk_base_url):
+            raise HTTPException(status_code=400, detail="URL does not match configured base URL")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid URL: {str(e)}")
+    
     for attempt in range(2):  # 1 retry
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
@@ -245,7 +259,10 @@ async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) ->
     _validate_path_parameter(entity_id, "entity_id")
     _validate_path_parameter(routing_id, "routing_id")
     
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{entity_id}/{routing_id}"
+    # SECURITY: Use URL encoding for path segments to prevent injection
+    safe_entity_id = quote(entity_id, safe='')
+    safe_routing_id = quote(routing_id, safe='')
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{safe_entity_id}/{safe_routing_id}"
     headers = {**_auth_header(), "Content-Type": CONTENT_TYPE_JSON}
     context = f"while submitting KYC for entity {entity_id} routing {routing_id}"
     return await _make_zynk_request("POST", url, headers, payload, context)
@@ -289,7 +306,8 @@ async def get_entity_by_id(
 
     # SECURITY: Use validated zynk_entity_id from authenticated user, not user-provided entity_id
     _validate_path_parameter(current.zynk_entity_id, "zynk_entity_id")
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.zynk_entity_id}"
+    safe_entity_id = quote(current.zynk_entity_id, safe='')
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{safe_entity_id}"
     headers = {**_auth_header(), "Accept": CONTENT_TYPE_JSON}
 
     # Make the request to ZyncLab with retry logic
@@ -515,8 +533,10 @@ async def get_entity_kyc_status(
     if zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC data.")
 
-    # Construct the URL using the zynk_entity_id for the upstream call
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{zynk_entity_id}"
+    # SECURITY: Use URL encoding for path segments
+    _validate_path_parameter(zynk_entity_id, "zynk_entity_id")
+    safe_entity_id = quote(zynk_entity_id, safe='')
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{safe_entity_id}"
     headers = {**_auth_header(), "Accept": CONTENT_TYPE_JSON}
 
     # Make the request to ZyncLab with retry logic
@@ -613,7 +633,9 @@ async def get_entity_kyc_requirements(
 
     # SECURITY: Use validated zynk_entity_id from authenticated user, validate routing_id
     _validate_path_parameter(current.zynk_entity_id, "zynk_entity_id")
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{current.zynk_entity_id}/{routing_id}"
+    safe_entity_id = quote(current.zynk_entity_id, safe='')
+    safe_routing_id = quote(routing_id, safe='')
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{safe_entity_id}/{safe_routing_id}"
     headers = {**_auth_header(), "Accept": CONTENT_TYPE_JSON}
 
     # Make the request to ZyncLab with retry logic
@@ -701,8 +723,10 @@ async def get_entity_kyc_documents(
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC documents.")
 
-    # Construct the URL using the zynk_entity_id for the upstream call
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.zynk_entity_id}/kyc/documents"
+    # SECURITY: Use URL encoding for path segments
+    _validate_path_parameter(current.zynk_entity_id, "zynk_entity_id")
+    safe_entity_id = quote(current.zynk_entity_id, safe='')
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{safe_entity_id}/kyc/documents"
     headers = {**_auth_header(), "Accept": CONTENT_TYPE_JSON}
 
     # Make the request to ZyncLab with retry logic
@@ -786,8 +810,10 @@ async def get_entity_by_email(
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail=ERR_ENTITY_NOT_LINKED)
 
-    # Construct the URL using the email for the upstream call
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/email/{email}"
+    # SECURITY: Use URL encoding for email path segment
+    # Email is already validated (normalized) but we still encode it for safety
+    safe_email = quote(email, safe='')
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/email/{safe_email}"
     headers = {**_auth_header(), "Accept": CONTENT_TYPE_JSON}
 
     # Make the request to ZyncLab with retry logic
