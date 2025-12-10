@@ -61,35 +61,75 @@ def _detect_device_type(user_agent_lower: str) -> str:
     return "desktop"
 
 
+def _detect_windows_os(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect Windows OS and version. Returns True if detected."""
+    if "windows" not in user_agent_lower:
+        return False
+    result["os_name"] = "Windows"
+    win_match = re.search(r'windows nt (\d+\.?\d*)', user_agent_lower)
+    if win_match:
+        version_map = {"10.0": "10", "6.3": "8.1", "6.2": "8", "6.1": "7"}
+        result["os_version"] = version_map.get(win_match.group(1), win_match.group(1))
+    return True
+
+
+def _detect_macos_os(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect macOS and version. Returns True if detected."""
+    if "mac os" not in user_agent_lower and "macos" not in user_agent_lower and "macintosh" not in user_agent_lower:
+        return False
+    result["os_name"] = "macOS"
+    mac_match = re.search(r'mac os x (\d+[._]\d+[._]?\d*)', user_agent_lower)
+    if mac_match:
+        result["os_version"] = mac_match.group(1).replace("_", ".")
+    return True
+
+
+def _detect_android_os(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect Android OS and version. Returns True if detected."""
+    if "android" not in user_agent_lower:
+        return False
+    result["os_name"] = "Android"
+    android_match = re.search(r'android ([\d.]+)', user_agent_lower)
+    if android_match:
+        result["os_version"] = android_match.group(1)
+    return True
+
+
+def _detect_ios_os(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect iOS and version. Returns True if detected."""
+    if "iphone" not in user_agent_lower and "ipod" not in user_agent_lower:
+        return False
+    result["os_name"] = "iOS"
+    ios_match = re.search(r'os (\d+[._]\d+[._]?\d*)', user_agent_lower)
+    if ios_match:
+        result["os_version"] = ios_match.group(1).replace("_", ".")
+    return True
+
+
+def _detect_ipados_os(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect iPadOS and version. Returns True if detected."""
+    if "ipad" not in user_agent_lower:
+        return False
+    result["os_name"] = "iPadOS"
+    ipados_match = re.search(r'os (\d+[._]\d+[._]?\d*)', user_agent_lower)
+    if ipados_match:
+        result["os_version"] = ipados_match.group(1).replace("_", ".")
+    return True
+
+
 def _detect_os(result: Dict[str, Optional[str]], user_agent_lower: str) -> None:
     """Detect OS name and version from user agent."""
-    if "windows" in user_agent_lower:
-        result["os_name"] = "Windows"
-        win_match = re.search(r'windows nt (\d+\.?\d*)', user_agent_lower)
-        if win_match:
-            version_map = {"10.0": "10", "6.3": "8.1", "6.2": "8", "6.1": "7"}
-            result["os_version"] = version_map.get(win_match.group(1), win_match.group(1))
-    elif "mac os" in user_agent_lower or "macos" in user_agent_lower or "macintosh" in user_agent_lower:
-        result["os_name"] = "macOS"
-        mac_match = re.search(r'mac os x (\d+[._]\d+[._]?\d*)', user_agent_lower)
-        if mac_match:
-            result["os_version"] = mac_match.group(1).replace("_", ".")
-    elif "android" in user_agent_lower:
-        result["os_name"] = "Android"
-        android_match = re.search(r'android ([\d.]+)', user_agent_lower)
-        if android_match:
-            result["os_version"] = android_match.group(1)
-    elif "iphone" in user_agent_lower or "ipod" in user_agent_lower:
-        result["os_name"] = "iOS"
-        ios_match = re.search(r'os (\d+[._]\d+[._]?\d*)', user_agent_lower)
-        if ios_match:
-            result["os_version"] = ios_match.group(1).replace("_", ".")
-    elif "ipad" in user_agent_lower:
-        result["os_name"] = "iPadOS"
-        ipados_match = re.search(r'os (\d+[._]\d+[._]?\d*)', user_agent_lower)
-        if ipados_match:
-            result["os_version"] = ipados_match.group(1).replace("_", ".")
-    elif "linux" in user_agent_lower:
+    if _detect_windows_os(result, user_agent_lower):
+        return
+    if _detect_macos_os(result, user_agent_lower):
+        return
+    if _detect_android_os(result, user_agent_lower):
+        return
+    if _detect_ios_os(result, user_agent_lower):
+        return
+    if _detect_ipados_os(result, user_agent_lower):
+        return
+    if "linux" in user_agent_lower:
         result["os_name"] = "Linux"
 
 
@@ -117,33 +157,73 @@ def _detect_device_name(result: Dict[str, Optional[str]], user_agent_lower: str)
             result["device_name"] = "Android Device"
 
 
+def _detect_chrome(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect Chrome browser and version. Returns True if detected."""
+    if "chrome" not in user_agent_lower or "edg" in user_agent_lower:
+        return False
+    result["browser_name"] = "Chrome"
+    chrome_match = re.search(r'chrome/([\d.]+)', user_agent_lower)
+    if chrome_match:
+        result["browser_version"] = chrome_match.group(1)
+    return True
+
+
+def _detect_safari(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect Safari browser and version. Returns True if detected."""
+    if "safari" not in user_agent_lower or "chrome" in user_agent_lower:
+        return False
+    result["browser_name"] = "Safari"
+    safari_match = re.search(r'version/([\d.]+)', user_agent_lower)
+    if safari_match:
+        result["browser_version"] = safari_match.group(1)
+    return True
+
+
+def _detect_firefox(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect Firefox browser and version. Returns True if detected."""
+    if "firefox" not in user_agent_lower:
+        return False
+    result["browser_name"] = "Firefox"
+    firefox_match = re.search(r'firefox/([\d.]+)', user_agent_lower)
+    if firefox_match:
+        result["browser_version"] = firefox_match.group(1)
+    return True
+
+
+def _detect_edge(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect Edge browser and version. Returns True if detected."""
+    if "edg" not in user_agent_lower and "edge" not in user_agent_lower:
+        return False
+    result["browser_name"] = "Edge"
+    edge_match = re.search(r'edg?e?/([\d.]+)', user_agent_lower)
+    if edge_match:
+        result["browser_version"] = edge_match.group(1)
+    return True
+
+
+def _detect_opera(result: Dict[str, Optional[str]], user_agent_lower: str) -> bool:
+    """Detect Opera browser and version. Returns True if detected."""
+    if "opera" not in user_agent_lower and "opr" not in user_agent_lower:
+        return False
+    result["browser_name"] = "Opera"
+    opera_match = re.search(r'(?:opera|opr)/([\d.]+)', user_agent_lower)
+    if opera_match:
+        result["browser_version"] = opera_match.group(1)
+    return True
+
+
 def _detect_browser(result: Dict[str, Optional[str]], user_agent_lower: str) -> None:
     """Detect browser name and version from user agent."""
-    if "chrome" in user_agent_lower and "edg" not in user_agent_lower:
-        result["browser_name"] = "Chrome"
-        chrome_match = re.search(r'chrome/([\d.]+)', user_agent_lower)
-        if chrome_match:
-            result["browser_version"] = chrome_match.group(1)
-    elif "safari" in user_agent_lower and "chrome" not in user_agent_lower:
-        result["browser_name"] = "Safari"
-        safari_match = re.search(r'version/([\d.]+)', user_agent_lower)
-        if safari_match:
-            result["browser_version"] = safari_match.group(1)
-    elif "firefox" in user_agent_lower:
-        result["browser_name"] = "Firefox"
-        firefox_match = re.search(r'firefox/([\d.]+)', user_agent_lower)
-        if firefox_match:
-            result["browser_version"] = firefox_match.group(1)
-    elif "edg" in user_agent_lower or "edge" in user_agent_lower:
-        result["browser_name"] = "Edge"
-        edge_match = re.search(r'edg?e?/([\d.]+)', user_agent_lower)
-        if edge_match:
-            result["browser_version"] = edge_match.group(1)
-    elif "opera" in user_agent_lower or "opr" in user_agent_lower:
-        result["browser_name"] = "Opera"
-        opera_match = re.search(r'(?:opera|opr)/([\d.]+)', user_agent_lower)
-        if opera_match:
-            result["browser_version"] = opera_match.group(1)
+    if _detect_chrome(result, user_agent_lower):
+        return
+    if _detect_safari(result, user_agent_lower):
+        return
+    if _detect_firefox(result, user_agent_lower):
+        return
+    if _detect_edge(result, user_agent_lower):
+        return
+    if _detect_opera(result, user_agent_lower):
+        return
 
 
 def _extract_app_version(result: Dict[str, Optional[str]], user_agent_lower: str) -> None:
