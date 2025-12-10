@@ -22,7 +22,6 @@ from app.utils.device_parser import parse_device_from_headers
 from app.utils.location_service import get_location_from_client
 from app.utils.errors import internal_error, upstream_error
 
-# from prisma.models import entities  # prisma python generates models from schema
 from .security import (
     normalize_email,
     validate_password,
@@ -422,7 +421,6 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         )
     
     try:
-        # email = payload.email.strip()
         email = normalize_email(payload.email)
         password = payload.password
     except Exception as e:

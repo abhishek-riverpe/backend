@@ -42,7 +42,6 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
             
             # Reconstruct body for downstream handlers
             # Store original receive function
-            original_receive = request._receive
             
             # Create a new receive function that returns the cached body
             # This allows FastAPI to read the body multiple times if needed
