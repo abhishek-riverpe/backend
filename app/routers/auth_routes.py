@@ -21,6 +21,7 @@ from app.services.email_service import email_service
 from app.utils.device_parser import parse_device_from_headers
 from app.utils.location_service import get_location_from_client
 from app.utils.errors import internal_error, upstream_error
+from app.utils.log_sanitizer import sanitize_for_log
 
 # from prisma.models import entities  # prisma python generates models from schema
 from .security import (
@@ -1000,10 +1001,10 @@ async def change_password(
         password_valid = False
     
     if not password_valid:
-        logger.warning(f"[AUTH] Change password failed: Invalid current password for user {current_user.email}")
+        logger.warning(f"[AUTH] Change password failed: Invalid current password for user sanitize_for_log({current_user.email})")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Current password is incorrect",
+            detail=sanitize_for_log("Current password is incorrect"),
         )
     
     # Validate new password
