@@ -76,7 +76,7 @@ class CaptchaService:
             try:
                 font = ImageFont.truetype(font_path, font_size)
                 break
-            except:
+            except (OSError, IOError):
                 continue
         
         # Fallback to default font if none found

@@ -18,6 +18,9 @@ from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 
 logger = logging.getLogger(__name__)
 
+# Constants
+ERR_MAX_VERIFICATION_ATTEMPTS = "Maximum verification attempts exceeded. Please request a new OTP."
+
 
 class OTPService:
     """Service for managing OTP operations"""
@@ -50,7 +53,7 @@ class OTPService:
         else:
             logger.warning("[OTP] Email configuration not found. Email OTP will run in mock mode.")
 
-    async def generate_otp(self) -> str:
+    def generate_otp(self) -> str:
         """
         Generate a random 6-digit OTP code
         
@@ -92,7 +95,7 @@ class OTPService:
             await self._invalidate_existing_otps(phone_number, country_code)
 
             # Generate new OTP
-            otp_code = await self.generate_otp()
+            otp_code = self.generate_otp()
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.OTP_EXPIRY_MINUTES)
 
             # Save OTP to database
@@ -184,7 +187,7 @@ class OTPService:
                     where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.FAILED}
                 )
-                return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
+                return False, ERR_MAX_VERIFICATION_ATTEMPTS, None
 
             # Increment attempts
             updated_attempts = otp_record.attempts + 1
@@ -203,7 +206,7 @@ class OTPService:
                         where={"id": otp_record.id},
                         data={"status": OtpStatusEnum.FAILED}
                     )
-                    return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
+                    return False, ERR_MAX_VERIFICATION_ATTEMPTS, None
                 
                 return False, f"Invalid OTP. {attempts_remaining} attempts remaining.", None
 
@@ -254,7 +257,7 @@ class OTPService:
             await self._invalidate_existing_email_otps(email, OtpTypeEnum.EMAIL_VERIFICATION)
 
             # Generate new OTP
-            otp_code = await self.generate_otp()
+            otp_code = self.generate_otp()
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.OTP_EXPIRY_MINUTES)
 
             # Save OTP to database
@@ -337,7 +340,7 @@ class OTPService:
                     where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.FAILED}
                 )
-                return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
+                return False, ERR_MAX_VERIFICATION_ATTEMPTS, None
 
             # Increment attempts
             updated_attempts = otp_record.attempts + 1
@@ -356,7 +359,7 @@ class OTPService:
                         where={"id": otp_record.id},
                         data={"status": OtpStatusEnum.FAILED}
                     )
-                    return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
+                    return False, ERR_MAX_VERIFICATION_ATTEMPTS, None
                 
                 return False, f"Invalid OTP. {attempts_remaining} attempts remaining.", None
 
@@ -469,7 +472,7 @@ class OTPService:
 
             await self._invalidate_existing_email_otps(email, OtpTypeEnum.PASSWORD_RESET)
 
-            otp_code = await self.generate_otp()
+            otp_code = self.generate_otp()
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.OTP_EXPIRY_MINUTES)
 
             otp_record = await self.prisma.otp_verifications.create(
@@ -611,7 +614,7 @@ class OTPService:
             logger.error(f"[OTP] SMS sending error: {str(e)}", exc_info=True)
             return False
 
-    async def _send_via_twilio(self, phone_number: str, otp_code: str) -> bool:
+    def _send_via_twilio(self, phone_number: str, otp_code: str) -> bool:
         """
         Send SMS via Twilio
         

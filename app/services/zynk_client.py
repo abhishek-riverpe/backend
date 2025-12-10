@@ -9,6 +9,9 @@ from ..utils.errors import upstream_error
 
 logger = logging.getLogger(__name__)
 
+# Constants
+CONTENT_TYPE_JSON = "application/json"
+
 
 def _auth_header() -> Dict[str, str]:
     """
@@ -20,6 +23,61 @@ def _auth_header() -> Dict[str, str]:
             detail="ZynkLabs API key not configured",
         )
     return {"x-api-token": settings.zynk_api_key}
+
+
+def _parse_kyc_link_response(response: httpx.Response, url: str) -> dict:
+    """Parse JSON response from KYC link endpoint."""
+    try:
+        return response.json()
+    except ValueError:
+        logger.error(
+            "[ZYNK] Invalid JSON from KYC link endpoint. Preview: %s",
+            response.text[:200],
+        )
+        raise upstream_error(
+            log_message=f"[ZYNK] Invalid JSON from KYC link endpoint at {url}. "
+            f"Response preview: {response.text[:200]}",
+            user_message="Verification service returned an invalid response. Please try again later.",
+        )
+
+
+def _handle_kyc_already_completed(body: dict, zynk_entity_id: str) -> Dict[str, Any]:
+    """Handle case where KYC is already completed."""
+    error_obj = body.get("error") or {}
+    error_details = (error_obj.get("details") or body.get("message") or "").lower()
+    if "kyc for this entity has already been done" in error_details:
+        logger.info(
+            "[ZYNK] KYC already completed for entity=%s; treating as already verified.",
+            zynk_entity_id,
+        )
+        return {
+            "kycCompleted": True,
+            "message": "KYC for this entity has already been completed.",
+        }
+    return None
+
+
+def _validate_kyc_link_response(body: dict, url: str) -> None:
+    """Validate KYC link response structure."""
+    if not isinstance(body, dict) or not body.get("success"):
+        error_msg = body.get("message", "Request was not successful")
+        logger.error("[ZYNK] Unsuccessful KYC link response: %s", body)
+        raise upstream_error(
+            log_message=f"[ZYNK] Verification service rejected KYC link request at {url}: {error_msg}",
+            user_message="Verification service rejected the request. Please contact support if this continues.",
+        )
+
+
+def _extract_kyc_link_data(body: dict, url: str) -> Dict[str, Any]:
+    """Extract and validate KYC link data from response."""
+    data = body.get("data") or {}
+    if not data.get("kycLink"):
+        logger.error("[ZYNK] Missing kycLink in KYC link response data: %s", data)
+        raise upstream_error(
+            log_message=f"[ZYNK] Missing kycLink in upstream response from {url}: {data}",
+            user_message="Verification service returned incomplete data. Please try again later.",
+        )
+    return data
 
 
 async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[str, Any]:
@@ -38,8 +96,8 @@ async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[s
 
     headers = {
         **_auth_header(),
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Content-Type": CONTENT_TYPE_JSON,
+        "Accept": CONTENT_TYPE_JSON,
     }
 
     # Simple retry for transient network errors
@@ -59,40 +117,12 @@ async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[s
                 user_message="Unable to reach verification service. Please try again.",
             )
 
-        try:
-            body = response.json()
-        except ValueError:
-            logger.error(
-                "[ZYNK] Invalid JSON from KYC link endpoint. Preview: %s",
-                response.text[:200],
-            )
-            raise upstream_error(
-                log_message=f"[ZYNK] Invalid JSON from KYC link endpoint at {url}. "
-                f"Response preview: {response.text[:200]}",
-                user_message="Verification service returned an invalid response. Please try again later.",
-            )
+        body = _parse_kyc_link_response(response, url)
 
         if not (200 <= response.status_code < 300):
-            # Handle special case where Zynk indicates KYC is already completed
-            # Example body:
-            #   {'success': False,
-            #    'error': {'code': 400, 'message': 'Bad Request',
-            #              'details': 'KYC for this entity has already been done'}}
-            error_obj = body.get("error") or {}
-            error_details = (error_obj.get("details") or body.get("message") or "").lower()
-            if (
-                response.status_code == 400
-                and "kyc for this entity has already been done" in error_details
-            ):
-                logger.info(
-                    "[ZYNK] KYC already completed for entity=%s; treating as already verified.",
-                    zynk_entity_id,
-                )
-                # Surface a clean marker back to the router instead of raising.
-                return {
-                    "kycCompleted": True,
-                    "message": "KYC for this entity has already been completed.",
-                }
+            kyc_completed = _handle_kyc_already_completed(body, zynk_entity_id)
+            if kyc_completed:
+                return kyc_completed
 
             error_msg = body.get("message") or body.get("error") or "Unknown error"
             logger.error(
@@ -107,21 +137,8 @@ async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[s
                 user_message="Verification service error. Please try again later.",
             )
 
-        if not isinstance(body, dict) or not body.get("success"):
-            error_msg = body.get("message", "Request was not successful")
-            logger.error("[ZYNK] Unsuccessful KYC link response: %s", body)
-            raise upstream_error(
-                log_message=f"[ZYNK] Verification service rejected KYC link request at {url}: {error_msg}",
-                user_message="Verification service rejected the request. Please contact support if this continues.",
-            )
-
-        data = body.get("data") or {}
-        if not data.get("kycLink"):
-            logger.error("[ZYNK] Missing kycLink in KYC link response data: %s", data)
-            raise upstream_error(
-                log_message=f"[ZYNK] Missing kycLink in upstream response from {url}: {data}",
-                user_message="Verification service returned incomplete data. Please try again later.",
-            )
+        _validate_kyc_link_response(body, url)
+        data = _extract_kyc_link_data(body, url)
 
         logger.info(
             "[ZYNK] Successfully obtained KYC link for entity=%s. Keys: %s",
@@ -135,6 +152,52 @@ async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[s
         log_message=f"[ZYNK] Failed to obtain KYC link from {url} after multiple attempts",
         user_message="Verification service is currently unavailable. Please try again later.",
     )
+
+
+def _parse_funding_account_response(response: httpx.Response, url: str) -> dict:
+    """Parse JSON response from funding account creation endpoint."""
+    try:
+        return response.json()
+    except ValueError:
+        logger.error(
+            "[ZYNK] Invalid JSON from funding account creation endpoint. Preview: %s",
+            response.text[:200],
+        )
+        raise upstream_error(
+            log_message=f"[ZYNK] Invalid JSON from funding account creation endpoint at {url}. "
+            f"Response preview: {response.text[:200]}",
+            user_message="Verification service returned an invalid response. Please try again later.",
+        )
+
+
+def _validate_funding_account_response(body: dict, url: str) -> None:
+    """Validate funding account creation response."""
+    if not isinstance(body, dict) or not body.get("success"):
+        error_msg = body.get("message", "Request was not successful")
+        logger.error("[ZYNK] Unsuccessful funding account creation response: %s", body)
+        raise upstream_error(
+            log_message=f"[ZYNK] Verification service rejected funding account creation request at {url}: {error_msg}",
+            user_message="Verification service rejected the request. Please contact support if this continues.",
+            error_details=body,
+        )
+
+
+def _extract_funding_account_data(body: dict, url: str) -> Dict[str, Any]:
+    """Extract and validate funding account data from nested response."""
+    outer_data = body.get("data") or {}
+    inner_data = outer_data.get("data") or {}
+
+    if not inner_data.get("id"):
+        logger.error(
+            "[ZYNK] Missing funding account ID in creation response. Outer data: %s, Inner data: %s",
+            outer_data,
+            inner_data,
+        )
+        raise upstream_error(
+            log_message=f"[ZYNK] Missing funding account ID in upstream response from {url}: {inner_data}",
+            user_message="Verification service returned incomplete data. Please try again later.",
+        )
+    return inner_data
 
 
 async def create_funding_account_from_zynk(zynk_entity_id: str, jurisdiction_id: str) -> Dict[str, Any]:
@@ -165,8 +228,8 @@ async def create_funding_account_from_zynk(zynk_entity_id: str, jurisdiction_id:
 
     headers = {
         **_auth_header(),
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Content-Type": CONTENT_TYPE_JSON,
+        "Accept": CONTENT_TYPE_JSON,
     }
 
     # Simple retry for transient network errors
@@ -190,18 +253,7 @@ async def create_funding_account_from_zynk(zynk_entity_id: str, jurisdiction_id:
                 user_message="Unable to reach verification service. Please try again.",
             )
 
-        try:
-            body = response.json()
-        except ValueError:
-            logger.error(
-                "[ZYNK] Invalid JSON from funding account creation endpoint. Preview: %s",
-                response.text[:200],
-            )
-            raise upstream_error(
-                log_message=f"[ZYNK] Invalid JSON from funding account creation endpoint at {url}. "
-                f"Response preview: {response.text[:200]}",
-                user_message="Verification service returned an invalid response. Please try again later.",
-            )
+        body = _parse_funding_account_response(response, url)
 
         if not (200 <= response.status_code < 300):
             error_msg = body.get("message") or body.get("error") or "Unknown error"
@@ -218,29 +270,8 @@ async def create_funding_account_from_zynk(zynk_entity_id: str, jurisdiction_id:
                 error_details=body,
             )
 
-        if not isinstance(body, dict) or not body.get("success"):
-            error_msg = body.get("message", "Request was not successful")
-            logger.error("[ZYNK] Unsuccessful funding account creation response: %s", body)
-            raise upstream_error(
-                log_message=f"[ZYNK] Verification service rejected funding account creation request at {url}: {error_msg}",
-                user_message="Verification service rejected the request. Please contact support if this continues.",
-                error_details=body,
-            )
-
-        # Zynk Labs response structure: { success: true, data: { message: "...", data: {...} } }
-        outer_data = body.get("data") or {}
-        inner_data = outer_data.get("data") or {}
-
-        if not inner_data.get("id"):
-            logger.error(
-                "[ZYNK] Missing funding account ID in creation response. Outer data: %s, Inner data: %s",
-                outer_data,
-                inner_data,
-            )
-            raise upstream_error(
-                log_message=f"[ZYNK] Missing funding account ID in upstream response from {url}: {inner_data}",
-                user_message="Verification service returned incomplete data. Please try again later.",
-            )
+        _validate_funding_account_response(body, url)
+        inner_data = _extract_funding_account_data(body, url)
 
         logger.info(
             "[ZYNK] Successfully created funding account for entity=%s. Funding account ID: %s",
