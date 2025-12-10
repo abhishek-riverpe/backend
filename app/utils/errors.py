@@ -1,16 +1,7 @@
 import logging
 from fastapi import HTTPException, status
-
+from .log_sanitizer import sanitize_for_log 
 logger = logging.getLogger(__name__)
-
-def sanitize_for_log(message: str) -> str:
-    """
-    Prevent log injection by neutralizing newline and carriage-return characters.
-    """
-    if not isinstance(message, str):
-        message = str(message)
-    return message.replace("\n", "\\n").replace("\r", "\\r")
-
 
 
 def upstream_error(
