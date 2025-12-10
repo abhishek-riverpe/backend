@@ -29,6 +29,7 @@ from app.utils.wallet_crypto import (
     sign_payload_with_api_key
 )
 from app.services.otp_service import OTPService
+from app.utils.log_sanitizer import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/wallets", tags=["Wallets"])
@@ -39,7 +40,7 @@ limiter = Limiter(key_func=get_remote_address)
 # Zynk API base URL
 ZYNK_BASE_URL = "https://qaapi.zynklabs.xyz"
 
-logger.info(f"[WALLET] Router initialized with Zynk API: {ZYNK_BASE_URL}")
+logger.info(f"[WALLET] Router initialized with Zynk API: {sanitize_for_log(ZYNK_BASE_URL)}")
 
 
 def _clean_entity_id(entity_id) -> str:
@@ -84,18 +85,18 @@ async def _initiate_otp_internal(entity_id: str, user_email: str) -> dict:
         dict: OTP response with otpId, otpType, otpContact
     """
     logger.info("[WALLET] ========== INITIATE OTP (INTERNAL) START ==========")
-    logger.info(f"[WALLET] Initiating OTP for entity: {entity_id}, user: {user_email}")
+    logger.info(f"[WALLET] Initiating OTP for entity: {sanitize_for_log(entity_id)}, user: {sanitize_for_log(user_email)}")
     
     # Call Zynk initiate-otp endpoint (entityId in path, no payload needed)
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/initiate-otp"
-    logger.info(f"[WALLET] Zynk API URL: {url}")
+    logger.info(f"[WALLET] Zynk API URL: {sanitize_for_log(url)}")
     
     headers = _zynk_auth_header()
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         logger.info("[WALLET] Sending POST request to Zynk API for initiate-otp")
         response = await client.post(url, headers=headers)
-        logger.info(f"[WALLET] Response status code: {response.status_code}")
+        logger.info(f"[WALLET] Response status code: {sanitize_for_log(str(response.status_code))}")
         
         if response.status_code != 200:
             try:
@@ -104,18 +105,18 @@ async def _initiate_otp_internal(entity_id: str, user_email: str) -> dict:
             except:
                 error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
             
-            logger.error(f"[WALLET] Initiate OTP failed: {error_detail}")
+            logger.error(f"[WALLET] Initiate OTP failed: {sanitize_for_log(error_detail)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Zynk API error: {error_detail}"
             )
         
         body = response.json()
-        logger.info(f"[WALLET] Initiate OTP response: {body}")
+        logger.info(f"[WALLET] Initiate OTP response: {sanitize_for_log(body)}")
         
         if not body.get("success"):
             error_msg = body.get("message", "Zynk API returned error")
-            logger.error(f"[WALLET] Initiate OTP failed: {error_msg}")
+            logger.error(f"[WALLET] Initiate OTP failed: {sanitize_for_log(error_msg)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=error_msg
@@ -132,7 +133,7 @@ async def _initiate_otp_internal(entity_id: str, user_email: str) -> dict:
             )
         
         logger.info(f"[WALLET] ========== INITIATE OTP (INTERNAL) SUCCESS ==========")
-        logger.info(f"[WALLET] OTP ID: {otp_id}")
+        logger.info(f"[WALLET] OTP ID: {sanitize_for_log(otp_id)}")
         return body
 
 
@@ -150,12 +151,12 @@ async def register_auth(
         Success response (always proceeds)
     """
     logger.info("[WALLET] ========== REGISTER AUTH START ==========")
-    logger.info(f"[WALLET] Step 1: Received register-auth request from user: {current_user.email}")
+    logger.info(f"[WALLET] Step 1: Received register-auth request from user: {sanitize_for_log(current_user.email)}")
 
     # Get and clean entity ID from authenticated user
     logger.info("[WALLET] Step 2: Getting and cleaning entity ID")
     entity_id = _clean_entity_id(current_user.zynk_entity_id)
-    logger.info(f"[WALLET] Step 2 Complete: Entity ID = {entity_id}")
+    logger.info(f"[WALLET] Step 2 Complete: Entity ID = {sanitize_for_log(entity_id)}")
 
     # Call Zynk register-auth endpoint
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/register-auth"
@@ -167,18 +168,18 @@ async def register_auth(
     }
 
     logger.info(f"[WALLET] Step 3: Preparing Zynk API call")
-    logger.info(f"[WALLET] Register auth payload: {payload}")
-    logger.info(f"[WALLET] Register auth URL: {url}")
+    logger.info(f"[WALLET] Register auth payload: {sanitize_for_log(payload)}")
+    logger.info(f"[WALLET] Register auth URL: {sanitize_for_log(url)}")
 
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         logger.info("[WALLET] Step 4: Sending request to Zynk API")
         response = await client.post(url, json=payload, headers=_zynk_auth_header())
-        logger.info(f"[WALLET] Step 4 Complete: Received response with status {response.status_code}")
+        logger.info(f"[WALLET] Step 4 Complete: Received response with status {sanitize_for_log(str(response.status_code))}")
 
         # Handle both 200 (success) and 400 (already registered) responses
         if response.status_code == 200:
             body = response.json()
-            logger.info(f"[WALLET] Register auth response: {body}")
+            logger.info(f"[WALLET] Register auth response: {sanitize_for_log(body)}")
 
             if body.get("success"):
                 logger.info("[WALLET] Step 5 Complete: New user registered successfully")
@@ -191,21 +192,21 @@ async def register_auth(
                     logger.info("[WALLET] ✅ Initiate OTP completed successfully")
                     return otp_response
                 except HTTPException as e:
-                    logger.error(f"[WALLET] Failed to initiate OTP after register-auth: {e.detail}")
+                    logger.error(f"[WALLET] Failed to initiate OTP after register-auth: {sanitize_for_log(e.detail)}")
                     raise
                 except Exception as e:
-                    logger.error(f"[WALLET] Unexpected error during initiate-otp: {str(e)}")
+                    logger.error(f"[WALLET] Unexpected error during initiate-otp: {sanitize_for_log(str(e))}")
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to initiate OTP: {str(e)}"
+                        detail=f"Failed to initiate OTP: {sanitize_for_log(str(e))}"
                     )
             else:
                 # Unexpected 200 response with success: false
                 error_msg = body.get("error", {}).get("message", "Unknown error")
-                logger.error(f"[WALLET] Register auth unexpected failure: {error_msg}")
+                logger.error(f"[WALLET] Register auth unexpected failure: {sanitize_for_log(error_msg)}")
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Zynk API error: {error_msg}"
+                    detail=f"Zynk API error: {sanitize_for_log(error_msg)}"
                 )
 
         elif response.status_code == 400:
@@ -224,24 +225,24 @@ async def register_auth(
                         logger.info("[WALLET] ✅ Initiate OTP completed successfully")
                         return otp_response
                     except HTTPException as e:
-                        logger.error(f"[WALLET] Failed to initiate OTP after register-auth: {e.detail}")
+                        logger.error(f"[WALLET] Failed to initiate OTP after register-auth: {sanitize_for_log(e.detail)}")
                         raise
                     except Exception as e:
-                        logger.error(f"[WALLET] Unexpected error during initiate-otp: {str(e)}")
+                        logger.error(f"[WALLET] Unexpected error during initiate-otp: {sanitize_for_log(str(e))}")
                         raise HTTPException(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to initiate OTP: {str(e)}"
+                            detail=f"Failed to initiate OTP: {sanitize_for_log(str(e))}"
                         )
                 else:
                     # Different 400 error
                     error_msg = body.get("error", {}).get("message", "Bad Request")
-                    logger.error(f"[WALLET] Register auth 400 error: {error_msg}")
+                    logger.error(f"[WALLET] Register auth 400 error: {sanitize_for_log(error_msg)}")
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=error_msg
                     )
             except Exception as e:
-                logger.error(f"[WALLET] Failed to parse 400 response: {e}")
+                logger.error(f"[WALLET] Failed to parse 400 response: {sanitize_for_log(str(e))}")
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail="Invalid response from Zynk API"
@@ -254,10 +255,10 @@ async def register_auth(
             except:
                 error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
 
-            logger.error(f"[WALLET] Register auth HTTP error: {error_detail}")
+            logger.error(f"[WALLET] Register auth HTTP error: {sanitize_for_log(error_detail)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
+                detail=f"Zynk API error: {sanitize_for_log(error_detail)}"
             )
 
 
@@ -303,11 +304,11 @@ async def initiate_otp(
     """
     try:
         logger.info("[WALLET] ========== INITIATE OTP (ENDPOINT) START ==========")
-        logger.info(f"[WALLET] Received initiate-otp request from user: {current_user.email}")
+        logger.info(f"[WALLET] Received initiate-otp request from user: {sanitize_for_log(current_user.email)}")
 
         # Get and clean entity ID from authenticated user
         entity_id = _clean_entity_id(current_user.zynk_entity_id)
-        logger.info(f"[WALLET] Entity ID: {entity_id}")
+        logger.info(f"[WALLET] Entity ID: {sanitize_for_log(entity_id)}")
 
         # Call the internal helper function
         result = await _initiate_otp_internal(entity_id, current_user.email)
@@ -317,17 +318,17 @@ async def initiate_otp(
 
     except HTTPException as he:
         logger.error("[WALLET] ========== INITIATE OTP (ENDPOINT) FAILED (HTTPException) ==========")
-        logger.error(f"[WALLET] HTTPException status: {he.status_code}")
-        logger.error(f"[WALLET] HTTPException detail: {he.detail}")
+        logger.error(f"[WALLET] HTTPException status: {sanitize_for_log(str(he.status_code))}")
+        logger.error(f"[WALLET] HTTPException detail: {sanitize_for_log(he.detail)}")
         raise
     except Exception as e:
         logger.error(f"[WALLET] ========== INITIATE OTP (ENDPOINT) FAILED (Unexpected Error) ==========")
-        logger.error(f"[WALLET] Error type: {type(e).__name__}")
-        logger.error(f"[WALLET] Error message: {str(e)}")
+        logger.error(f"[WALLET] Error type: {sanitize_for_log(type(e).__name__)}")
+        logger.error(f"[WALLET] Error message: {sanitize_for_log(str(e))}")
         logger.error(f"[WALLET] Full traceback:", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initiate OTP: {str(e)}"
+            detail=f"Failed to initiate OTP: {sanitize_for_log(str(e))}"
         )
 
 
@@ -353,7 +354,7 @@ async def start_session(
             - privateKey: Private key (if generated, for decryption later)
     """
     logger.info("[WALLET] ========== START SESSION START ==========")
-    logger.info(f"[WALLET] Request payload keys: {list(data.keys())}")
+    logger.info(f"[WALLET] Request payload keys: {sanitize_for_log(list(data.keys()))}")
     logger.info(f"[WALLET] Full request payload: {data}")
 
     otp_id = data.get("otpId")
@@ -373,7 +374,7 @@ async def start_session(
     # Get and clean entity_id from current user
     logger.info("[WALLET] Step 2: Getting entity ID")
     entity_id = _clean_entity_id(current_user.zynk_entity_id)
-    logger.info(f"[WALLET] Step 2 Complete: Entity ID = {entity_id}")
+    logger.info(f"[WALLET] Step 2 Complete: Entity ID = {sanitize_for_log(entity_id)}")
 
     # Generate keypair if publicKey not provided
     private_hex = None
@@ -381,12 +382,12 @@ async def start_session(
         logger.info("[WALLET] Step 3: Generating P-256 keypair (publicKey not provided)")
         private_hex, public_key = generate_keypair_crypto()
         logger.info(f"[WALLET] Step 3 Complete: Generated keypair")
-        logger.info(f"[WALLET] Private key length: {len(private_hex)} chars")
-        logger.info(f"[WALLET] Public key length: {len(public_key)} chars")
+        logger.info(f"[WALLET] Private key length: {sanitize_for_log(len(private_hex))} chars")
+        logger.info(f"[WALLET] Public key length: {sanitize_for_log(len(public_key))} chars")
     else:
         logger.info("[WALLET] Step 3: Using provided publicKey (no keypair generation needed)")
 
-    logger.info(f"[WALLET] Public key to use: {public_key}")
+    logger.info(f"[WALLET] Public key to use: {sanitize_for_log(public_key)}")
 
     # Call Zynk wallets start-session endpoint
     logger.info("[WALLET] Step 4: Preparing Zynk API call")
@@ -398,13 +399,13 @@ async def start_session(
     }
 
     logger.info(f"[WALLET] Step 4 Complete: Zynk API URL = {url}")
-    logger.info(f"[WALLET] Step 4 Complete: Request payload to Zynk = {payload}")
+    logger.info(f"[WALLET] Step 4 Complete: Request payload to Zynk = {sanitize_for_log(payload)}")
 
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         logger.info("[WALLET] Step 5: Sending POST request to Zynk API")
-        logger.info(f"[WALLET] Request URL: {url}")
+        logger.info(f"[WALLET] Request URL: {sanitize_for_log(url)}")
         logger.info(f"[WALLET] Request headers: {_zynk_auth_header()}")
-        logger.info(f"[WALLET] Request payload: {payload}")
+        logger.info(f"[WALLET] Request payload: {sanitize_for_log(payload)}")
         
         response = await client.post(
             url,
@@ -412,53 +413,53 @@ async def start_session(
             headers=_zynk_auth_header()
         )
 
-        logger.info(f"[WALLET] Step 5 Complete: Response status = {response.status_code}")
+        logger.info(f"[WALLET] Step 5 Complete: Response status = {sanitize_for_log(str(response.status_code))}")
         logger.info(f"[WALLET] Response headers: {dict(response.headers)}")
 
         if response.status_code != 200:
             try:
                 error_body = response.json()
                 error_detail = error_body.get("message", f"HTTP {response.status_code}")
-                logger.error(f"[WALLET] Zynk API error response: {error_body}")
+                logger.error(f"[WALLET] Zynk API error response: {sanitize_for_log(error_body)}")
             except:
                 error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
-                logger.error(f"[WALLET] Zynk API error (non-JSON): {error_detail}")
+                logger.error(f"[WALLET] Zynk API error (non-JSON): {sanitize_for_log(error_detail)}")
             
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
+                detail=f"Zynk API error: {sanitize_for_log(error_detail)}"
             )
 
         logger.info("[WALLET] Step 6: Parsing response")
         body = response.json()
-        logger.info(f"[WALLET] Step 6 Complete: Full response body = {body}")
+        logger.info(f"[WALLET] Step 6 Complete: Full response body = {sanitize_for_log(body)}")
         logger.info(f"[WALLET] Response JSON (formatted):")
-        logger.info(f"[WALLET] {json.dumps(body, indent=2)}")
+        logger.info(f"[WALLET] {sanitize_for_log(json.dumps(body, indent=2))}")
 
         if not body.get("success"):
             error_msg = body.get("message", "Zynk API returned error")
-            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
+            logger.error(f"[WALLET] Zynk API returned error: {sanitize_for_log(error_msg)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
+                detail=sanitize_for_log(error_msg)
             )
 
         logger.info("[WALLET] Step 7: Extracting credential bundle")
         credential_bundle = body.get("data", {}).get("credentialBundle")
         if not credential_bundle:
             logger.error("[WALLET] Missing credentialBundle in response")
-            logger.error(f"[WALLET] Response data keys: {list(body.get('data', {}).keys())}")
+            logger.error(f"[WALLET] Response data keys: {sanitize_for_log(list(body.get('data', {}).keys()))}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Zynk API did not return credential bundle"
+                detail=sanitize_for_log("Zynk API did not return credential bundle")
             )
 
         logger.info(f"[WALLET] Step 7 Complete: Credential bundle length = {len(credential_bundle)} chars")
         logger.info(f"[WALLET] Step 7 Complete: Credential bundle (first 50 chars): {credential_bundle[:50]}...")
         logger.info("[WALLET] ========== START SESSION SUCCESS ==========")
         logger.info(f"[WALLET] ✅ Full Zynk API Response:")
-        logger.info(f"[WALLET] {json.dumps(body, indent=2)}")
-        logger.info(f"[WALLET] ✅ Credential Bundle: {credential_bundle}")
+        logger.info(f"[WALLET] {sanitize_for_log(json.dumps(body, indent=2))}")
+        logger.info(f"[WALLET] ✅ Credential Bundle: {sanitize_for_log(credential_bundle)}")
 
         # Prepare response
         result = {
@@ -471,7 +472,7 @@ async def start_session(
         # Include private key if we generated it (for decryption later)
         if private_hex:
             result["data"]["privateKey"] = private_hex
-            logger.info(f"[WALLET] ✅ Private Key (for decryption): {private_hex}")
+            logger.info(f"[WALLET] ✅ Private Key (for decryption): {sanitize_for_log(private_hex)}")
 
         return result
 
@@ -494,7 +495,7 @@ async def decrypt_bundle(
         - sessionPrivateKey: 64-character hex string
         - sessionPublicKey: 66-character compressed hex string
     """
-    logger.info(f"[WALLET] Decrypt bundle request - keys: {list(data.keys())}")
+    logger.info(f"[WALLET] Decrypt bundle request - keys: {sanitize_for_log(list(data.keys()))}")
 
     credential_bundle = data.get("credentialBundle")
     ephemeral_private_key = data.get("ephemeralPrivateKey")
@@ -505,7 +506,7 @@ async def decrypt_bundle(
             detail="credentialBundle and ephemeralPrivateKey are required"
         )
 
-    logger.info(f"[WALLET] Input - bundle: {len(credential_bundle)} chars, private key: {len(ephemeral_private_key)} chars")
+    logger.info(f"[WALLET] Input - bundle: {sanitize_for_log(len(credential_bundle))} chars, private key: {sanitize_for_log(len(ephemeral_private_key))} chars")
 
     # Decrypt using HPKE
     logger.info("[WALLET] Starting HPKE decryption")
@@ -514,7 +515,7 @@ async def decrypt_bundle(
     session_private_key = result['tempPrivateKey']
     session_public_key = result['tempPublicKey']
 
-    logger.info(f"[WALLET] Decryption successful - private key: {len(session_private_key)} chars, public key: {len(session_public_key)} chars")
+    logger.info(f"[WALLET] Decryption successful - private key: {sanitize_for_log(len(session_private_key))} chars, public key: {sanitize_for_log(len(session_public_key))} chars")
 
     return {
         "success": True,
@@ -544,7 +545,7 @@ async def prepare_wallet(
         - payloadToSign: JSON string to sign
         - rpId: Relying Party ID
     """
-    logger.info(f"[WALLET] Prepare wallet request - keys: {list(data.keys())}")
+    logger.info(f"[WALLET] Prepare wallet request - keys: {sanitize_for_log(list(data.keys()))}")
 
     wallet_name = data.get("walletName")
     chain = data.get("chain", "SOLANA")
@@ -558,7 +559,7 @@ async def prepare_wallet(
     # Get and clean entity_id from current user
     entity_id = _clean_entity_id(current_user.zynk_entity_id)
 
-    logger.info(f"[WALLET] Preparing wallet - Name: {wallet_name}, Chain: {chain}, Entity ID: {entity_id}")
+    logger.info(f"[WALLET] Preparing wallet - Name: {sanitize_for_log(wallet_name)}, Chain: {sanitize_for_log(chain)}, Entity ID: {sanitize_for_log(entity_id)}")
 
     # Call Zynk prepare wallet creation endpoint
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/create/prepare"
@@ -567,7 +568,7 @@ async def prepare_wallet(
         "chain": chain
     }
 
-    logger.info(f"[WALLET] Prepare wallet payload: {payload}")
+    logger.info(f"[WALLET] Prepare wallet payload: {sanitize_for_log(payload)}")
 
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.post(
@@ -576,26 +577,26 @@ async def prepare_wallet(
             headers=_zynk_auth_header()
         )
 
-        logger.info(f"[WALLET] Prepare wallet response status: {response.status_code}")
+        logger.info(f"[WALLET] Prepare wallet response status: {sanitize_for_log(str(response.status_code))}")
 
         if response.status_code != 200:
             error_detail = response.json().get("message", f"HTTP {response.status_code}")
-            logger.error(f"[WALLET] Zynk API error: {error_detail}")
+            logger.error(f"[WALLET] Zynk API error: {sanitize_for_log(error_detail)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
+                detail=f"Zynk API error: {sanitize_for_log(error_detail)}"
             )
 
         body = response.json()
         if not body.get("success"):
             error_msg = body.get("message", "Zynk API returned error")
-            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
+            logger.error(f"[WALLET] Zynk API returned error: {sanitize_for_log(error_msg)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
+                detail=sanitize_for_log(error_msg)  
             )
 
-        logger.info(f"[WALLET] Prepare wallet response: {body}")
+        logger.info(f"[WALLET] Prepare wallet response: {sanitize_for_log(body)}")
 
         data_response = body.get("data", {})
         payload_id = data_response.get("payloadId")
@@ -605,7 +606,7 @@ async def prepare_wallet(
         if not all([payload_id, payload_to_sign]):
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Zynk API did not return complete challenge data"
+                detail=sanitize_for_log("Zynk API did not return complete challenge data")
             )
 
         return {
@@ -635,7 +636,7 @@ async def get_user_wallet(
         - addresses: List of addresses from wallet_accounts
         - created_at: Wallet creation timestamp
     """
-    logger.info(f"[WALLET] Fetching wallet for user: {current_user.email} (ID: {current_user.id})")
+    logger.info(f"[WALLET] Fetching wallet for user: {sanitize_for_log(current_user.email)} (ID: {sanitize_for_log(current_user.id)})")
     
     try:
         # Get user's wallet with its accounts
@@ -658,7 +659,7 @@ async def get_user_wallet(
         )
         
         if not wallet:
-            logger.info(f"[WALLET] No wallet found for user: {current_user.id}")
+            logger.info(f"[WALLET] No wallet found for user: {sanitize_for_log(current_user.id)}")
             return {
                 "success": True,
                 "message": "No wallet found",
@@ -678,7 +679,7 @@ async def get_user_wallet(
             for account in wallet.wallet_accounts
         ] if wallet.wallet_accounts else []
         
-        logger.info(f"[WALLET] Found wallet: {wallet.zynk_wallet_id} with {len(addresses)} addresses")
+        logger.info(f"[WALLET] Found wallet: {sanitize_for_log(wallet.zynk_wallet_id)} with {sanitize_for_log(len(addresses))} addresses")
         
         return {
             "success": True,
@@ -694,10 +695,10 @@ async def get_user_wallet(
             }
         }
     except Exception as e:
-        logger.error(f"[WALLET] Error fetching user wallet: {e}")
+        logger.error(f"[WALLET] Error fetching user wallet: {sanitize_for_log(str(e))}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch wallet"
+            detail=sanitize_for_log("Failed to fetch wallet")
         )
 
 
@@ -717,7 +718,7 @@ async def get_wallet_details(
     Returns:
         Wallet details from Zynk API
     """
-    logger.info(f"[WALLET] Fetching wallet details from Zynk - wallet_id: {wallet_id}, user: {current_user.email}")
+    logger.info(f"[WALLET] Fetching wallet details from Zynk - wallet_id: {sanitize_for_log(wallet_id)}, user: {sanitize_for_log(current_user.email)}")
     
     # Verify wallet belongs to user
     wallet = await prisma.wallets.find_first(
@@ -729,28 +730,28 @@ async def get_wallet_details(
     )
     
     if not wallet:
-        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {wallet_id}, user: {current_user.id}")
+        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {sanitize_for_log(wallet_id)}, user: {sanitize_for_log(current_user.id)}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Wallet not found or unauthorized"
+            detail=sanitize_for_log("Wallet not found or unauthorized")
         )
     
     # Call Zynk API
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}"
-    logger.info(f"[WALLET] Calling Zynk API: {url}")
+    logger.info(f"[WALLET] Calling Zynk API: {sanitize_for_log(url)}")
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.get(url, headers=_zynk_auth_header())
         
         if response.status_code != 200:
-            logger.error(f"[WALLET] Zynk API error: {response.status_code}")
+            logger.error(f"[WALLET] Zynk API error: {sanitize_for_log(str(response.status_code))}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch wallet details from Zynk API"
+                detail=sanitize_for_log("Failed to fetch wallet details from Zynk API")
             )
         
         body = response.json()
-        logger.info(f"[WALLET] Wallet details retrieved successfully")
+        logger.info(f"[WALLET] Wallet details retrieved successfully: {sanitize_for_log(body)}")
         return body
 
 
@@ -770,7 +771,7 @@ async def get_wallet_balances(
     Returns:
         Wallet balances for all tokens
     """
-    logger.info(f"[WALLET] Fetching wallet balances from Zynk - wallet_id: {wallet_id}, user: {current_user.email}")
+    logger.info(f"[WALLET] Fetching wallet balances from Zynk - wallet_id: {sanitize_for_log(wallet_id)}, user: {sanitize_for_log(current_user.email)}")
     
     # Verify wallet belongs to user
     wallet = await prisma.wallets.find_first(
@@ -782,28 +783,28 @@ async def get_wallet_balances(
     )
     
     if not wallet:
-        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {wallet_id}, user: {current_user.id}")
+        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {sanitize_for_log(wallet_id)}, user: {sanitize_for_log(current_user.id)}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Wallet not found or unauthorized"
+            detail=sanitize_for_log("Wallet not found or unauthorized")
         )
     
     # Call Zynk API
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/balances"
-    logger.info(f"[WALLET] Calling Zynk API: {url}")
+    logger.info(f"[WALLET] Calling Zynk API: {sanitize_for_log(url)}")
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.get(url, headers=_zynk_auth_header())
         
         if response.status_code != 200:
-            logger.error(f"[WALLET] Zynk API error: {response.status_code}")
+            logger.error(f"[WALLET] Zynk API error: {sanitize_for_log(str(response.status_code))}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch wallet balances from Zynk API"
+                detail=sanitize_for_log("Failed to fetch wallet balances from Zynk API")
             )
         
         body = response.json()
-        logger.info(f"[WALLET] Wallet balances retrieved successfully")
+        logger.info(f"[WALLET] Wallet balances retrieved successfully: {sanitize_for_log(body)}")
         return body
 
 
@@ -831,7 +832,7 @@ async def get_wallet_transactions(
     Returns:
         Transaction history
     """
-    logger.info(f"[WALLET] Fetching wallet transactions from Zynk - wallet_id: {wallet_id}, address: {address}, user: {current_user.email}")
+    logger.info(f"[WALLET] Fetching wallet transactions from Zynk - wallet_id: {sanitize_for_log(wallet_id)}, address: {sanitize_for_log(address)}, user: {sanitize_for_log(current_user.email)}")
     
     # Verify wallet belongs to user
     wallet = await prisma.wallets.find_first(
@@ -843,29 +844,29 @@ async def get_wallet_transactions(
     )
     
     if not wallet:
-        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {wallet_id}, user: {current_user.id}")
+        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {sanitize_for_log(wallet_id)}, user: {sanitize_for_log(current_user.id)}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Wallet not found or unauthorized"
+            detail=sanitize_for_log("Wallet not found or unauthorized")     
         )
     
     # Call Zynk API
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/{address}/transactions"
     params = {"limit": limit, "offset": offset}
-    logger.info(f"[WALLET] Calling Zynk API: {url} with params: {params}")
+    logger.info(f"[WALLET] Calling Zynk API: {sanitize_for_log(url)} with params: {sanitize_for_log(params)}")
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.get(url, headers=_zynk_auth_header(), params=params)
         
         if response.status_code != 200:
-            logger.error(f"[WALLET] Zynk API error: {response.status_code}")
+            logger.error(f"[WALLET] Zynk API error: {sanitize_for_log(str(response.status_code))}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch wallet transactions from Zynk API"
+                detail=sanitize_for_log("Failed to fetch wallet transactions from Zynk API")
             )
         
         body = response.json()
-        logger.info(f"[WALLET] Wallet transactions retrieved successfully")
+        logger.info(f"[WALLET] Wallet transactions retrieved successfully: {sanitize_for_log(body)}")
         return body
 
 
@@ -887,7 +888,7 @@ async def sign_payload(
     Returns:
         - signature: Base64URL-encoded signature
     """
-    logger.info(f"[WALLET] Sign payload request - keys: {data}")
+    logger.info(f"[WALLET] Sign payload request - keys: {sanitize_for_log(list(data.keys()))}")
 
     payload_to_sign = data.get("payload")
     session_private_key = data.get("sessionPrivateKey")
@@ -896,18 +897,18 @@ async def sign_payload(
     if not all([payload_to_sign, session_private_key, session_public_key]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="payload, sessionPrivateKey, and sessionPublicKey are required"
+            detail=sanitize_for_log("payload, sessionPrivateKey, and sessionPublicKey are required")
         )
 
-    logger.info(f"[WALLET] Input - payload: {len(payload_to_sign)} chars, private key: {len(session_private_key)} chars, public key: {len(session_public_key)} chars")
+    logger.info(f"[WALLET] Input - payload: {sanitize_for_log(len(payload_to_sign))} chars, private key: {sanitize_for_log(len(session_private_key))} chars, public key: {sanitize_for_log(len(session_public_key))} chars")
 
     # Sign the payload
     logger.info("[WALLET] Signing payload with session key")
     signature = sign_payload_with_api_key(payload_to_sign, session_private_key, session_public_key)
 
-    logger.info(f"[WALLET] Payload signed successfully - signature: {len(signature)} chars")
-    logger.info(f"[WALLET] 🔐 Signature (first 80 chars): {signature[:80]}...")
-    logger.info(f"[WALLET] 🔐 Signature (last 80 chars): ...{signature[-80:]}")
+    logger.info(f"[WALLET] Payload signed successfully - signature: {sanitize_for_log(len(signature))} chars")
+    logger.info(f"[WALLET] 🔐 Signature (first 80 chars): {sanitize_for_log(signature[:80])}...")
+    logger.info(f"[WALLET] 🔐 Signature (last 80 chars): ...{sanitize_for_log(signature[-80:])}")
 
     return {
         "success": True,
@@ -941,7 +942,7 @@ async def submit_wallet(
         - addresses: Wallet addresses for the chain
         - account: Account details (if auto-created)
     """
-    logger.info(f"[WALLET] Submit wallet request - keys: {list(data.keys())}")
+    logger.info(f"[WALLET] Submit wallet request - keys: {sanitize_for_log(list(data.keys()))}")
 
     payload_id = data.get("payloadId")
     signature_type = data.get("signatureType", "ApiKey")
@@ -952,10 +953,10 @@ async def submit_wallet(
     if not all([payload_id, signature]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="payloadId and signature are required"
+            detail=sanitize_for_log("payloadId and signature are required")     
         )
 
-    logger.info(f"[WALLET] Input - payloadId: {payload_id}, signature: {len(signature)} chars")
+    logger.info(f"[WALLET] Input - payloadId: {sanitize_for_log(payload_id)}, signature: {sanitize_for_log(len(signature))} chars")
     logger.info(f"[WALLET] Session keys provided: {bool(session_private_key)}/{bool(session_public_key)}")
 
     # Call Zynk submit wallet creation endpoint
@@ -966,7 +967,7 @@ async def submit_wallet(
         "signature": signature
     }
 
-    logger.info(f"[WALLET] Submit wallet payload: {payload}")
+    logger.info(f"[WALLET] Submit wallet payload: {sanitize_for_log(payload)}")
 
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.post(
@@ -975,33 +976,33 @@ async def submit_wallet(
             headers=_zynk_auth_header()
         )
 
-        logger.info(f"[WALLET] Submit wallet response status: {response.status_code}")
+        logger.info(f"[WALLET] Submit wallet response status: {sanitize_for_log(str(response.status_code))}")
 
         if response.status_code != 200:
             error_detail = response.json().get("message", f"HTTP {response.status_code}")
-            logger.error(f"[WALLET] Zynk API error: {error_detail}")
+            logger.error(f"[WALLET] Zynk API error: {sanitize_for_log(error_detail)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
+                detail=f"Zynk API error: {sanitize_for_log(error_detail)}"
             )
 
         body = response.json()
         if not body.get("success"):
             error_msg = body.get("message", "Zynk API returned error")
-            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
+            logger.error(f"[WALLET] Zynk API returned error: {sanitize_for_log(error_msg)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
+                detail=sanitize_for_log(error_msg)
             )
 
-        logger.info(f"[WALLET] Submit wallet response: {body}")
+        logger.info(f"[WALLET] Submit wallet response: {sanitize_for_log(body)}")
 
         wallet_data = body.get("data", {})
         wallet_id = wallet_data.get("walletId")
         addresses = wallet_data.get("addresses", [])
 
         # Save wallet to database
-        logger.info(f"[WALLET] Saving wallet to database - ID: {wallet_id}, Entity: {current_user.id}")
+        logger.info(f"[WALLET] Saving wallet to database - ID: {sanitize_for_log(wallet_id)}, Entity: {sanitize_for_log(current_user.id)}")
         try:
             # Get wallet name from original request (or use default)
             wallet_name = data.get("walletName", "Solana Wallet")
@@ -1023,14 +1024,14 @@ async def submit_wallet(
             if addresses and len(addresses) > 0:
                 # For initial wallet creation, we might not have full account details
                 # These will be saved when accounts are created via /accounts/submit
-                logger.info(f"[WALLET] Initial address from wallet creation: {addresses[0]}")
+                logger.info(f"[WALLET] Initial address from wallet creation: {sanitize_for_log(addresses[0])}")
         except Exception as db_error:
-            logger.error(f"[WALLET] Failed to save wallet to database: {db_error}")
+            logger.error(f"[WALLET] Failed to save wallet to database: {sanitize_for_log(str(db_error))}")
             # Don't fail the request if DB save fails - wallet is already created in Zynk
             # Return success but log the error
 
         # Automatically prepare and create account if session keys provided
-        logger.info(f"[WALLET] ✅ Wallet created successfully. Now preparing account creation...")
+        logger.info(f"[WALLET] ✅ Wallet created successfully. Now preparing account creation: {sanitize_for_log(wallet_id)}")
         account_prepare_data = None
         account_created = None
         
@@ -1039,7 +1040,7 @@ async def submit_wallet(
             prepare_url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/accounts/prepare"
             prepare_payload = {"chain": chain}
             
-            logger.info(f"[WALLET] Calling account prepare: {prepare_url}")
+            logger.info(f"[WALLET] Calling account prepare: {sanitize_for_log(prepare_url)}")
             
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 prepare_response = await client.post(
@@ -1052,32 +1053,32 @@ async def submit_wallet(
                     prepare_body = prepare_response.json()
                     if prepare_body.get("success"):
                         account_prepare_data = prepare_body.get("data", {})
-                        logger.info(f"[WALLET] ✅ Account preparation successful - payloadId: {account_prepare_data.get('payloadId')}")
+                        logger.info(f"[WALLET] ✅ Account preparation successful - payloadId: {sanitize_for_log(account_prepare_data.get('payloadId'))}")
                         logger.info(f"[WALLET] 📦 Account Prepare Response:")
-                        logger.info(f"[WALLET]    - payloadId: {account_prepare_data.get('payloadId')}")
+                        logger.info(f"[WALLET]    - payloadId: {sanitize_for_log(account_prepare_data.get('payloadId'))}")
                         logger.info(f"[WALLET]    - payloadToSign (first 100 chars): {account_prepare_data.get('payloadToSign', '')[:100]}")
-                        logger.info(f"❤️❤️❤️❤️❤️❤️❤️❤️")
+                        logger.info(f"❤️❤️❤️❤️❤️❤️❤️❤️: {sanitize_for_log(session_private_key, session_public_key, account_prepare_data)}")
                         # logger.info(session_private_key, session_public_key, account_prepare_data)
                         
                         # If session keys provided, automatically sign and submit account
                         if session_private_key and session_public_key and account_prepare_data:
-                            logger.info(f"[WALLET] 🔐 Session keys provided - automatically signing and submitting account...")
+                            logger.info(f"[WALLET] 🔐 Session keys provided - automatically signing and submitting account: {sanitize_for_log(session_private_key, session_public_key, account_prepare_data)}")
                             
                             try:
                                 # Sign the account payload
                                 account_payload_to_sign = account_prepare_data.get('payloadToSign')
                                 account_payload_id = account_prepare_data.get('payloadId')
                                 
-                                logger.info(f"[WALLET] Signing account payload...")
+                                logger.info(f"[WALLET] Signing account payload: {sanitize_for_log(account_payload_to_sign)}")
                                 account_signature = sign_payload_with_api_key(
                                     account_payload_to_sign,
                                     session_private_key,
                                     session_public_key
                                 )
-                                logger.info(f"[WALLET] ✅ Account payload signed - signature length: {len(account_signature)}")
+                                logger.info(f"[WALLET] ✅ Account payload signed - signature length: {sanitize_for_log(len(account_signature))}")
                                 
                                 # Submit the account
-                                logger.info(f"[WALLET] Submitting account to Zynk...")
+                                logger.info(f"[WALLET] Submitting account to Zynk: {sanitize_for_log(submit_url)}")
                                 submit_url = f"{ZYNK_BASE_URL}/api/v1/wallets/accounts/submit"
                                 submit_payload = {
                                     "payloadId": account_payload_id,
@@ -1099,49 +1100,49 @@ async def submit_wallet(
                                         account_details = account_data.get("account", {})
                                         account_address = account_data.get("address") or account_details.get("address")
                                         
-                                        logger.info(f"[WALLET] ✅ Account created successfully!")
+                                        logger.info(f"[WALLET] ✅ Account created successfully: {sanitize_for_log(account_wallet_id)}")
                                         logger.info(f"[WALLET] 📦 Account Details:")
-                                        logger.info(f"[WALLET]    - walletId: {account_wallet_id}")
-                                        logger.info(f"[WALLET]    - address: {account_address}")
-                                        logger.info(f"[WALLET]    - curve: {account_details.get('curve')}")
-                                        logger.info(f"[WALLET]    - path: {account_details.get('path')}")
+                                        logger.info(f"[WALLET]    - walletId: {sanitize_for_log(account_wallet_id)}")
+                                        logger.info(f"[WALLET]    - address: {sanitize_for_log(account_address)}")
+                                        logger.info(f"[WALLET]    - curve: {sanitize_for_log(account_details.get('curve'))}")
+                                        logger.info(f"[WALLET]    - path: {sanitize_for_log(account_details.get('path'))}")
                                         
                                         # Save account to database
-                                        logger.info(f"[WALLET] 💾 Saving account to database...")
+                                        logger.info(f"[WALLET] 💾 Saving account to database: {sanitize_for_log(wallet.id)}")
                                         try:
                                             wallet_account = await prisma.wallet_accounts.create(
                                                 data={
                                                     "wallet_id": wallet.id,
-                                                    "curve": account_details.get("curve", ""),
-                                                    "path_format": account_details.get("pathFormat", ""),
-                                                    "path": account_details.get("path", ""),
-                                                    "address_format": account_details.get("addressFormat", ""),
-                                                    "address": account_address
+                                                    "curve": sanitize_for_log(account_details.get("curve", "")  ),
+                                                    "path_format": sanitize_for_log(account_details.get("pathFormat", "")),
+                                                    "path": sanitize_for_log(account_details.get("path", "")),
+                                                    "address_format": sanitize_for_log(account_details.get("addressFormat", "")),
+                                                    "address": sanitize_for_log(account_address)
                                                 }
                                             )
                                             logger.info(f"[WALLET] ✅ Account saved to database - DB ID: {wallet_account.id}")
                                             account_created = {
                                                 "address": account_address,
-                                                "curve": account_details.get("curve"),
+                                                "curve": sanitize_for_log(account_details.get("curve")),
                                                 "path": account_details.get("path"),
-                                                "pathFormat": account_details.get("pathFormat"),
-                                                "addressFormat": account_details.get("addressFormat")
+                                                "pathFormat": sanitize_for_log(account_details.get("pathFormat")),
+                                                "addressFormat": sanitize_for_log(account_details.get("addressFormat"))
                                             }
                                         except Exception as db_error:
-                                            logger.error(f"[WALLET] Failed to save account to database: {db_error}")
+                                            logger.error(f"[WALLET] Failed to save account to database: {sanitize_for_log(str(db_error))}")
                                     else:
-                                        logger.error(f"[WALLET] Account submit returned unsuccessful: {submit_body}")
+                                        logger.error(f"[WALLET] Account submit returned unsuccessful: {sanitize_for_log(submit_body)}")
                                 else:
-                                    logger.error(f"[WALLET] Account submit failed with status {submit_response.status_code}")
+                                    logger.error(f"[WALLET] Account submit failed with status {sanitize_for_log(str(submit_response.status_code))}")
                             except Exception as account_error:
-                                logger.error(f"[WALLET] Failed to sign/submit account: {account_error}")
+                                logger.error(f"[WALLET] Failed to sign/submit account: {sanitize_for_log(str(account_error))}")
                                 logger.error(f"[WALLET] Error details:", exc_info=True)
                     else:
-                        logger.warning(f"[WALLET] Account preparation returned unsuccessful: {prepare_body}")
+                        logger.warning(f"[WALLET] Account preparation returned unsuccessful: {sanitize_for_log(prepare_body)}")
                 else:
-                    logger.warning(f"[WALLET] Account preparation failed with status {prepare_response.status_code}")
+                    logger.warning(f"[WALLET] Account preparation failed with status {sanitize_for_log(str(prepare_response.status_code))}")
         except Exception as prepare_error:
-            logger.error(f"[WALLET] Failed to prepare account: {prepare_error}")
+            logger.error(f"[WALLET] Failed to prepare account: {sanitize_for_log(str(prepare_error))}")
             # Don't fail the wallet creation if account prepare fails
             # User can manually call the prepare endpoint later
 
@@ -1155,13 +1156,13 @@ async def submit_wallet(
         if account_created:
             response_data["account"] = account_created
             logger.info(f"[WALLET] ✅ Returning wallet + account data")
-            logger.info(f"[WALLET] 📦 Response includes: walletId={wallet_id}, account.address={account_created.get('address')}")
+            logger.info(f"[WALLET] 📦 Response includes: walletId={sanitize_for_log(wallet_id)}, account.address={sanitize_for_log(account_created.get('address'))}")
             message = "Wallet and account created successfully"
         # Otherwise include account preparation data if available
         elif account_prepare_data:
             response_data["accountPrepare"] = account_prepare_data
             logger.info(f"[WALLET] ✅ Returning wallet creation + account preparation data")
-            logger.info(f"[WALLET] 📦 Response includes: walletId={wallet_id}, accountPrepare.payloadId={account_prepare_data.get('payloadId')}")
+            logger.info(f"[WALLET] 📦 Response includes: walletId={sanitize_for_log(wallet_id)}, accountPrepare.payloadId={sanitize_for_log(account_prepare_data.get('payloadId'))}")
             message = "Wallet created successfully and account preparation ready"
         else:
             message = "Wallet created successfully"
@@ -1195,7 +1196,7 @@ async def prepare_account(
         - payloadToSign: JSON string to sign
         - rpId: Relying Party ID
     """
-    logger.info(f"[WALLET] Prepare account request - wallet_id: {wallet_id}, keys: {list(data.keys())}")
+    logger.info(f"[WALLET] Prepare account request - wallet_id: {sanitize_for_log(wallet_id)}, keys: {sanitize_for_log(list(data.keys()))}")
     
     chain = data.get("chain", "SOLANA")
     
@@ -1209,13 +1210,13 @@ async def prepare_account(
     )
     
     if not wallet:
-        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {wallet_id}, user: {current_user.id}")
+        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {sanitize_for_log(wallet_id)}, user: {sanitize_for_log(current_user.id)}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Wallet not found or unauthorized"
+            detail=sanitize_for_log("Wallet not found or unauthorized")
         )
     
-    logger.info(f"[WALLET] Preparing account - Chain: {chain}, Wallet ID: {wallet_id}")
+    logger.info(f"[WALLET] Preparing account - Chain: {sanitize_for_log(chain)}, Wallet ID: {sanitize_for_log(wallet_id)}")
     
     # Call Zynk prepare account creation endpoint
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/accounts/prepare"
@@ -1223,8 +1224,8 @@ async def prepare_account(
         "chain": chain
     }
     
-    logger.info(f"[WALLET] Prepare account URL: {url}")
-    logger.info(f"[WALLET] Prepare account payload: {payload}")
+    logger.info(f"[WALLET] Prepare account URL: {sanitize_for_log(url)}")
+    logger.info(f"[WALLET] Prepare account payload: {sanitize_for_log(payload)}")
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.post(
@@ -1233,29 +1234,29 @@ async def prepare_account(
             headers=_zynk_auth_header()
         )
         
-        logger.info(f"[WALLET] Prepare account response status: {response.status_code}")
+        logger.info(f"[WALLET] Prepare account response status: {sanitize_for_log(str(response.status_code))}")
         
         if response.status_code != 200:
             try:
                 error_detail = response.json().get("message", f"HTTP {response.status_code}")
             except:
                 error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
-            logger.error(f"[WALLET] Zynk API error: {error_detail}")
+            logger.error(f"[WALLET] Zynk API error: {sanitize_for_log(error_detail)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
+                detail=f"Zynk API error: {sanitize_for_log(error_detail)}"
             )
         
         body = response.json()
         if not body.get("success"):
             error_msg = body.get("message", "Zynk API returned error")
-            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
+            logger.error(f"[WALLET] Zynk API returned error: {sanitize_for_log(error_msg)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
+                detail=sanitize_for_log(error_msg)
             )
         
-        logger.info(f"[WALLET] Prepare account response: {body}")
+        logger.info(f"[WALLET] Prepare account response: {sanitize_for_log(body)}")
         
         data_response = body.get("data", {})
         payload_id = data_response.get("payloadId")
@@ -1265,7 +1266,7 @@ async def prepare_account(
         if not all([payload_id, payload_to_sign]):
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Zynk API did not return complete challenge data"
+                detail=sanitize_for_log("Zynk API did not return complete challenge data")
             )
         
         return {
@@ -1300,8 +1301,8 @@ async def submit_account(
     """
     logger.info(f"[WALLET] ========================================")
     logger.info(f"[WALLET] 🔵 ACCOUNT SUBMIT REQUEST RECEIVED")
-    logger.info(f"[WALLET] Request keys: {list(data.keys())}")
-    logger.info(f"[WALLET] User: {current_user.email} (ID: {current_user.id})")
+    logger.info(f"[WALLET] Request keys: {sanitize_for_log(list(data.keys()))}")
+    logger.info(f"[WALLET] User: sanitize_for_log({current_user.email}) (ID: {sanitize_for_log(current_user.id)})")
     logger.info(f"[WALLET] ========================================")
     
     payload_id = data.get("payloadId")
@@ -1309,13 +1310,13 @@ async def submit_account(
     signature = data.get("signature")
     
     if not all([payload_id, signature]):
-        logger.error(f"[WALLET] ❌ Missing required fields - payloadId: {bool(payload_id)}, signature: {bool(signature)}")
+        logger.error(f"[WALLET] ❌ Missing required fields - payloadId: {sanitize_for_log(bool(payload_id))}, signature: {sanitize_for_log(bool(signature))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="payloadId and signature are required"
+            detail=sanitize_for_log("payloadId and signature are required")
         )
     
-    logger.info(f"[WALLET] Validated input - payloadId: {payload_id}, signatureType: {signature_type}, signature: {len(signature)} chars")
+    logger.info(f"[WALLET] Validated input - payloadId: {sanitize_for_log(payload_id)}, signatureType: {sanitize_for_log(signature_type)}, signature: {sanitize_for_log(len(signature))} chars")
     
     # Call Zynk submit account creation endpoint
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/accounts/submit"
@@ -1325,7 +1326,7 @@ async def submit_account(
         "signature": signature
     }
     
-    logger.info(f"[WALLET] Submit account payload: {payload}")
+    logger.info(f"[WALLET] Submit account payload: {sanitize_for_log(payload)}")
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.post(
@@ -1334,32 +1335,32 @@ async def submit_account(
             headers=_zynk_auth_header()
         )
         
-        logger.info(f"[WALLET] Submit account response status: {response.status_code}")
+        logger.info(f"[WALLET] Submit account response status: {sanitize_for_log(str(response.status_code))}")
         
         if response.status_code != 200:
             try:
                 error_detail = response.json().get("message", f"HTTP {response.status_code}")
             except:
                 error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
-            logger.error(f"[WALLET] Zynk API error: {error_detail}")
+            logger.error(f"[WALLET] Zynk API error: {sanitize_for_log(error_detail)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
+                detail=f"Zynk API error: {sanitize_for_log(error_detail)}"
             )
         
         body = response.json()
         if not body.get("success"):
             error_msg = body.get("message", "Zynk API returned error")
-            logger.error(f"[WALLET] Zynk API returned error: {error_msg}")
+            logger.error(f"[WALLET] Zynk API returned error: {sanitize_for_log(error_msg)}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
+                detail=sanitize_for_log(error_msg)
             )
         
         logger.info(f"[WALLET] ✅ Submit account response received from Zynk API")
         logger.info(f"[WALLET] 📦 Submit Account Response:")
         logger.info(f"[WALLET]    - success: {body.get('success')}")
-        logger.info(f"[WALLET]    - Full response: {body}")
+        logger.info(f"[WALLET]    - Full response: {sanitize_for_log(body)}")
         
         account_data = body.get("data", {})
         wallet_id = account_data.get("walletId")
@@ -1367,14 +1368,14 @@ async def submit_account(
         address = account_data.get("address") or account.get("address")
         
         logger.info(f"[WALLET] 📦 Parsed Account Data:")
-        logger.info(f"[WALLET]    - walletId: {wallet_id}")
-        logger.info(f"[WALLET]    - address: {address}")
-        logger.info(f"[WALLET]    - curve: {account.get('curve')}")
-        logger.info(f"[WALLET]    - path: {account.get('path')}")
-        logger.info(f"[WALLET]    - addressFormat: {account.get('addressFormat')}")
+        logger.info(f"[WALLET]    - walletId: {sanitize_for_log(wallet_id)}")
+        logger.info(f"[WALLET]    - address: {sanitize_for_log(address)}")
+        logger.info(f"[WALLET]    - curve: {sanitize_for_log(account.get('curve'))}")
+        logger.info(f"[WALLET]    - path: {sanitize_for_log(account.get('path'))}")
+        logger.info(f"[WALLET]    - addressFormat: {sanitize_for_log(account.get('addressFormat'))}")
         
         # Save account to database
-        logger.info(f"[WALLET] 💾 Saving account to database - Wallet ID: {wallet_id}, Address: {address}")
+        logger.info(f"[WALLET] 💾 Saving account to database - Wallet ID: {sanitize_for_log(wallet_id)}, Address: {sanitize_for_log(address)}")
         try:
             # Find the wallet in our database
             wallet = await prisma.wallets.find_first(
@@ -1386,27 +1387,27 @@ async def submit_account(
             )
             
             if not wallet:
-                logger.error(f"[WALLET] Wallet not found in database for saving account - wallet_id: {wallet_id}")
+                logger.error(f"[WALLET] Wallet not found in database for saving account - wallet_id: {sanitize_for_log(wallet_id)}")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Wallet not found in database"
+                    detail=sanitize_for_log("Wallet not found in database")
                 )
             
             # Create wallet account record
             wallet_account = await prisma.wallet_accounts.create(
                 data={
                     "wallet_id": wallet.id,
-                    "curve": account.get("curve", ""),
-                    "path_format": account.get("pathFormat", ""),
-                    "path": account.get("path", ""),
+                    "curve": sanitize_for_log(account.get("curve", "")),
+                    "path_format": sanitize_for_log(account.get("pathFormat", "")),
+                    "path": sanitize_for_log(account.get("path", "")),
                     "address_format": account.get("addressFormat", ""),
-                    "address": address
+                    "address": sanitize_for_log(address)
                 }
             )
             logger.info(f"[WALLET] Account saved to database successfully - DB ID: {wallet_account.id}")
             
         except Exception as db_error:
-            logger.error(f"[WALLET] Failed to save account to database: {db_error}")
+            logger.error(f"[WALLET] Failed to save account to database: {sanitize_for_log(str(db_error))}")
             # Don't fail the request if DB save fails - account is already created in Zynk
             # Return success but log the error
         
@@ -1414,9 +1415,9 @@ async def submit_account(
             "success": True,
             "message": "Wallet account created successfully",
             "data": {
-                "walletId": wallet_id,
-                "account": account,
-                "address": address
+                "walletId": sanitize_for_log(wallet_id),
+                "account": sanitize_for_log(account),
+                "address": sanitize_for_log(address)
             }
         }
 
