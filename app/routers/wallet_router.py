@@ -28,7 +28,6 @@ from app.utils.wallet_crypto import (
     decrypt_credential_bundle,
     sign_payload_with_api_key
 )
-from app.services.otp_service import OTPService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/wallets", tags=["Wallets"])
@@ -701,56 +700,46 @@ async def get_user_wallet(
         )
 
 
-@router.get("/{wallet_id}")
+@router.get("/")
 @limiter.limit("60/minute")
 async def get_wallet_details(
-    wallet_id: str,
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
-    """
-    Get wallet details from Zynk API.
+
+    user = await prisma.entities.find_unique(where={"id": current_user.id})
+    if not user or not user.wallet_id:
+        raise HTTPException(status_code=404, detail="User not found")
     
-    Path:
-        - wallet_id: Zynk wallet ID
+    if not user.wallet_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User dosen have wallet")
     
-    Returns:
-        Wallet details from Zynk API
-    """
-    logger.info(f"[WALLET] Fetching wallet details from Zynk - wallet_id: {wallet_id}, user: {current_user.email}")
-    
-    # Verify wallet belongs to user
     wallet = await prisma.wallets.find_first(
         where={
-            "zynk_wallet_id": wallet_id,
-            "entity_id": str(current_user.id),
+            "zynk_wallet_id": user.wallet_id,
+            "entity_id": str(user.zynk_entity_id),
             "deleted_at": None
         }
     )
     
     if not wallet:
-        logger.error(f"[WALLET] Wallet not found or unauthorized - wallet_id: {wallet_id}, user: {current_user.id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Wallet not found or unauthorized"
         )
-    
-    # Call Zynk API
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}"
-    logger.info(f"[WALLET] Calling Zynk API: {url}")
+
+    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{user.wallet_id}"
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.get(url, headers=_zynk_auth_header())
         
         if response.status_code != 200:
-            logger.error(f"[WALLET] Zynk API error: {response.status_code}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Failed to fetch wallet details from Zynk API"
             )
         
         body = response.json()
-        logger.info(f"[WALLET] Wallet details retrieved successfully")
         return body
 
 
