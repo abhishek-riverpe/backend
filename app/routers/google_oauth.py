@@ -1,4 +1,5 @@
 import secrets
+import random
 import logging
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from urllib.parse import urlencode
@@ -14,6 +15,7 @@ from ..utils.errors import internal_error
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"]) 
+# Configure Authlib OAuth client for Google
 oauth = OAuth()
 oauth.register(
     name="google",
@@ -96,6 +98,16 @@ async def google_callback(request: Request):
 
 @router.post("/google/exchange")
 async def exchange_oauth_code_endpoint(code_data: dict, request: Request, response: Response):
+    """
+    Exchange temporary OAuth code for HttpOnly session cookies.
+    
+    ✅ SECURITY FIX: Tokens are set as HttpOnly cookies, NOT returned in response.
+    This prevents XSS token theft and ensures tokens never appear in:
+    - Browser history
+    - Server logs
+    - Referer headers
+    - URL parameters
+    """
     code = code_data.get("code")
     if not code:
         raise HTTPException(

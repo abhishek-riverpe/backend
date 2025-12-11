@@ -2,6 +2,7 @@ import httpx
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from prisma.models import entities as Entities
+from prisma.enums import AccountStatusEnum
 from ..core import auth
 from ..core.config import settings
 from ..core.database import prisma
@@ -18,6 +19,16 @@ from ..schemas.teleport import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/teleport", tags=["teleport"])
+
+def _auth_header():
+    """
+    Generate authentication header for ZyncLab API.
+    """
+    if not settings.zynk_api_key:
+        raise HTTPException(status_code=500, detail="ZyncLab API key not configured")
+    return {
+        "x-api-token": settings.zynk_api_key,
+    }
 
 @router.get("", response_model=TeleportDetailsResponse, status_code=status.HTTP_200_OK)
 async def get_teleport_details(
@@ -92,7 +103,7 @@ async def get_teleport_details(
     if current.zynk_entity_id:
         try:
             url = f"{settings.zynk_base_url}/transformer/teleport/entity/{current.zynk_entity_id}"
-            headers = auth._auth_header()
+            headers = {**_auth_header(), "Accept": "application/json"}
             
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
@@ -216,7 +227,7 @@ async def create_teleport(
     
     # Use correct Zynk Labs endpoint
     url = f"{settings.zynk_base_url}/api/v1/transformer/teleport/create"
-    headers = auth._auth_header()
+    headers = {**_auth_header(), "Content-Type": "application/json", "Accept": "application/json"}
     
     # Prepare request body for ZynkLabs
     request_body = {
@@ -270,6 +281,10 @@ async def create_teleport(
                 log_message=f"[ZYNK] Teleport creation rejected by upstream for entity {entity_id} at {url}: {error_detail}",
                 user_message="Verification service rejected the request. Please contact support if this continues.",
             )
+        
+        # Transform ZynkLabs response to unified format
+        # ZynkLabs response: {"success": true, "data": {"message": "...", "data": {"teleportId": "..."}}}
+        # Unified format: {"success": true, "message": "...", "data": {"teleportId": "..."}, "error": None, "meta": {}}
         
         zynk_data = body.get("data", {})
         zynk_inner_data = zynk_data.get("data", {})

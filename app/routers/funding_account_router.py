@@ -12,18 +12,22 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from prisma.errors import DataError
 from prisma.models import entities as Entities
-from utils.enums import KycStatusEnum
+from prisma.enums import KycStatusEnum
+
 from ..core.database import prisma
 from ..core import auth
+from ..core.config import settings
 from ..schemas.funding_account import FundingAccountData, FundingAccountResponse
 from ..services.zynk_client import create_funding_account_from_zynk
 from ..services.email_service import email_service
 from ..services.funding_account_service import save_funding_account_to_db, US_FUNDING_JURISDICTION_ID
-
+from ..utils.errors import upstream_error
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/account", tags=["funding_account"])
+
+# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
 limiter = Limiter(key_func=get_remote_address)
 
 

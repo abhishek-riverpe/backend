@@ -1,18 +1,33 @@
 import logging
 from typing import Any, Dict
 import httpx
-from core.auth import _auth_header
+from fastapi import HTTPException, status
 from ..core.config import settings
 from ..utils.errors import upstream_error
 
 logger = logging.getLogger(__name__)
 
 
+# Generate Auth Header
+def _auth_header() -> Dict[str, str]:
+    if not settings.zynk_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ZynkLabs API key not configured",
+        )
+    return {"x-api-token": settings.zynk_api_key}
+
 
 async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[str, Any]:
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{zynk_entity_id}/{routing_id}"
 
-    headers = _auth_header(),
+    headers = {
+        **_auth_header(),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    # Simple retry for transient network errors
     for attempt in range(2):
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
@@ -83,7 +98,7 @@ async def create_funding_account_from_zynk(zynk_entity_id: str, jurisdiction_id:
 
     url = f"{settings.zynk_base_url}/api/v1/transformer/accounts/{zynk_entity_id}/create/funding_account/{jurisdiction_id}"
 
-    headers = _auth_header()
+    headers = {**_auth_header()}
 
     for attempt in range(2):
         try:

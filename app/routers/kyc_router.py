@@ -17,6 +17,8 @@ from ..services.email_service import email_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/kyc", tags=["kyc"])
+
+# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
 limiter = Limiter(key_func=get_remote_address)
 
 
@@ -27,6 +29,7 @@ def _build_error_response(
     status_code: int,
     error_details: Dict[str, Any] | None = None,
 ) -> HTTPException:
+    """Build a standardized error response for the API"""
     return HTTPException(
         status_code=status_code,
         detail={

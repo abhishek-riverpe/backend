@@ -3,7 +3,6 @@ import base64
 import uuid
 import io
 import os
-from core.auth import _auth_header
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File, Request
 from slowapi import Limiter
@@ -18,6 +17,7 @@ from ..schemas.zynk import (
     ZynkKycResponse,
     ZynkKycRequirementsResponse,
     ZynkKycDocumentsResponse,
+    KycDocumentUpload,
     KycUploadResponse,
 )
 from ..utils.errors import upstream_error, internal_error
@@ -41,6 +41,16 @@ IMAGE_SIGNATURES = {
 }
 
 router = APIRouter(prefix="/api/v1/transformer", tags=["transformer"])
+
+def _auth_header():
+    """
+    Generate authentication header for ZyncLab API.
+    """
+    if not settings.zynk_api_key:
+        raise HTTPException(status_code=500, detail="ZyncLab API key not configured")
+    return {
+        "x-api-token": settings.zynk_api_key,
+    }
 
 def _validate_magic_bytes(file_content: bytes) -> str:
     """
@@ -97,7 +107,7 @@ async def _create_entity_in_zynk(payload: dict) -> dict:
     Create an entity in ZynkLabs API.
     """
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/create"
-    headers = _auth_header()
+    headers = {**_auth_header(), "Content-Type": "application/json"}
 
     for attempt in range(2):  # 1 retry
         try:
@@ -153,7 +163,7 @@ async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) ->
     Submit KYC documents to ZynkLabs API.
     """
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{entity_id}/{routing_id}"
-    headers = _auth_header()
+    headers = {**_auth_header(), "Content-Type": "application/json"}
 
     for attempt in range(2):  # 1 retry
         try:
@@ -210,7 +220,7 @@ async def get_all_entities(current: Entities = Depends(auth.get_current_entity))
     Requires authentication to ensure secure access in the banking system.
     """
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/entities"
-    headers = _auth_header()
+    headers = {**_auth_header(), "Accept": "application/json"}
 
     for attempt in range(2):  # 1 retry
         try:
@@ -288,7 +298,7 @@ async def get_entity_by_id(
 
     # Construct the URL using the zynk_entity_id for the upstream call
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.zynk_entity_id}"
-    headers = _auth_header()
+    headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic
     for attempt in range(2):  # 1 retry
@@ -511,7 +521,7 @@ async def get_entity_kyc_status(
 
     # Construct the URL using the zynk_entity_id for the upstream call
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{zynk_entity_id}"
-    headers = _auth_header()
+    headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic
     for attempt in range(2):  # 1 retry
@@ -603,7 +613,7 @@ async def get_entity_kyc_requirements(
 
     # Construct the URL using the zynk_entity_id and routing_id for the upstream call
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{current.zynk_entity_id}/{routing_id}"
-    headers = _auth_header()
+    headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic
     for attempt in range(2):  # 1 retry
@@ -692,7 +702,7 @@ async def get_entity_kyc_documents(
 
     # Construct the URL using the zynk_entity_id for the upstream call
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.zynk_entity_id}/kyc/documents"
-    headers = _auth_header()
+    headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic
     for attempt in range(2):  # 1 retry
@@ -777,7 +787,7 @@ async def get_entity_by_email(
 
     # Construct the URL using the email for the upstream call
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/email/{email}"
-    headers = _auth_header()
+    headers = {**_auth_header(), "Accept": "application/json"}
 
     # Make the request to ZyncLab with retry logic
     for attempt in range(2):  # 1 retry

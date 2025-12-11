@@ -6,7 +6,6 @@ from ..utils.validate_id import validate_user_id
 from slowapi.util import get_remote_address
 from prisma.errors import PrismaError
 from prisma.models import entities as Entities
-from core.auth import _auth_header
 from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
@@ -19,12 +18,20 @@ router = APIRouter(prefix="/api/v1/transformer", tags=["transformer"])
 
 limiter = Limiter(key_func=get_remote_address)
 
+def _auth_header():
+    if not settings.zynk_api_key:
+        raise HTTPException(status_code=500, detail="Zynk API key not configured")
+    return {
+        "x-api-token": settings.zynk_api_key,
+    }
+
 async def _call_zynk_create_entity(payload: dict) -> str:
     import logging
     logger = logging.getLogger(__name__)
     
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/create"
-    headers = _auth_header()
+    headers = {**_auth_header(), "Content-Type": "application/json", "Accept": "application/json"}
+    
     logger.info(f"Sending payload to Zynk API: {payload}")
 
     for attempt in range(2):  # 1 retry
