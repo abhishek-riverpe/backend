@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, status, Response, Request, Depends
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
 import httpx
 import asyncio
@@ -11,7 +11,8 @@ from ..core.database import prisma
 from ..core.config import settings
 from .. import schemas
 from prisma.errors import UniqueViolationError, PrismaError, DataError
-from prisma.enums import LoginMethodEnum
+from utils.enums import LoginMethodEnum
+from services.zynk_client import _auth_header
 from passlib.context import CryptContext
 from app.services.otp_service import OTPService
 from app.services.otp_service import OTPService
@@ -22,7 +23,6 @@ from app.utils.device_parser import parse_device_from_headers
 from app.utils.location_service import get_location_from_client
 from app.utils.errors import internal_error, upstream_error
 
-# from prisma.models import entities  # prisma python generates models from schema
 from .security import (
     normalize_email,
     validate_password,
@@ -33,7 +33,7 @@ from app.core.auth import get_current_entity
 
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
-CAPTCHA_REQUIRED_ATTEMPTS = 3  # Require CAPTCHA after 3 failed attempts
+CAPTCHA_REQUIRED_ATTEMPTS = 3  
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 router = APIRouter(
@@ -43,31 +43,22 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
-# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
+
 limiter = Limiter(key_func=get_remote_address)
 
 
 async def _email_exists_in_zynk(email: str) -> bool:
-    """
-    Check with ZynkLabs API if an entity already exists for the email.
-    Falls back to local DB only when Zynk credentials are not configured.
-    """
     if not settings.zynk_base_url or not settings.zynk_api_key:
-        logger.warning("[AUTH] Zynk credentials missing, falling back to local DB email lookup.")
         existing = await prisma.entities.find_first(where={"email": email})
         return existing is not None
 
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/email/{email}"
-    headers = {
-        "x-api-token": settings.zynk_api_key,
-        "Accept": "application/json",
-    }
+    headers = _auth_header()
 
     try:
         async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
             resp = await client.get(url, headers=headers)
     except httpx.RequestError as exc:
-        logger.error("[AUTH] Zynk email lookup failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Unable to verify email at the moment. Please try again later.",
@@ -82,7 +73,6 @@ async def _email_exists_in_zynk(email: str) -> bool:
         return False
 
     if 200 <= resp.status_code < 300:
-        # Treat success response as entity existing
         return True
 
     error_detail = "Unknown upstream error"
@@ -96,13 +86,9 @@ async def _email_exists_in_zynk(email: str) -> bool:
     )
 
 
-# Check if CAPTCHA is required for login (based on failed attempts)
+
 @router.post("/check-captcha-required")
 async def check_captcha_required(data: dict):
-    """
-    Check if CAPTCHA is required for a given email.
-    Returns: {"captcha_required": true/false, "login_attempts": int}
-    """
     email = data.get("email", "").strip()
     
     if not email:
@@ -114,7 +100,6 @@ async def check_captcha_required(data: dict):
     email = normalize_email(email)
     user = await prisma.entities.find_unique(where={"email": email})
     
-    # Don't reveal if email exists - return captcha_required: false for non-existent emails
     if not user:
         return {
             "captcha_required": False,
@@ -131,7 +116,7 @@ async def check_captcha_required(data: dict):
 
 
 @router.post("/check-email")
-@limiter.limit("10/minute")  # FIXED: HIGH-04 - Rate limit to prevent email enumeration
+@limiter.limit("10/minute") 
 async def check_email(data: dict, request: Request):
     email = data.get("email", "").strip()
     
@@ -141,26 +126,21 @@ async def check_email(data: dict, request: Request):
             detail="Email is required"
         )
     
-    # Validate email format
+
     if not "@" in email or "." not in email.split("@")[1]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid email format"
         )
-    
-    # Check against Zynk Labs (with local DB fallback if Zynk is not configured)
-    # This ensures we fail fast on the first step of signup when the email is
-    # already registered either in our database or in Zynk Labs.
+
     exists = await _email_exists_in_zynk(email)
 
     if exists:
-        # Email already registered (either locally or upstream in Zynk)
         return {
             "available": False,
             "message": "This email is already registered. Please sign in instead.",
         }
-
-    # Email not found in Zynk/DB
+        
     return {
         "available": True,
         "message": "Email is available.",
@@ -168,12 +148,9 @@ async def check_email(data: dict, request: Request):
 
 # Return unified response with tokens + user
 @router.post("/signup", response_model=schemas.AuthResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/minute")  # FIXED: HIGH-04 - Rate limit to prevent signup flooding and Zynk API exhaustion
+@limiter.limit("3/minute")
 async def signup(user_in: schemas.UserCreate, response: Response, request: Request):
-    """
-    Create a new entity (user) with username, email, password.
-    Returns access & refresh tokens and sets refresh token as HttpOnly cookie.
-    """
+
     first_name = user_in.first_name.strip()
     last_name = user_in.last_name.strip()
     email = normalize_email(user_in.email)
@@ -182,19 +159,15 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     nationality = user_in.nationality.strip()
     phone_number = user_in.phone_number.strip()
     country_code = user_in.country_code.strip()
-    # Extract phone prefix (numeric part without +)
     phone_prefix = country_code.replace('+', '')
 
-    # Convert date from MM/DD/YYYY to YYYY-MM-DD format for Zynk Labs and DateTime for Prisma
     prisma_date_of_birth = None
     if date_of_birth:
         try:
             month, day, year = date_of_birth.split('/')
             zynk_date_of_birth = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-            # Convert to DateTime for Prisma (ISO-8601 format)
             prisma_date_of_birth = datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
         except (ValueError, TypeError) as e:
-            # MED-02: Do not leak exception details to clients
             raise internal_error(
                 log_message=f"[SIGNUP] Invalid date format for email {email}: {date_of_birth}. Error: {e}",
                 user_message="Invalid date format. Please use MM/DD/YYYY format.",
@@ -203,10 +176,6 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     else:
         zynk_date_of_birth = date_of_birth
 
-    # MED-06: Use logger instead of print, sanitize PII
-    logger.info(f"[SIGNUP] Signup initiated for email={email[:3]}***")
-
-    # Validate CAPTCHA first
     captcha_id = user_in.captcha_id.strip()
     captcha_code = user_in.captcha_code.strip()
     
@@ -216,41 +185,29 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     )
     
     if not is_valid:
-        logger.warning(f"[AUTH] Signup blocked: Invalid CAPTCHA for email {email}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_message or "Invalid CAPTCHA code. Please try again.",
         )
 
-    # Validate semantics
     try:
         validate_password(password)
     except ValueError as ve:
-        # 400 for client input that fails our policy
+      
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
 
-    # Early email existence check against Zynk + local DB.
-    # This allows the mobile app to surface "email already registered"
-    # on the very first screen, and also gives a clear 409 response
-    # even if the client bypasses /check-email and hits /signup directly.
     if await _email_exists_in_zynk(email):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email already registered",
         )
 
-    # Hash password
+
     pwd_hash = hash_password(password)
 
-    # FIXED: TOCTOU Race Condition - Create placeholder record FIRST in transaction
-    # This uses the database unique constraint as a lock mechanism
-    # The transaction ensures atomicity: if external API fails, record is rolled back
     entity = None
     try:
         async with prisma.tx() as tx:
-            # Create placeholder record with PENDING status
-            # This will fail with UniqueViolationError if email already exists
-            # The unique constraint acts as the lock, preventing race conditions
             entity = await tx.entities.create(
                 data={
                     "email": email,
@@ -261,14 +218,10 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
                     "nationality": nationality,
                     "phone_number": phone_number,
                     "country_code": country_code,
-                    "status": "PENDING",  # Placeholder status until Zynk API succeeds (PENDING = user created but zynk entity not created)
-                    # zynk_entity_id will be set after Zynk API call
+                    "status": "PENDING",  
                 }
             )
-            # Transaction commits here, entity is now locked by unique constraint
-
-        # Now call external API (outside transaction to avoid long-running transaction)
-        # If this fails, we'll need to clean up the placeholder record
+           
         zynk_payload = {
             "firstName": first_name,
             "lastName": last_name,
@@ -281,8 +234,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             "type": "individual"
         }
 
-        # MED-06: Use logger instead of print, avoid logging full payload
-        logger.info(f"[SIGNUP] Creating entity in Zynk Labs for email={email[:3]}***")
+
         try:
             zynk_response = await _create_entity_in_zynk(zynk_payload)
             zynk_entity_id = zynk_response.get("data", {}).get("entityId")
@@ -290,17 +242,16 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             if not zynk_entity_id:
                 raise HTTPException(status_code=502, detail="Failed to get entity ID from Zynk Labs")
 
-            # Update record with external ID and set status to ACTIVE
             async with prisma.tx() as tx:
                 entity = await tx.entities.update(
                     where={"id": entity.id},
                     data={
                         "zynk_entity_id": zynk_entity_id,
-                        "status": "ACTIVE",  # Set to ACTIVE after successful Zynk creation
+                        "status": "ACTIVE",
                     }
                 )
             
-            # Create KYC session with NOT_STARTED status as per requirements
+    
             try:
                 await prisma.kyc_sessions.create(
                     data={
@@ -311,8 +262,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
                 )
                 logger.info(f"[SIGNUP] Created KYC session for entity_id={entity.id}, email={email[:3]}***")
             except Exception as kyc_error:
-                # Log error but don't fail signup if KYC session creation fails
-                # KYC session can be created later when user accesses KYC endpoints
+              
                 logger.warning(
                     f"[SIGNUP] Failed to create KYC session for entity_id={entity.id}: {kyc_error}. "
                     "User can still signup and KYC session will be created on first KYC access."
@@ -334,46 +284,37 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             )
 
     except UniqueViolationError:
-        # Email already exists - caught by unique constraint
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
-    # Tokens (subject should be a stable unique id)
     access_token = auth.create_access_token(data={"sub": str(entity.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(entity.id), "type": "refresh"})
 
-    # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
-    # Use secure=True only in production (HTTPS), False for localhost development
-    # Use samesite="lax" in development for cross-port cookies, "strict" in production
+
     is_production = not settings.frontend_url.startswith("http://localhost")
     
-    # Set access token as HttpOnly cookie (15 minutes expiry)
     response.set_cookie(
         key="rp_access",
         value=access_token,
-        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
-        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-        secure=is_production,        # True in production (HTTPS), False in development
-        max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+        httponly=True,               
+        samesite="lax" if not is_production else "strict", 
+        secure=is_production,       
+        max_age=15 * 60,     
         path="/",
     )
     
-    # Set refresh token as HttpOnly cookie (24 hours expiry)
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
-        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
-        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-        secure=is_production,        # True in production (HTTPS), False in development
-        max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
+        httponly=True,              
+        samesite="lax" if not is_production else "strict",  
+        secure=is_production,       
+        max_age=24 * 60 * 60,        
         path="/",
     )
 
-    # Optional: include Location header for the created resource
+
     response.headers["Location"] = f"/api/v1/entities/{entity.id}"
 
-    # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
-    # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
-    # LOW-05: Removed unnecessary hasattr() calls - Prisma models have defined fields
     safe_user = {
         "id": str(entity.id),
         "email": entity.email,
@@ -384,8 +325,6 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
         "entity_type": str(entity.entity_type) if entity.entity_type else None,
         "status": str(entity.status) if entity.status else None,
     }
-
-    # print(f"Signup response: access_token={access_token}, refresh_token={refresh_token}, user={safe_user}")
 
     return {
         "success": True,
@@ -401,20 +340,9 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     }
 
 @router.post("/signin", response_model=schemas.AuthResponse, status_code=status.HTTP_200_OK)
-@limiter.limit("10/minute")  # Rate limit signin attempts
+@limiter.limit("10/minute")
 async def signin(payload: schemas.SignInInput, request: Request, response: Response):
-    """
-    Authenticate an entity using email + password.
-    - Returns access & refresh tokens.
-    - Sets refresh token as HttpOnly cookie.
-    - Enforces account lockout after repeated failures.
-    - Requires email_verified (tweak as needed).
-    """
-    logger.info(f"[AUTH] Signin attempt for email: {payload.email}")
-    logger.info(f"[AUTH] Request method: {request.method}, URL: {request.url}")
-    logger.info(f"[AUTH] Request headers: {dict(request.headers)}")
-    
-    # Uniform error for nonexistent users (avoid user enumeration)
+
     def invalid_credentials():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -422,7 +350,6 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         )
     
     try:
-        # email = payload.email.strip()
         email = normalize_email(payload.email)
         password = payload.password
     except Exception as e:
@@ -431,16 +358,12 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid request payload",
         )
-
-    # Fetch entity by exact email match (you chose not to lowercase)
-    # Use raw SQL query to handle date_of_birth stored as string (legacy data issue)
+        
     try:
         user = await prisma.entities.find_unique(where={"email": email})
     except DataError as e:
-        # Handle database data inconsistency (e.g., date_of_birth stored as string)
-        logger.warning(f"[AUTH] Database data error when fetching user {email}: {e}. Attempting raw SQL query.")
+
         try:
-            # Use raw SQL to fetch user and handle date conversion
             result = await prisma.query_raw(
                 """
                 SELECT id, email, first_name, last_name, password, 
@@ -461,7 +384,6 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
             if not result or len(result) == 0:
                 invalid_credentials()
             
-            # Convert raw result to a dict-like object for compatibility
             row = result[0]
             from types import SimpleNamespace
             user = SimpleNamespace(
@@ -484,51 +406,18 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
                 phone_number=row.get('phone_number'),
                 country_code=row.get('country_code'),
             )
-            logger.info(f"[AUTH] Successfully fetched user {email} using raw SQL query")
         except Exception as raw_sql_error:
             logger.error(f"[AUTH] Raw SQL query also failed for user {email}: {raw_sql_error}")
             invalid_credentials()
 
-    # If no user, do NOT reveal which part failed
     if not user:
-        logger.warning(f"[AUTH] User not found for email: {email}")
         invalid_credentials()
 
-    logger.info(f"[AUTH] User found: {email} (ID: {user.id}, Status: {user.status})")
-
-    # Check locked state
     now = datetime.now(timezone.utc)
-    # if user.locked_until and user.locked_until > now:
-    #     # 423 Locked with Retry-After-ish hint
-    #     remaining = int((user.locked_until - now).total_seconds())
-    #     # Optional header; clients can use it for UX
-    #     response.headers["X-Account-Unlock-In"] = str(remaining)
-    #     raise HTTPException(
-    #         status_code=status.HTTP_423_LOCKED,
-    #         detail="Account locked due to multiple failed attempts. Try again later.",
-    #     )
-
-    # (Optional) Require verified email before login
-    # if user.email_verified is not True:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Email not verified",
-    #     )
-
-    # (Optional) Enforce allowed statuses
-    # if str(user.status).upper() in {"SUSPENDED", "BLOCKED", "DEACTIVATED"}:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Account is not allowed to sign in",
-    #     )
-
-    # Check if CAPTCHA is required (after 3 failed attempts)
     current_attempts = user.login_attempts or 0
-    # captcha_required = current_attempts >= CAPTCHA_REQUIRED_ATTEMPTS
     captcha_required = False
     
     if captcha_required:
-        # CAPTCHA is required - validate it before password check
         if not payload.captcha_id or not payload.captcha_code:
             response.headers["X-CAPTCHA-Required"] = "true"
             raise HTTPException(
@@ -543,7 +432,6 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         )
         
         if not is_valid:
-            logger.warning(f"[AUTH] Signin blocked: Invalid CAPTCHA for email {email} (attempts: {current_attempts})")
             response.headers["X-CAPTCHA-Required"] = "true"
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -556,20 +444,12 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         ok = pwd_context.verify(password, user.password)
         logger.info(f"[AUTH] Password verification result: {'SUCCESS' if ok else 'FAILED'}")
     except Exception as e:
-        # Any verification error should be treated as invalid creds
-        logger.error(f"[AUTH] Password verification exception: {type(e).__name__}: {str(e)}")
         ok = False
 
     if not ok:
-        logger.warning(f"[AUTH] Signin failed - Invalid credentials for email: {email}")
-        # Increment attempts; lock if threshold reached
         attempts = (user.login_attempts or 0) + 1
         lock_until = None
         detail = "Invalid email or password"
-
-        # if attempts >= MAX_LOGIN_ATTEMPTS:
-        #     lock_until = now + timedelta(minutes=LOCKOUT_MINUTES)
-        #     detail = "Account locked due to multiple failed attempts. Try again later."
 
         try:
             await prisma.entities.update(
@@ -581,26 +461,17 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
                 },
             )
         except PrismaError:
-            # Do not leak DB errors; still respond with auth error
             pass
 
         # Send email notification when attempts reach 3 (CAPTCHA required threshold)
         if attempts == CAPTCHA_REQUIRED_ATTEMPTS:
             try:
-                # Extract device and location information
                 user_agent = request.headers.get("user-agent")
                 ip_address = getattr(request.client, "host", None)
-                
-                # Parse device information
                 device_info = parse_device_from_headers(request)
-                
-                # Get location information
                 location_info = await get_location_from_client(request)
-                
-                # Get user's full name
                 user_name = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
                 
-                # Send email notification
                 await email_service.send_failed_login_notification(
                     email=user.email,
                     user_name=user_name,
@@ -610,23 +481,20 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
                     ip_address=ip_address,
                     timestamp=now
                 )
-                logger.info(f"[AUTH] Failed login notification email sent to {user.email} after {attempts} attempts")
             except Exception as e:
                 logger.warning(f"[AUTH] Failed to send failed login notification email: {e}")
-                # Don't fail login if email fails
+           
 
         if lock_until:
             response.headers["X-Account-Unlock-In"] = str(int((lock_until - now).total_seconds()))
             raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail)
 
-        # If attempts >= 3, indicate CAPTCHA is required for next attempt
         if attempts >= CAPTCHA_REQUIRED_ATTEMPTS:
             response.headers["X-CAPTCHA-Required"] = "true"
             response.headers["X-Login-Attempts"] = str(attempts)
 
         invalid_credentials()
 
-    # Success: reset attempts, clear lock, update last_login_at
     try:
         await prisma.entities.update(
             where={"id": user.id},
@@ -638,26 +506,20 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
             },
         )
     except PrismaError:
-        # Non-fatal; continue issuing tokens
         pass
 
     # Issue tokens
     access_token = auth.create_access_token(data={"sub": str(user.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(user.id), "type": "refresh"})
-
-    # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
-    # Use secure=True only in production (HTTPS), False for localhost development
-    # Use samesite="lax" in development for cross-port cookies, "strict" in production
     is_production = not settings.frontend_url.startswith("http://localhost")
     
-    # Set access token as HttpOnly cookie (15 minutes expiry)
     response.set_cookie(
         key="rp_access",
         value=access_token,
-        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
-        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-        secure=is_production,        # True in production (HTTPS), False in development
-        max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+        httponly=True,              
+        samesite="lax" if not is_production else "strict",  
+        secure=is_production,       
+        max_age=15 * 60,             
         path="/",
     )
     
@@ -665,23 +527,18 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     response.set_cookie(
         key="rp_refresh",
         value=refresh_token,
-        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
-        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-        secure=is_production,        # True in production (HTTPS), False in development
-        max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
+        httponly=True,              
+        samesite="lax" if not is_production else "strict",  
+        secure=is_production,        
+        max_age=24 * 60 * 60,        
         path="/",
     )
 
-    # Create login session for access token (used for inactivity tracking)
     try:
-        # Extract device and location information
         user_agent = request.headers.get("user-agent")
         ip_address = getattr(request.client, "host", None)
-        
-        # Parse device information (from custom headers for mobile app, or user-agent for web)
         device_info = parse_device_from_headers(request)
         
-        # Get location information (from client headers or IP geolocation)
         location_info = await get_location_from_client(request)
         
         session_service = SessionService(prisma)
@@ -696,11 +553,8 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         )
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session: {e}")
-    # MED-06: Use logger instead of print, avoid logging full user object
+        
     logger.info(f"[AUTH] Login session created for user_id={user.id}")
-    # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
-    # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
-    # LOW-05: Removed unnecessary hasattr() calls - Prisma models have defined fields
     safe_user = {
         "id": str(user.id),
         "email": user.email,
@@ -711,8 +565,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         "entity_type": str(user.entity_type) if user.entity_type else None,
         "status": str(user.status) if user.status else None,
     }
-    # MED-06: Use logger instead of print, avoid logging full user data
-    logger.debug(f"[AUTH] User profile data prepared for user_id={user.id}")
+   
     return {
         "success": True,
         "message": "Signin successful",
@@ -729,11 +582,6 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
 @router.post("/forgot-password/request", response_model=schemas.ApiResponse)
 async def request_password_reset(payload: schemas.ForgotPasswordRequest):
-    """
-    Initiate password reset by sending an OTP to the user's email.
-    Always responds with success to avoid leaking account existence.
-    MED-03: Fixed timing attack by simulating same delay regardless of user existence.
-    """
     email = normalize_email(payload.email)
     user = await prisma.entities.find_unique(where={"email": email})
 
@@ -747,11 +595,7 @@ async def request_password_reset(payload: schemas.ForgotPasswordRequest):
                 detail=message,
             )
     else:
-        # MED-03: Simulate same delay to prevent timing attack
-        # This prevents attackers from determining if an email exists based on response time
         await asyncio.sleep(random.uniform(0.5, 1.5))
-
-    # ALWAYS return same response regardless of user existence
     return {
         "success": True,
         "message": "If that email exists, a reset code has been sent.",
@@ -763,9 +607,6 @@ async def request_password_reset(payload: schemas.ForgotPasswordRequest):
 
 @router.post("/forgot-password/confirm", response_model=schemas.ApiResponse)
 async def confirm_password_reset(payload: schemas.ForgotPasswordConfirm):
-    """
-    Verify the password reset OTP and set a new password.
-    """
     email = normalize_email(payload.email)
     otp_service = OTPService(prisma)
 
@@ -818,21 +659,14 @@ async def confirm_password_reset(payload: schemas.ForgotPasswordConfirm):
 
 @router.post("/refresh", response_model=schemas.AuthResponse)
 async def refresh_token(request: Request, response: Response, body: dict = None):
-    """
-    Issue a new access/refresh token pair using the HttpOnly refresh cookie or request body.
-    Supports both web (cookies) and mobile (request body) clients.
-    Returns unified response; sets a fresh refresh cookie.
-    """
-    # Try to get refresh token from cookies (web) or request body (mobile)
     rt = request.cookies.get("rp_refresh")
     
-    # If not in cookies, try to get from request body (for mobile apps)
     if not rt:
         try:
             body_data = await request.json() if body is None else body
             rt = body_data.get("refresh_token")
         except Exception:
-            pass  # Body parsing failed, continue without body token
+            pass
     
     if not rt:
         logger.warning("[AUTH] Refresh token missing from both cookies and request body")
@@ -854,43 +688,36 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
         access_token = auth.create_access_token({"sub": str(user.id), "type": "access"})
         refresh_token = auth.create_refresh_token({"sub": str(user.id), "type": "refresh"})
 
-        # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
-        # Use secure=True only in production (HTTPS), False for localhost development
-        # Use samesite="lax" in development for cross-port cookies, "strict" in production
         is_production = not settings.frontend_url.startswith("http://localhost")
         
-        # Set access token as HttpOnly cookie (15 minutes expiry)
         response.set_cookie(
             key="rp_access",
             value=access_token,
-            httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
-            samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-            secure=is_production,        # True in production (HTTPS), False in development
-            max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+            httponly=True,            
+            samesite="lax" if not is_production else "strict",  
+            secure=is_production,       
+            max_age=15 * 60,             
             path="/",
         )
         
-        # Set refresh token as HttpOnly cookie (24 hours expiry)
         response.set_cookie(
             key="rp_refresh",
             value=refresh_token,
-            httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
-            samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-            secure=is_production,        # True in production (HTTPS), False in development
-            max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
+            httponly=True,              
+            samesite="lax" if not is_production else "strict",  
+            secure=is_production,       
+            max_age=24 * 60 * 60,       
             path="/",
         )
     except HTTPException:
         raise
     except Exception as e:
-        # MED-02: Do not leak exception details to clients
         raise internal_error(
             log_message=f"[AUTH] Error during token refresh: {e}",
             user_message="Token refresh failed. Please log in again.",
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    # Create a new login session for the new access token
     try:
         # Extract device and location information
         user_agent = request.headers.get("user-agent")
@@ -915,9 +742,6 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
     except Exception as e:
         logger.warning(f"[AUTH] Failed to create login session on refresh: {e}")
 
-    # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
-    # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
-    # LOW-05: Removed unnecessary hasattr() calls - Prisma models have defined fields
     safe_user = {
         "id": str(user.id),
         "email": user.email,
@@ -944,29 +768,20 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
 
 @router.post("/logout", response_model=schemas.ApiResponse)
 async def logout(request: Request, response: Response):
-    """
-    Logout the current session.
-    - Updates session logout_at timestamp
-    - Marks session as LOGGED_OUT
-    - Clears refresh cookie
-    """
-    # Extract access token from Authorization header to update session
+
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
     session_token = None
     
     if auth_header and auth_header.lower().startswith("bearer "):
         session_token = auth_header.split(" ", 1)[1].strip()
         
-        # Update session logout_at and status
         try:
             session_service = SessionService(prisma)
             await session_service.logout_session(session_token=session_token)
             logger.info(f"[AUTH] Session logged out: {session_token[:16]}...")
         except Exception as e:
-            # Log error but don't fail logout (token might be expired/invalid)
             logger.warning(f"[AUTH] Failed to update session on logout: {e}")
     
-    # Clear both access and refresh cookies
     response.delete_cookie("rp_access", path="/")
     response.delete_cookie("rp_refresh", path="/")
     
@@ -986,7 +801,6 @@ async def change_password(
 ):
     now = datetime.now(timezone.utc)
 
-    # Verify current password
     password_valid = pwd_context.verify(payload.current_password, current_user.password)
     if not password_valid:
         raise HTTPException(
@@ -994,14 +808,12 @@ async def change_password(
             detail="Current password is incorrect"
         )
 
-    # Prevent reusing the same password
     if payload.current_password == payload.new_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="New password must be different from current password"
         )
 
-    # Validate new password strength
     try:
         validate_password(payload.new_password)
     except ValueError as ve:
@@ -1084,36 +896,19 @@ async def change_password(
 
 @router.get("/ping")
 async def auth_ping(request: Request):
-    """
-    Simple authenticated ping to exercise middleware/session activity updates.
-    Requires Authorization: Bearer <access_token> header.
-    """
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
     if not auth_header or not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     token = auth_header.split(" ", 1)[1].strip()
-    # Validate token type
     auth.verify_token_type(token, "access")
     return {"success": True, "message": "pong", "data": {"time": datetime.now(timezone.utc).isoformat()}}
 
 @router.post("/logout-all", response_model=schemas.ApiResponse)
 async def logout_all_devices(request: Request, response: Response, current_user=Depends(get_current_entity)):
-    """
-    Revoke all active sessions for the current user and clear refresh cookie.
-    Note: Existing refresh tokens on other devices will be cleared only when they refresh the page;
-    server will not issue new access tokens for expired/idle sessions, but refresh JWTs are not tracked server-side.
-    
-    FIXED: HIGH-02 - BOLA Protection
-    - Only uses authenticated user's ID from token (current_user.id)
-    - No entity_id parameter accepted from request
-    - Prevents unauthorized session revocation
-    """
+
     try:
         session_service = SessionService(prisma)
-        # FIXED: HIGH-02 - Explicit BOLA protection: Only use authenticated user's ID
-        # Never accept entity_id from request parameters - always use current_user.id
         revoked = await session_service.revoke_all_sessions(entity_id=str(current_user.id))
-        # Clear current refresh cookie
         response.delete_cookie("rp_access", path="/")
         response.delete_cookie("rp_refresh", path="/")
         return {
