@@ -1,4 +1,3 @@
-# routes/zynk.py
 from datetime import datetime, timezone
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status, Request
@@ -11,7 +10,6 @@ from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
 from urllib.parse import urljoin
-import requests
 from ..schemas.zynk import CreateZynkEntityIn
 from ..utils.errors import upstream_error
 
