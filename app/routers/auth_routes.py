@@ -411,7 +411,6 @@ async def _get_user_for_signin(email: str):
 def _validate_captcha_if_required(
     payload: schemas.SignInInput,
     current_attempts: int,
-    email: str,
     response: Response,
 ) -> None:
     """Validate CAPTCHA if required based on login attempts."""
@@ -586,7 +585,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     now = datetime.now(timezone.utc)
     current_attempts = user.login_attempts or 0
     
-    _validate_captcha_if_required(payload, current_attempts, email, response)
+    _validate_captcha_if_required(payload, current_attempts, response)
     
     ok = _verify_password(password, user.password, email)
     if not ok:
