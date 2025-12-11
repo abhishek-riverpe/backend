@@ -21,6 +21,7 @@ from app.services.email_service import email_service
 from app.utils.device_parser import parse_device_from_headers
 from app.utils.location_service import get_location_from_client
 from app.utils.errors import internal_error, upstream_error
+from app.utils.log_sanitizer import sanitize_for_log, sanitize_pii
 
 # from prisma.models import entities  # prisma python generates models from schema
 from .security import (
@@ -204,7 +205,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
         zynk_date_of_birth = date_of_birth
 
     # MED-06: Use logger instead of print, sanitize PII
-    logger.info(f"[SIGNUP] Signup initiated for email={email[:3]}***")
+    logger.info("[SIGNUP] Signup initiated for email=%s", sanitize_pii(email))
 
     # Validate CAPTCHA first
     captcha_id = user_in.captcha_id.strip()
@@ -216,7 +217,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     )
     
     if not is_valid:
-        logger.warning(f"[AUTH] Signup blocked: Invalid CAPTCHA for email {email}")
+        logger.warning("[AUTH] Signup blocked: Invalid CAPTCHA for email=%s", sanitize_for_log(email))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_message or "Invalid CAPTCHA code. Please try again.",
@@ -282,7 +283,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
         }
 
         # MED-06: Use logger instead of print, avoid logging full payload
-        logger.info(f"[SIGNUP] Creating entity in Zynk Labs for email={email[:3]}***")
+        logger.info("[SIGNUP] Creating entity in Zynk Labs for email=%s", sanitize_pii(email))
         try:
             zynk_response = await _create_entity_in_zynk(zynk_payload)
             zynk_entity_id = zynk_response.get("data", {}).get("entityId")
@@ -309,7 +310,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
                         "routing_enabled": False,
                     }
                 )
-                logger.info(f"[SIGNUP] Created KYC session for entity_id={entity.id}, email={email[:3]}***")
+                logger.info("[SIGNUP] Created KYC session for entity_id=%s, email=%s", sanitize_for_log(entity.id), sanitize_pii(email))
             except Exception as kyc_error:
                 # Log error but don't fail signup if KYC session creation fails
                 # KYC session can be created later when user accesses KYC endpoints
@@ -321,9 +322,9 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             # Cleanup: Delete placeholder record if external API fails
             try:
                 await prisma.entities.delete(where={"id": entity.id})
-                logger.warning(f"[SIGNUP] Cleaned up placeholder record for {email} after Zynk API failure")
+                logger.warning("[SIGNUP] Cleaned up placeholder record for email=%s after Zynk API failure", sanitize_for_log(email))
             except Exception as cleanup_error:
-                logger.error(f"[SIGNUP] Failed to cleanup placeholder record: {cleanup_error}")
+                logger.error("[SIGNUP] Failed to cleanup placeholder record: %s", sanitize_for_log(str(cleanup_error)))
             # Re-raise the original exception
             if isinstance(e, HTTPException):
                 raise
@@ -410,9 +411,9 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
     - Enforces account lockout after repeated failures.
     - Requires email_verified (tweak as needed).
     """
-    logger.info(f"[AUTH] Signin attempt for email: {payload.email}")
-    logger.info(f"[AUTH] Request method: {request.method}, URL: {request.url}")
-    logger.info(f"[AUTH] Request headers: {dict(request.headers)}")
+    logger.info("[AUTH] Signin attempt for email=%s", sanitize_for_log(payload.email))
+    logger.info("[AUTH] Request method=%s, URL=%s", sanitize_for_log(request.method), sanitize_for_log(str(request.url)))
+    logger.debug("[AUTH] Request headers count=%s", len(request.headers))
     
     # Uniform error for nonexistent users (avoid user enumeration)
     def invalid_credentials():
@@ -426,7 +427,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         email = normalize_email(payload.email)
         password = payload.password
     except Exception as e:
-        logger.error(f"[AUTH] Error processing signin payload: {e}", exc_info=True)
+        logger.error("[AUTH] Error processing signin payload: %s", sanitize_for_log(str(e)), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid request payload",
@@ -438,7 +439,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         user = await prisma.entities.find_unique(where={"email": email})
     except DataError as e:
         # Handle database data inconsistency (e.g., date_of_birth stored as string)
-        logger.warning(f"[AUTH] Database data error when fetching user {email}: {e}. Attempting raw SQL query.")
+        logger.warning("[AUTH] Database data error when fetching user email=%s: %s. Attempting raw SQL query.", sanitize_for_log(email), sanitize_for_log(str(e)))
         try:
             # Use raw SQL to fetch user and handle date conversion
             result = await prisma.query_raw(
@@ -484,17 +485,17 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
                 phone_number=row.get('phone_number'),
                 country_code=row.get('country_code'),
             )
-            logger.info(f"[AUTH] Successfully fetched user {email} using raw SQL query")
+            logger.info("[AUTH] Successfully fetched user email=%s using raw SQL query", sanitize_for_log(email))
         except Exception as raw_sql_error:
-            logger.error(f"[AUTH] Raw SQL query also failed for user {email}: {raw_sql_error}")
+            logger.error("[AUTH] Raw SQL query also failed for user email=%s: %s", sanitize_for_log(email), sanitize_for_log(str(raw_sql_error)))
             invalid_credentials()
 
     # If no user, do NOT reveal which part failed
     if not user:
-        logger.warning(f"[AUTH] User not found for email: {email}")
+        logger.warning("[AUTH] User not found for email=%s", sanitize_for_log(email))
         invalid_credentials()
 
-    logger.info(f"[AUTH] User found: {email} (ID: {user.id}, Status: {user.status})")
+    logger.info("[AUTH] User found: email=%s (ID=%s, Status=%s)", sanitize_for_log(email), sanitize_for_log(user.id), sanitize_for_log(str(user.status)))
 
     # Check locked state
     now = datetime.now(timezone.utc)
@@ -543,7 +544,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         )
         
         if not is_valid:
-            logger.warning(f"[AUTH] Signin blocked: Invalid CAPTCHA for email {email} (attempts: {current_attempts})")
+            logger.warning("[AUTH] Signin blocked: Invalid CAPTCHA for email=%s (attempts=%s)", sanitize_for_log(email), current_attempts)
             response.headers["X-CAPTCHA-Required"] = "true"
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -552,16 +553,16 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
     # Verify password (your `password` column stores the hash)
     try:
-        logger.info(f"[AUTH] Attempting password verification for user: {email}")
+        logger.info("[AUTH] Attempting password verification for user email=%s", sanitize_for_log(email))
         ok = pwd_context.verify(password, user.password)
-        logger.info(f"[AUTH] Password verification result: {'SUCCESS' if ok else 'FAILED'}")
+        logger.info("[AUTH] Password verification result: %s", 'SUCCESS' if ok else 'FAILED')
     except Exception as e:
         # Any verification error should be treated as invalid creds
-        logger.error(f"[AUTH] Password verification exception: {type(e).__name__}: {str(e)}")
+        logger.error("[AUTH] Password verification exception: %s: %s", type(e).__name__, sanitize_for_log(str(e)))
         ok = False
 
     if not ok:
-        logger.warning(f"[AUTH] Signin failed - Invalid credentials for email: {email}")
+        logger.warning("[AUTH] Signin failed - Invalid credentials for email=%s", sanitize_for_log(email))
         # Increment attempts; lock if threshold reached
         attempts = (user.login_attempts or 0) + 1
         lock_until = None
@@ -610,9 +611,9 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
                     ip_address=ip_address,
                     timestamp=now
                 )
-                logger.info(f"[AUTH] Failed login notification email sent to {user.email} after {attempts} attempts")
+                logger.info("[AUTH] Failed login notification email sent to email=%s after %s attempts", sanitize_for_log(user.email), attempts)
             except Exception as e:
-                logger.warning(f"[AUTH] Failed to send failed login notification email: {e}")
+                logger.warning("[AUTH] Failed to send failed login notification email: %s", sanitize_for_log(str(e)))
                 # Don't fail login if email fails
 
         if lock_until:
@@ -695,9 +696,9 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
             location_info=location_info,
         )
     except Exception as e:
-        logger.warning(f"[AUTH] Failed to create login session: {e}")
+        logger.warning("[AUTH] Failed to create login session: %s", sanitize_for_log(str(e)))
     # MED-06: Use logger instead of print, avoid logging full user object
-    logger.info(f"[AUTH] Login session created for user_id={user.id}")
+    logger.info("[AUTH] Login session created for user_id=%s", sanitize_for_log(user.id))
     # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
     # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
     # LOW-05: Removed unnecessary hasattr() calls - Prisma models have defined fields
@@ -712,7 +713,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         "status": str(user.status) if user.status else None,
     }
     # MED-06: Use logger instead of print, avoid logging full user data
-    logger.debug(f"[AUTH] User profile data prepared for user_id={user.id}")
+    logger.debug("[AUTH] User profile data prepared for user_id=%s", sanitize_for_log(user.id))
     return {
         "success": True,
         "message": "Signin successful",
@@ -843,12 +844,12 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
         payload = auth.verify_token_type(rt, "refresh")
         user_id = payload.get("sub")
         if not user_id:
-            logger.warning(f"[AUTH] Invalid token payload - missing 'sub': {payload}")
+            logger.warning("[AUTH] Invalid token payload - missing 'sub'")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
         user = await prisma.entities.find_unique(where={"id": user_id})
         if not user:
-            logger.warning(f"[AUTH] Entity not found for user_id: {user_id}")
+            logger.warning("[AUTH] Entity not found for user_id=%s", sanitize_for_log(user_id))
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Entity not found")
 
         access_token = auth.create_access_token({"sub": str(user.id), "type": "access"})
@@ -913,7 +914,7 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
             location_info=location_info,
         )
     except Exception as e:
-        logger.warning(f"[AUTH] Failed to create login session on refresh: {e}")
+        logger.warning("[AUTH] Failed to create login session on refresh: %s", sanitize_for_log(str(e)))
 
     # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
     # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
@@ -961,10 +962,10 @@ async def logout(request: Request, response: Response):
         try:
             session_service = SessionService(prisma)
             await session_service.logout_session(session_token=session_token)
-            logger.info(f"[AUTH] Session logged out: {session_token[:16]}...")
+            logger.info("[AUTH] Session logged out successfully")
         except Exception as e:
             # Log error but don't fail logout (token might be expired/invalid)
-            logger.warning(f"[AUTH] Failed to update session on logout: {e}")
+            logger.warning("[AUTH] Failed to update session on logout: %s", sanitize_for_log(str(e)))
     
     # Clear both access and refresh cookies
     response.delete_cookie("rp_access", path="/")
@@ -1000,7 +1001,7 @@ async def change_password(
         password_valid = False
     
     if not password_valid:
-        logger.warning(f"[AUTH] Change password failed: Invalid current password for user {current_user.email}")
+        logger.warning("[AUTH] Change password failed: Invalid current password for user email=%s", sanitize_for_log(current_user.email))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Current password is incorrect",
@@ -1041,9 +1042,9 @@ async def change_password(
                 "updated_at": now,
             },
         )
-        logger.info(f"[AUTH] Password changed successfully for user {current_user.email}")
+        logger.info("[AUTH] Password changed successfully for user email=%s", sanitize_for_log(current_user.email))
     except PrismaError as exc:
-        logger.error(f"[AUTH] Failed to update password: {exc}")
+        logger.error("[AUTH] Failed to update password: %s", sanitize_for_log(str(exc)))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to change password. Please try again later.",
@@ -1062,9 +1063,9 @@ async def change_password(
             entity_id=str(current_user.id),
             except_token=current_session_token
         )
-        logger.info(f"[AUTH] Revoked {revoked_count} sessions after password change for user {current_user.email}")
+        logger.info("[AUTH] Revoked %s sessions after password change for user email=%s", revoked_count, sanitize_for_log(current_user.email))
     except Exception as e:
-        logger.warning(f"[AUTH] Failed to revoke sessions after password change: {e}")
+        logger.warning("[AUTH] Failed to revoke sessions after password change: %s", sanitize_for_log(str(e)))
         # Don't fail password change if session revocation fails
     
     # Send email notification with security details
@@ -1091,9 +1092,9 @@ async def change_password(
             ip_address=ip_address,
             timestamp=now
         )
-        logger.info(f"[AUTH] Password change notification email sent to {current_user.email}")
+        logger.info("[AUTH] Password change notification email sent to email=%s", sanitize_for_log(current_user.email))
     except Exception as e:
-        logger.warning(f"[AUTH] Failed to send password change notification email: {e}")
+        logger.warning("[AUTH] Failed to send password change notification email: %s", sanitize_for_log(str(e)))
         # Don't fail password change if email fails
     
     return {
@@ -1150,5 +1151,5 @@ async def logout_all_devices(request: Request, response: Response, current_user=
             "meta": {},
         }
     except Exception as e:
-        logger.error(f"[AUTH] Logout all devices failed: {e}")
+        logger.error("[AUTH] Logout all devices failed: %s", sanitize_for_log(str(e)))
         raise HTTPException(status_code=500, detail="Failed to logout from all devices")
