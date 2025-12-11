@@ -12,7 +12,8 @@ from ..core.database import prisma
 from ..core.config import settings
 from .. import schemas
 from prisma.errors import UniqueViolationError, PrismaError, DataError
-from prisma.enums import LoginMethodEnum
+from utils.enums import LoginMethodEnum
+from services.zynk_client import _auth_header
 from passlib.context import CryptContext
 from app.services.otp_service import OTPService
 from app.services.otp_service import OTPService
@@ -33,7 +34,7 @@ from app.core.auth import get_current_entity
 
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
-CAPTCHA_REQUIRED_ATTEMPTS = 3  # Require CAPTCHA after 3 failed attempts
+CAPTCHA_REQUIRED_ATTEMPTS = 3  
 
 # Constants for URL and authentication
 LOCALHOST_URL = "http://localhost"
@@ -47,31 +48,22 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
-# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
+
 limiter = Limiter(key_func=get_remote_address)
 
 
 async def _email_exists_in_zynk(email: str) -> bool:
-    """
-    Check with ZynkLabs API if an entity already exists for the email.
-    Falls back to local DB only when Zynk credentials are not configured.
-    """
     if not settings.zynk_base_url or not settings.zynk_api_key:
-        logger.warning("[AUTH] Zynk credentials missing, falling back to local DB email lookup.")
         existing = await prisma.entities.find_first(where={"email": email})
         return existing is not None
 
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/email/{email}"
-    headers = {
-        "x-api-token": settings.zynk_api_key,
-        "Accept": "application/json",
-    }
+    headers = _auth_header()
 
     try:
         async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
             resp = await client.get(url, headers=headers)
-    except httpx.RequestError as exc:
-        logger.error("[AUTH] Zynk email lookup failed: %s", exc)
+    except httpx.RequestError:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Unable to verify email at the moment. Please try again later.",
@@ -86,7 +78,6 @@ async def _email_exists_in_zynk(email: str) -> bool:
         return False
 
     if 200 <= resp.status_code < 300:
-        # Treat success response as entity existing
         return True
 
     error_detail = "Unknown upstream error"
@@ -100,13 +91,9 @@ async def _email_exists_in_zynk(email: str) -> bool:
     )
 
 
-# Check if CAPTCHA is required for login (based on failed attempts)
+
 @router.post("/check-captcha-required")
 async def check_captcha_required(data: dict):
-    """
-    Check if CAPTCHA is required for a given email.
-    Returns: {"captcha_required": true/false, "login_attempts": int}
-    """
     email = data.get("email", "").strip()
     
     if not email:
@@ -118,7 +105,6 @@ async def check_captcha_required(data: dict):
     email = normalize_email(email)
     user = await prisma.entities.find_unique(where={"email": email})
     
-    # Don't reveal if email exists - return captcha_required: false for non-existent emails
     if not user:
         return {
             "captcha_required": False,
@@ -135,7 +121,7 @@ async def check_captcha_required(data: dict):
 
 
 @router.post("/check-email")
-@limiter.limit("10/minute")  # FIXED: HIGH-04 - Rate limit to prevent email enumeration
+@limiter.limit("10/minute") 
 async def check_email(data: dict, request: Request):
     email = data.get("email", "").strip()
     
@@ -151,20 +137,15 @@ async def check_email(data: dict, request: Request):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid email format"
         )
-    
-    # Check against Zynk Labs (with local DB fallback if Zynk is not configured)
-    # This ensures we fail fast on the first step of signup when the email is
-    # already registered either in our database or in Zynk Labs.
+
     exists = await _email_exists_in_zynk(email)
 
     if exists:
-        # Email already registered (either locally or upstream in Zynk)
         return {
             "available": False,
             "message": "This email is already registered. Please sign in instead.",
         }
-
-    # Email not found in Zynk/DB
+        
     return {
         "available": True,
         "message": "Email is available.",
@@ -311,12 +292,9 @@ async def _create_kyc_session_for_entity(entity_id: str, email: str) -> None:
 
 # Return unified response with tokens + user
 @router.post("/signup", response_model=schemas.AuthResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/minute")  # FIXED: HIGH-04 - Rate limit to prevent signup flooding and Zynk API exhaustion
+@limiter.limit("3/minute")
 async def signup(user_in: schemas.UserCreate, response: Response, request: Request):
-    """
-    Create a new entity (user) with username, email, password.
-    Returns access & refresh tokens and sets refresh token as HttpOnly cookie.
-    """
+
     first_name = user_in.first_name.strip()
     last_name = user_in.last_name.strip()
     email = normalize_email(user_in.email)
@@ -349,12 +327,9 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     refresh_token = auth.create_refresh_token(data={"sub": str(entity.id), "type": "refresh"})
     _set_auth_cookies(response, access_token, refresh_token)
 
-    # Optional: include Location header for the created resource
+
     response.headers["Location"] = f"/api/v1/entities/{entity.id}"
 
-    # MED-04: Minimal profile - removed sensitive security fields (login_attempts, locked_until)
-    # Also removed last_login_at, created_at, updated_at to prevent reconnaissance
-    # LOW-05: Removed unnecessary hasattr() calls - Prisma models have defined fields
     safe_user = {
         "id": str(entity.id),
         "email": entity.email,
@@ -365,8 +340,6 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
         "entity_type": str(entity.entity_type) if entity.entity_type else None,
         "status": str(entity.status) if entity.status else None,
     }
-
-    # print(f"Signup response: access_token={access_token}, refresh_token={refresh_token}, user={safe_user}")
 
     return {
         "success": True,
@@ -458,7 +431,6 @@ def _validate_captcha_if_required(
         )
         
         if not is_valid:
-            logger.warning(f"[AUTH] Signin blocked: Invalid CAPTCHA for email {email} (attempts: {current_attempts})")
             response.headers["X-CAPTCHA-Required"] = "true"
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -636,8 +608,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         "entity_type": str(user.entity_type) if user.entity_type else None,
         "status": str(user.status) if user.status else None,
     }
-    # MED-06: Use logger instead of print, avoid logging full user data
-    logger.debug(f"[AUTH] User profile data prepared for user_id={user.id}")
+   
     return {
         "success": True,
         "message": "Signin successful",
@@ -654,11 +625,6 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
 @router.post("/forgot-password/request", response_model=schemas.ApiResponse)
 async def request_password_reset(payload: schemas.ForgotPasswordRequest):
-    """
-    Initiate password reset by sending an OTP to the user's email.
-    Always responds with success to avoid leaking account existence.
-    MED-03: Fixed timing attack by simulating same delay regardless of user existence.
-    """
     email = normalize_email(payload.email)
     user = await prisma.entities.find_unique(where={"email": email})
 
@@ -672,11 +638,7 @@ async def request_password_reset(payload: schemas.ForgotPasswordRequest):
                 detail=message,
             )
     else:
-        # MED-03: Simulate same delay to prevent timing attack
-        # This prevents attackers from determining if an email exists based on response time
         await asyncio.sleep(random.uniform(0.5, 1.5))
-
-    # ALWAYS return same response regardless of user existence
     return {
         "success": True,
         "message": "If that email exists, a reset code has been sent.",
@@ -688,9 +650,6 @@ async def request_password_reset(payload: schemas.ForgotPasswordRequest):
 
 @router.post("/forgot-password/confirm", response_model=schemas.ApiResponse)
 async def confirm_password_reset(payload: schemas.ForgotPasswordConfirm):
-    """
-    Verify the password reset OTP and set a new password.
-    """
     email = normalize_email(payload.email)
     otp_service = OTPService(prisma)
 
@@ -880,29 +839,20 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
 
 @router.post("/logout", response_model=schemas.ApiResponse)
 async def logout(request: Request, response: Response):
-    """
-    Logout the current session.
-    - Updates session logout_at timestamp
-    - Marks session as LOGGED_OUT
-    - Clears refresh cookie
-    """
-    # Extract access token from Authorization header to update session
+
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
     session_token = None
     
     if auth_header and auth_header.lower().startswith(BEARER_PREFIX):
         session_token = auth_header.split(" ", 1)[1].strip()
         
-        # Update session logout_at and status
         try:
             session_service = SessionService(prisma)
             await session_service.logout_session(session_token=session_token)
             logger.info(f"[AUTH] Session logged out: {session_token[:16]}...")
         except Exception as e:
-            # Log error but don't fail logout (token might be expired/invalid)
             logger.warning(f"[AUTH] Failed to update session on logout: {e}")
     
-    # Clear both access and refresh cookies
     response.delete_cookie("rp_access", path="/")
     response.delete_cookie("rp_refresh", path="/")
     
@@ -918,35 +868,21 @@ async def logout(request: Request, response: Response):
 async def change_password(
     payload: schemas.ChangePasswordRequest,
     request: Request,
-    current_user = Depends(get_current_entity)
+    current_user=Depends(get_current_entity)
 ):
-    """
-    Change password for authenticated user.
-    - Validates current password
-    - Updates to new password
-    - Revokes all other sessions (keeps current session active)
-    - Sends email notification with security details
-    """
     now = datetime.now(timezone.utc)
-    
-    # Validate current password
-    try:
-        password_valid = pwd_context.verify(payload.current_password, current_user.password)
-    except Exception:
-        password_valid = False
-    
+
+    password_valid = pwd_context.verify(payload.current_password, current_user.password)
     if not password_valid:
-        logger.warning(f"[AUTH] Change password failed: Invalid current password for user {current_user.email}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Current password is incorrect",
+            detail="Current password is incorrect"
         )
-    
-    # Validate new password
+
     if payload.current_password == payload.new_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="New password must be different from current password",
+            detail="New password must be different from current password"
         )
     
     # Password history check: Currently not implemented
@@ -958,64 +894,55 @@ async def change_password(
     except ValueError as ve:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(ve),
+            detail=str(ve)
         )
-    
+
     # Hash new password
     new_password_hash = hash_password(payload.new_password)
-    
+
     # Update password in database
     try:
         await prisma.entities.update(
             where={"id": current_user.id},
             data={
                 "password": new_password_hash,
-                "login_attempts": 0,  # Reset login attempts on password change
-                "locked_until": None,  # Clear any lockouts
+                "login_attempts": 0,
+                "locked_until": None,
                 "updated_at": now,
             },
         )
-        logger.info(f"[AUTH] Password changed successfully for user {current_user.email}")
-    except PrismaError as exc:
-        logger.error(f"[AUTH] Failed to update password: {exc}")
+    except PrismaError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to change password. Please try again later.",
+            detail="Unable to change password. Please try again later."
         )
-    
-    # Revoke all other sessions (except current session)
+
+    # Revoke other sessions
     try:
-        # Get current session token from Authorization header
         auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
         current_session_token = None
         if auth_header and auth_header.lower().startswith(BEARER_PREFIX):
             current_session_token = auth_header.split(" ", 1)[1].strip()
-        
+
         session_service = SessionService(prisma)
-        revoked_count = await session_service.revoke_all_sessions(
+        await session_service.revoke_all_sessions(
             entity_id=str(current_user.id),
             except_token=current_session_token
         )
-        logger.info(f"[AUTH] Revoked {revoked_count} sessions after password change for user {current_user.email}")
-    except Exception as e:
-        logger.warning(f"[AUTH] Failed to revoke sessions after password change: {e}")
-        # Don't fail password change if session revocation fails
-    
-    # Send email notification with security details
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to revoke active sessions after password change."
+        )
+
+    # Send notification email
     try:
         # Extract device and location information
         ip_address = getattr(request.client, "host", None)
-        
-        # Parse device information
         device_info = parse_device_from_headers(request)
-        
-        # Get location information
         location_info = await get_location_from_client(request)
-        
-        # Get user's full name
         user_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email
-        
-        # Send email notification
+
         await email_service.send_password_change_notification(
             email=current_user.email,
             user_name=user_name,
@@ -1024,11 +951,12 @@ async def change_password(
             ip_address=ip_address,
             timestamp=now
         )
-        logger.info(f"[AUTH] Password change notification email sent to {current_user.email}")
-    except Exception as e:
-        logger.warning(f"[AUTH] Failed to send password change notification email: {e}")
-        # Don't fail password change if email fails
-    
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Password was changed, but notification email could not be sent."
+        )
+
     return {
         "success": True,
         "message": "Password changed successfully",
@@ -1043,36 +971,19 @@ async def change_password(
 
 @router.get("/ping")
 async def auth_ping(request: Request):
-    """
-    Simple authenticated ping to exercise middleware/session activity updates.
-    Requires Authorization: Bearer <access_token> header.
-    """
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
     if not auth_header or not auth_header.lower().startswith(BEARER_PREFIX):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     token = auth_header.split(" ", 1)[1].strip()
-    # Validate token type
     auth.verify_token_type(token, "access")
     return {"success": True, "message": "pong", "data": {"time": datetime.now(timezone.utc).isoformat()}}
 
 @router.post("/logout-all", response_model=schemas.ApiResponse)
 async def logout_all_devices(request: Request, response: Response, current_user=Depends(get_current_entity)):
-    """
-    Revoke all active sessions for the current user and clear refresh cookie.
-    Note: Existing refresh tokens on other devices will be cleared only when they refresh the page;
-    server will not issue new access tokens for expired/idle sessions, but refresh JWTs are not tracked server-side.
-    
-    FIXED: HIGH-02 - BOLA Protection
-    - Only uses authenticated user's ID from token (current_user.id)
-    - No entity_id parameter accepted from request
-    - Prevents unauthorized session revocation
-    """
+
     try:
         session_service = SessionService(prisma)
-        # FIXED: HIGH-02 - Explicit BOLA protection: Only use authenticated user's ID
-        # Never accept entity_id from request parameters - always use current_user.id
         revoked = await session_service.revoke_all_sessions(entity_id=str(current_user.id))
-        # Clear current refresh cookie
         response.delete_cookie("rp_access", path="/")
         response.delete_cookie("rp_refresh", path="/")
         return {

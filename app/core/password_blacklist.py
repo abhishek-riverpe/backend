@@ -1,9 +1,3 @@
-"""
-Common password blacklist
-
-Contains a curated list of passwords that should always be rejected
-regardless of other strength checks.
-"""
 
 COMMON_PASSWORDS = {
     "password",
@@ -61,7 +55,7 @@ COMMON_PASSWORDS = {
     "changeme",
     "letmein123",
     "default",
-    # "p@ssw0rd",
+    "p@ssw0rd",
     "summer2024",
     "winter2024",
     "spring2024",
@@ -97,7 +91,7 @@ COMMON_PASSWORDS = {
     "diamond",
     "diamond1",
     "diamond@123",
-    # "p@ssw0rd!",
+    "p@ssw0rd!",
     "welcome@123",
     "summer2025!",
     "companyname@123",
@@ -106,16 +100,12 @@ COMMON_PASSWORDS = {
 
 
 def is_common_password(password: str) -> bool:
-    """
-    Return True if the password appears in the blacklist.
-    Comparison is case-insensitive and ignores surrounding whitespace.
-    """
     normalized = password.strip().lower()
-    # Compare against a lowercased view of the set
+
     try:
-        lower_set = _COMMON_PASSWORDS_LOWER  # type: ignore[name-defined]
+        lower_set = _COMMON_PASSWORDS_LOWER 
     except NameError:
         lower_set = {p.strip().lower() for p in COMMON_PASSWORDS}
-        _COMMON_PASSWORDS_LOWER = lower_set  # type: ignore[assignment]
+        _COMMON_PASSWORDS_LOWER = lower_set  
     return normalized in lower_set
 

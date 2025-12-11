@@ -12,8 +12,8 @@ datasource db {
 // ENUM DEFINITIONS
 // --------------------
 enum EntityStatusEnum {
-  PENDING // User is created, but not completed profile, zync entity is not created
-  ACTIVE // User is created, profile is completed, zync entity is created
+  PENDING 
+  ACTIVE
   SUSPENDED
   CLOSED
 }
@@ -89,10 +89,10 @@ model entities {
   first_name        String
   last_name         String
   password          String
-  date_of_birth     DateTime? // DOB in MM/DD/YYYY format
-  nationality       String? // Country code like 'US', 'IN'
-  phone_number      String? // Phone number without country code
-  country_code      String? // Country code like '+1', '+91'
+  date_of_birth     DateTime?
+  nationality       String? 
+  phone_number      String 
+  country_code      String 
   email_verified    Boolean?         @default(false)
   last_login_at     DateTime?
   login_attempts    Int?             @default(0)
@@ -104,12 +104,9 @@ model entities {
   updated_at        DateTime         @updatedAt
   deleted_at        DateTime?
 
-  // Relations
   kyc_sessions   kyc_sessions[]
   webhook_events webhook_events[]
   login_sessions login_sessions[]
-
-  // Relations
   funding_accounts funding_accounts[]
 
   @@map("entities")

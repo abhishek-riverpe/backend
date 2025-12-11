@@ -29,7 +29,6 @@ from app.utils.wallet_crypto import (
     decrypt_credential_bundle,
     sign_payload_with_api_key
 )
-from app.services.otp_service import OTPService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/wallets", tags=["Wallets"])
@@ -38,7 +37,7 @@ router = APIRouter(prefix="/api/v1/wallets", tags=["Wallets"])
 limiter = Limiter(key_func=get_remote_address)
 
 # Zynk API base URL
-ZYNK_BASE_URL = "https://qaapi.zynklabs.xyz"
+ZYNK_BASE_URL = settings.zynk_base_url
 
 # Error message constants
 ERR_ZYNK_API_ERROR = "Zynk API returned error"
@@ -66,7 +65,6 @@ def _clean_entity_id(entity_id) -> str:
 
 
 def _zynk_auth_header():
-    """Get Zynk API authentication header"""
     if not settings.zynk_api_key:
         raise HTTPException(status_code=500, detail="Zynk API key not configured")
     return {
@@ -77,17 +75,6 @@ def _zynk_auth_header():
 
 
 async def _initiate_otp_internal(entity_id: str, user_email: str) -> dict:
-    """
-    Internal helper function to initiate OTP.
-    Can be called from register-auth or the initiate-otp endpoint.
-    
-    Args:
-        entity_id: Cleaned entity ID
-        user_email: User email for logging
-        
-    Returns:
-        dict: OTP response with otpId, otpType, otpContact
-    """
     logger.info("[WALLET] ========== INITIATE OTP (INTERNAL) START ==========")
     logger.info(f"[WALLET] Initiating OTP for entity: {entity_id}, user: {user_email}")
     
@@ -720,10 +707,41 @@ async def get_user_wallet(
         )
 
 
-@router.get("/{wallet_id}")
+# Helper function to reduce duplication
+async def _get_validated_user_wallet(current_user):
+    # Fetch user
+    user = await prisma.entities.find_unique(where={"id": current_user.id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check wallet id exists
+    if not user.wallet_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User does not have a wallet"
+        )
+
+    # Verify wallet ownership
+    wallet = await prisma.wallets.find_first(
+        where={
+            "zynk_wallet_id": user.wallet_id,
+            "entity_id": str(user.zynk_entity_id),
+            "deleted_at": None
+        }
+    )
+    
+    if not wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Wallet not found or unauthorized"
+        )
+
+    return user, wallet
+
+
+@router.get("/")
 @limiter.limit("60/minute")
 async def get_wallet_details(
-    wallet_id: str,
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
@@ -773,10 +791,9 @@ async def get_wallet_details(
         return body
 
 
-@router.get("/{wallet_id}/balances")
+@router.get("/balances")
 @limiter.limit("60/minute")
 async def get_wallet_balances(
-    wallet_id: str,
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):

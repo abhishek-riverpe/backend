@@ -1,18 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from types import SimpleNamespace
-
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, ExpiredSignatureError, jwt
+from jose import JWTError, ExpiredSignatureError
+import jwt
 from passlib.context import CryptContext
-from prisma.errors import DataError
 
 from .config import settings
 from .database import prisma
 
-# LOW-07: Explicitly configure bcrypt rounds for consistent security
-# bcrypt__rounds=12 provides good security-performance balance (2^12 = 4096 iterations)
 pwd_context = CryptContext(
     schemes=["bcrypt"],
     deprecated="auto",
@@ -22,20 +18,10 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/signin")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE = timedelta(minutes=15)
-REFRESH_TOKEN_EXPIRE = timedelta(hours=24)  # 24 hours as requested
-
-# JWT Algorithm Whitelist - Only these algorithms are allowed
-# Explicitly rejects "none" algorithm and prevents algorithm confusion attacks
+REFRESH_TOKEN_EXPIRE = timedelta(hours=24)  
 ALLOWED_ALGORITHMS = settings.jwt_allowed_algorithms if hasattr(settings, 'jwt_allowed_algorithms') else ["HS256"]
-
-# Explicitly forbidden algorithms
 FORBIDDEN_ALGORITHMS = ["none", "NONE", "None"]
-
-# JWT Algorithm Whitelist - Only these algorithms are allowed
-# Explicitly rejects "none" algorithm and prevents algorithm confusion attacks
 ALLOWED_ALGORITHMS = settings.jwt_allowed_algorithms if hasattr(settings, 'jwt_allowed_algorithms') else ["HS256"]
-
-# Explicitly forbidden algorithms
 FORBIDDEN_ALGORITHMS = ["none", "NONE", "None"]
 
 def get_password_hash(password):
@@ -46,7 +32,6 @@ def _encode_jwt(payload: dict) -> str:
 
 def create_access_token(data: dict, expires_delta: timedelta = ACCESS_TOKEN_EXPIRE) -> str:
     to_encode = data.copy()
-    # Ensure required claims
     if "sub" not in to_encode:
         raise ValueError("access token requires 'sub' claim")
     to_encode.setdefault("type", "access")
@@ -61,72 +46,20 @@ def create_refresh_token(data: dict, expires_delta: timedelta = REFRESH_TOKEN_EX
     to_encode.update({"exp": datetime.now(timezone.utc) + expires_delta})
     return _encode_jwt(to_encode)
 
-def _validate_jwt_algorithm(token: str) -> None:
-    """
-    Validate JWT algorithm before decoding to prevent algorithm confusion attacks.
-    Explicitly rejects 'none' algorithm and ensures algorithm is in whitelist.
-    
-    Raises:
-        HTTPException: If algorithm is forbidden or not in whitelist
-    """
-    try:
-        # Decode header without verification to check algorithm
-        unverified_header = jwt.get_unverified_header(token)
-        algorithm = unverified_header.get("alg")
-        
-        if not algorithm:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token missing algorithm in header"
-            )
-        
-        # Explicitly reject "none" algorithm (critical security check)
-        if algorithm in FORBIDDEN_ALGORITHMS:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Forbidden algorithm: {algorithm}. Algorithm confusion attack detected."
-            )
-        
-        # Ensure algorithm is in whitelist
-        if algorithm not in ALLOWED_ALGORITHMS:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Algorithm '{algorithm}' not allowed. Allowed algorithms: {', '.join(ALLOWED_ALGORITHMS)}"
-            )
-    except JWTError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token header: {str(e)}"
-        )
-
 def decode_token(token: str) -> dict:
-    """
-    Decode and verify JWT token with algorithm whitelist enforcement.
-    
-    Security features:
-    - Validates algorithm before decoding (prevents algorithm confusion)
-    - Explicitly rejects "none" algorithm
-    - Only allows algorithms from whitelist
-    - Enforces signature validation
-    """
-    # Validate algorithm first (before any decoding)
-    _validate_jwt_algorithm(token)
-    
     try:
-        # Decode with explicit algorithm whitelist
-        # This prevents algorithm confusion attacks (e.g., RS256 -> HS256 swap)
         return jwt.decode(
             token,
             settings.jwt_secret,
-            algorithms=ALLOWED_ALGORITHMS,  # Use whitelist, not single algorithm
-            options={"verify_signature": True}  # Explicitly require signature verification
+            algorithms=ALLOWED_ALGORITHMS,
+            options={"verify_signature": True}
         )
     except ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
-    except JWTError as e:
+    except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token signature or format: {str(e)}"
+            detail="Invalid token"
         )
 
 def verify_token_type(token: str, expected_type: str) -> dict:
@@ -138,15 +71,8 @@ def verify_token_type(token: str, expected_type: str) -> dict:
 
 
 async def get_current_entity(request: Request, token: Optional[str] = Depends(oauth2_scheme)):
-    """
-    Get current authenticated entity.
-    Reads access token from HttpOnly cookie (rp_access) first, then falls back to Authorization header.
-    This provides secure cookie-based auth while maintaining backward compatibility.
-    """
-    # Try to get token from HttpOnly cookie first (secure method)
     access_token = request.cookies.get("rp_access")
     
-    # Fallback to Authorization header for backward compatibility
     if not access_token and token:
         access_token = token
     
@@ -157,13 +83,12 @@ async def get_current_entity(request: Request, token: Optional[str] = Depends(oa
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Validate access token and extract entity id (sub)
     payload = verify_token_type(access_token, "access")
     entity_id: Optional[str] = payload.get("sub")
+    
     if not entity_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    # Try Prisma first, fallback to raw SQL if DataError (corrupted date_of_birth)
     entity = None
     try:
         entity = await prisma.entities.find_unique(where={"id": entity_id})
