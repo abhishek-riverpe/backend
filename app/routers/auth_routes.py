@@ -58,7 +58,7 @@ async def _email_exists_in_zynk(email: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
             resp = await client.get(url, headers=headers)
-    except httpx.RequestError as exc:
+    except httpx.RequestError:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Unable to verify email at the moment. Please try again later.",
@@ -414,7 +414,6 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         invalid_credentials()
 
     now = datetime.now(timezone.utc)
-    current_attempts = user.login_attempts or 0
     captcha_required = False
     
     if captcha_required:
