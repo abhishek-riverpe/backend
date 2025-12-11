@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/v1/wallets", tags=["Wallets"])
 limiter = Limiter(key_func=get_remote_address)
 
 # Zynk API base URL
-ZYNK_BASE_URL = "https://qaapi.zynklabs.xyz"
+ZYNK_BASE_URL = settings.zynk_base_url
 
 logger.info(f"[WALLET] Router initialized with Zynk API: {ZYNK_BASE_URL}")
 
