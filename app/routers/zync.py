@@ -1,20 +1,21 @@
-# routes/zynk.py
 from datetime import datetime, timezone
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status, Request
 from slowapi import Limiter
+from ..utils.validate_id import validate_user_id
 from slowapi.util import get_remote_address
 from prisma.errors import PrismaError
 from prisma.models import entities as Entities
 from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
+from urllib.parse import urljoin
 from ..schemas.zynk import CreateZynkEntityIn
 from ..utils.errors import upstream_error
 
 router = APIRouter(prefix="/api/v1/transformer", tags=["transformer"])
 
-# FIXED: HIGH-04 - Rate limiter for preventing resource exhaustion attacks
+
 limiter = Limiter(key_func=get_remote_address)
 
 def _auth_header():
@@ -31,7 +32,6 @@ async def _call_zynk_create_entity(payload: dict) -> str:
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/create"
     headers = {**_auth_header(), "Content-Type": "application/json", "Accept": "application/json"}
     
-    # Log the payload being sent for debugging
     logger.info(f"Sending payload to Zynk API: {payload}")
 
     for attempt in range(2):  # 1 retry
@@ -79,49 +79,6 @@ async def _call_zynk_create_entity(payload: dict) -> str:
 
     raise HTTPException(status_code=502, detail="Failed to create entity upstream after retries")
 
-async def _call_zynk_get_kyc_requirements(entity_id: str, routing_id: str) -> dict:
-    """
-    Call Zynk to fetch KYC requirements for a given entity and routing.
-    Returns parsed JSON body on success, otherwise raises HTTPException.
-    """
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{entity_id}/{routing_id}"
-    headers = {**_auth_header(), "Accept": "application/json"}
-
-    for attempt in range(2):
-        try:
-            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-                resp = await client.get(url, headers=headers)
-        except httpx.RequestError:
-            if attempt == 0:
-                continue
-            raise HTTPException(status_code=502, detail="Upstream unreachable")
-
-        try:
-            body = resp.json()
-        except ValueError:
-            raise upstream_error(
-                log_message=f"[ZYNK] Invalid JSON while fetching KYC requirements for entity {entity_id} routing {routing_id} at {url}. Response preview: {resp.text[:200]}",
-                user_message="Verification service returned an invalid response. Please try again later.",
-            )
-
-        if not (200 <= resp.status_code < 300):
-            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
-            raise upstream_error(
-                log_message=f"[ZYNK] Upstream error {resp.status_code} while fetching KYC requirements for entity {entity_id} routing {routing_id} at {url}: {error_detail}",
-                user_message="Verification service is currently unavailable. Please try again later.",
-            )
-
-        if not isinstance(body, dict) or body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Upstream returned unsuccessful response"))
-            raise upstream_error(
-                log_message=f"[ZYNK] Upstream rejected request while fetching KYC requirements for entity {entity_id} routing {routing_id} at {url}: {error_detail}",
-                user_message="Verification service rejected the request. Please try again later.",
-            )
-
-        return body.get("data", {})
-
-    raise HTTPException(status_code=502, detail="Failed to fetch KYC requirements after retries")
-
 async def get_current_entity(entity=Depends(auth.get_current_entity)):
     return entity
 
@@ -131,34 +88,23 @@ async def create_external_entity(
     response: Response,
     current: Entities = Depends(get_current_entity),
 ):
-    """
-    Forward payload to Zynk; on success:
-      - overwrite local `entityId` with upstream `entityId`
-      - set `status = ACTIVE`
-    """
-
-    # 1) Email parity with signed-in user to prevent cross-account provisioning
     if (current.email or "").strip() != payload.email.strip():
         raise HTTPException(status_code=400, detail="Email mismatch with authenticated entity")
-
-    # 3) Call Zynk
+    
     upstream_entity_id = await _call_zynk_create_entity(payload.dict())
 
-    # 4) Persist: overwrite `zynk_entity_id` and set status ACTIVE
     now = datetime.now(timezone.utc)
     try:
         updated = await prisma.entities.update(
-            where={"id": current.id},  # use your immutable PK to locate the row
+            where={"id": current.id},  
             data={
-                "zynk_entity_id": upstream_entity_id,   # <- overwrite existing field
-                "status": "ACTIVE",               # ensure enum has ACTIVE
+                "zynk_entity_id": upstream_entity_id,   
+                "status": "ACTIVE",              
                 "updated_at": now,
             },
         )
     except PrismaError:
         raise HTTPException(status_code=500, detail="Failed to persist external entity link")
-
-    # 5) Return unified API response
     response.headers["Location"] = f"/api/v1/transformer/entity/{updated.id}"
     response.headers["X-External-Entity-Id"] = upstream_entity_id
     return {
@@ -170,35 +116,54 @@ async def create_external_entity(
     }
 
 
-@router.get("/entity/kyc/requirements/{entity_id}/{routing_id}")
-@limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
+@router.get("/entity/kyc/requirements/{user_id}")
+@limiter.limit("30/minute") 
 async def get_kyc_requirements(
-    entity_id: str,
-    routing_id: str,
-    current: Entities = Depends(get_current_entity),
-    request: Request = None
+    user_id: str,
+    current: Entities = Depends(get_current_entity),  
+    request: Request = None  
 ):
-    """
-    Fetch KYC requirements for the specified entity id and routing id.
-    Returns unified API response.
-    """
-    # FIXED: HIGH-02 - BOLA Protection: Explicit ownership validation
-    # Security check: Ensure the requested entity belongs to the authenticated user
-    # Prevents Broken Object Level Authorization (OWASP API #1 risk)
-    # Try both possible attribute names for compatibility
-    zynk_entity_id = getattr(current, "zynk_entity_id", None) or getattr(current, "external_entity_id", None)
-    if not zynk_entity_id:
-        raise HTTPException(status_code=400, detail="External entity id is missing. Complete profile first.")
-    
-    if zynk_entity_id != entity_id:
-        raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC requirements.")
+    if not validate_user_id(user_id):
+        raise HTTPException(status_code=400, detail="Invalid user ID format")
+    if current.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this user's KYC requirements")
 
-    data = await _call_zynk_get_kyc_requirements(entity_id, routing_id)
-    # Shape: { message, kycRequirements: [...] }
+    user = await prisma.entities.find_unique(where={"id": user_id})
+    if not user or not user.zynk_entity_id:
+        raise HTTPException(status_code=404, detail="User not found or not registered with verification service")
+    
+  
+    endpoint = f"/api/v1/transformer/entity/kyc/requirements/{user.zynk_entity_id}"
+    url = urljoin(settings.zynk_base_url, endpoint)
+    
+    headers = _auth_header() 
+    headers["Accept"] = "application/json"
+    
+    try:
+        async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail="Upstream service error")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Upstream service unavailable")
+    except ValueError:
+        raise upstream_error(
+            log_message=f"[ZYNK] Invalid JSON response from KYC requirements endpoint: {response.text[:200]}",
+            user_message="Verification service returned an invalid response"
+        )
+    
+    if not isinstance(data, dict):
+        raise upstream_error(
+            log_message=f"[ZYNK] Unexpected response format from KYC requirements: {data}",
+            user_message="Verification service returned an unexpected response"
+        )
+    
     return {
         "success": True,
         "message": data.get("message", "Fetched requirements"),
-        "data": {"kycRequirements": data.get("kycRequirements", [])},
+        "data": {"kycRequirements": data.get("data", data)},
         "error": None,
         "meta": {},
     }

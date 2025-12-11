@@ -982,107 +982,80 @@ async def logout(request: Request, response: Response):
 async def change_password(
     payload: schemas.ChangePasswordRequest,
     request: Request,
-    current_user = Depends(get_current_entity)
+    current_user=Depends(get_current_entity)
 ):
-    """
-    Change password for authenticated user.
-    - Validates current password
-    - Updates to new password
-    - Revokes all other sessions (keeps current session active)
-    - Sends email notification with security details
-    """
     now = datetime.now(timezone.utc)
-    
-    # Validate current password
-    try:
-        password_valid = pwd_context.verify(payload.current_password, current_user.password)
-    except Exception:
-        password_valid = False
-    
+
+    # Verify current password
+    password_valid = pwd_context.verify(payload.current_password, current_user.password)
     if not password_valid:
-        logger.warning(f"[AUTH] Change password failed: Invalid current password for user {current_user.email}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Current password is incorrect",
+            detail="Current password is incorrect"
         )
-    
-    # Validate new password
+
+    # Prevent reusing the same password
     if payload.current_password == payload.new_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="New password must be different from current password",
+            detail="New password must be different from current password"
         )
-    
-    # TODO: Implement password history check (last 5 passwords cannot be reused)
-    # This would require:
-    # 1. Database table/field to store password history
-    # 2. Check against previous password hashes before allowing change
-    # 3. Store new password hash in history after successful change
-    
+
+    # Validate new password strength
     try:
         validate_password(payload.new_password)
     except ValueError as ve:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(ve),
+            detail=str(ve)
         )
-    
+
     # Hash new password
     new_password_hash = hash_password(payload.new_password)
-    
+
     # Update password in database
     try:
         await prisma.entities.update(
             where={"id": current_user.id},
             data={
                 "password": new_password_hash,
-                "login_attempts": 0,  # Reset login attempts on password change
-                "locked_until": None,  # Clear any lockouts
+                "login_attempts": 0,
+                "locked_until": None,
                 "updated_at": now,
             },
         )
-        logger.info(f"[AUTH] Password changed successfully for user {current_user.email}")
-    except PrismaError as exc:
-        logger.error(f"[AUTH] Failed to update password: {exc}")
+    except PrismaError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to change password. Please try again later.",
+            detail="Unable to change password. Please try again later."
         )
-    
-    # Revoke all other sessions (except current session)
+
+    # Revoke other sessions
     try:
-        # Get current session token from Authorization header
         auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
         current_session_token = None
+
         if auth_header and auth_header.lower().startswith("bearer "):
             current_session_token = auth_header.split(" ", 1)[1].strip()
-        
+
         session_service = SessionService(prisma)
-        revoked_count = await session_service.revoke_all_sessions(
+        await session_service.revoke_all_sessions(
             entity_id=str(current_user.id),
             except_token=current_session_token
         )
-        logger.info(f"[AUTH] Revoked {revoked_count} sessions after password change for user {current_user.email}")
-    except Exception as e:
-        logger.warning(f"[AUTH] Failed to revoke sessions after password change: {e}")
-        # Don't fail password change if session revocation fails
-    
-    # Send email notification with security details
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to revoke active sessions after password change."
+        )
+
+    # Send notification email
     try:
-        # Extract device and location information
-        user_agent = request.headers.get("user-agent")
         ip_address = getattr(request.client, "host", None)
-        
-        # Parse device information
         device_info = parse_device_from_headers(request)
-        
-        # Get location information
         location_info = await get_location_from_client(request)
-        
-        # Get user's full name
         user_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email
-        
-        # Send email notification
+
         await email_service.send_password_change_notification(
             email=current_user.email,
             user_name=user_name,
@@ -1091,11 +1064,12 @@ async def change_password(
             ip_address=ip_address,
             timestamp=now
         )
-        logger.info(f"[AUTH] Password change notification email sent to {current_user.email}")
-    except Exception as e:
-        logger.warning(f"[AUTH] Failed to send password change notification email: {e}")
-        # Don't fail password change if email fails
-    
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Password was changed, but notification email could not be sent."
+        )
+
     return {
         "success": True,
         "message": "Password changed successfully",
