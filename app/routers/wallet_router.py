@@ -700,20 +700,21 @@ async def get_user_wallet(
         )
 
 
-@router.get("/")
-@limiter.limit("60/minute")
-async def get_wallet_details(
-    request: Request,
-    current_user: Entities = Depends(get_current_entity)
-):
-
+# Helper function to reduce duplication
+async def _get_validated_user_wallet(current_user):
+    # Fetch user
     user = await prisma.entities.find_unique(where={"id": current_user.id})
-    if not user or not user.wallet_id:
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
+    # Check wallet id exists
     if not user.wallet_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User dosen have wallet")
-    
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User does not have a wallet"
+        )
+
+    # Verify wallet ownership
     wallet = await prisma.wallets.find_first(
         where={
             "zynk_wallet_id": user.wallet_id,
@@ -728,19 +729,30 @@ async def get_wallet_details(
             detail="Wallet not found or unauthorized"
         )
 
+    return user, wallet
+
+
+@router.get("/")
+@limiter.limit("60/minute")
+async def get_wallet_details(
+    request: Request,
+    current_user: Entities = Depends(get_current_entity)
+):
+
+    user, _ = await _get_validated_user_wallet(current_user)
+
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/{user.wallet_id}"
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.get(url, headers=_zynk_auth_header())
-        
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch wallet details from Zynk API"
-            )
-        
-        body = response.json()
-        return body
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to fetch wallet details from Zynk API"
+        )
+    
+    return response.json()
 
 
 @router.get("/balances")
@@ -749,44 +761,22 @@ async def get_wallet_balances(
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
-   
-    user = await prisma.entities.find_unique(where={"id": current_user.id})
-    if not user or not user.wallet_id:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if not user.wallet_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User dosen have wallet")
-    
-    # Verify wallet belongs to user
-    wallet = await prisma.wallets.find_first(
-        where={
-            "zynk_wallet_id": user.wallet_id,
-            "entity_id": str(user.zynk_entity_id),
-            "deleted_at": None
-        }
-    )
-    
-    if not wallet:
-        
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Wallet not found or unauthorized"
-        )
-    
-    # Call Zynk API
+
+    user, _ = await _get_validated_user_wallet(current_user)
+
     url = f"{ZYNK_BASE_URL}/api/v1/wallets/{user.wallet_id}/balances"
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         response = await client.get(url, headers=_zynk_auth_header())
-        
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch wallet balances from Zynk API"
-            )
-        
-        body = response.json()
-        return body
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to fetch wallet balances from Zynk API"
+        )
+    
+    return response.json()
+
 
 
 @router.get("/{wallet_id}/{address}/transactions")
