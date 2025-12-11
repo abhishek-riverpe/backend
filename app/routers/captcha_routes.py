@@ -1,9 +1,3 @@
-"""
-CAPTCHA Routes
-
-Endpoints for generating and validating CAPTCHA codes.
-"""
-
 from fastapi import APIRouter, HTTPException, status
 from starlette.requests import Request
 from .. import schemas
@@ -20,12 +14,7 @@ router = APIRouter(
 
 @router.post("/generate", response_model=schemas.ApiResponse)
 async def generate_captcha(request: Request):
-    """
-    Generate a new CAPTCHA code.
-    Returns CAPTCHA ID and code for display.
-    """
     try:
-        # Use request client IP or session as identifier
         session_id = getattr(request.client, "host", None) or "anonymous"
         
         captcha_id, captcha_code, captcha_image = captcha_service.generate_captcha(session_id=session_id)
@@ -52,10 +41,6 @@ async def generate_captcha(request: Request):
 
 @router.post("/validate", response_model=schemas.ApiResponse)
 async def validate_captcha(payload: schemas.CaptchaValidateRequest):
-    """
-    Validate a CAPTCHA code.
-    Used by frontend for real-time validation feedback.
-    """
     try:
         is_valid, error_message = captcha_service.validate_captcha(
             captcha_id=payload.captcha_id,

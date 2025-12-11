@@ -10,7 +10,7 @@ import uuid
 from typing import Optional, Dict, Any
 from ..core.config import settings
 from ..core.database import prisma
-from prisma.enums import WebhookEventCategory, KycStatusEnum, AccountStatusEnum
+from utils.enums import WebhookEventCategory, KycStatusEnum
 from datetime import datetime, timezone
 try:
     from prisma import types
@@ -25,40 +25,18 @@ router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
 
 def verify_webhook_signature(payload: dict, received_signature: str, secret: str) -> bool:
-    """
-    Verify webhook signature according to Zynk API documentation.
-    
-    Process:
-    1. Extract timestamp and signature from z-webhook-signature header (format: timestamp:signature)
-    2. Recreate the signed body by adding signedAt: timestamp to the payload
-    3. Generate expected signature using HMAC-SHA256 with the secret
-    4. Compare received signature with expected signature using constant-time comparison
-    
-    Args:
-        payload: The webhook payload (dict)
-        received_signature: The signature from z-webhook-signature header (format: timestamp:signature)
-        secret: The webhook secret for HMAC verification
-        
-    Returns:
-        True if signature is valid, False otherwise
-    """
     if not secret:
         logger.error("[WEBHOOK] Webhook secret not configured")
         return False
     
     try:
-        # Extract timestamp and signature from header (format: timestamp:signature)
         match = re.match(r'^(\d+):(.+)$', received_signature)
         if not match:
             logger.warning(f"[WEBHOOK] Invalid signature format: {received_signature}")
             return False
         
         timestamp, signature = match.groups()
-        
-        # Recreate the signed body by adding signedAt: timestamp to the payload
-        # Note: We overwrite signedAt if it exists in payload to use the timestamp from header
         signed_body = {**payload, "signedAt": timestamp}
-        # Use default JSON serialization (no key sorting) to match JavaScript's JSON.stringify behavior
         body_json = json.dumps(signed_body, separators=(',', ':'))
         
         # Generate expected signature using HMAC-SHA256
@@ -83,12 +61,7 @@ def verify_webhook_signature(payload: dict, received_signature: str, secret: str
 
 @router.post("/zynk")
 async def receive_zynk_webhook(request: Request):
-    """
-    Receive and process webhooks from Zynk Labs.
-    
-    SECURITY: Verifies webhook signature before processing to prevent forged webhooks.
-    """
-    # Get client IP for logging
+
     client_ip = request.client.host if request.client else "unknown"
     
     # 1. Get signature from header
@@ -130,8 +103,6 @@ async def receive_zynk_webhook(request: Request):
             detail="Invalid webhook signature"
         )
     
-    # 5. Validate timestamp to prevent replay attacks (if present in payload)
-    # Note: Zynk may include timestamp in the payload, but we verify it's within reasonable window
     signed_at = body.get("signedAt")
     if signed_at:
         try:
@@ -228,11 +199,6 @@ def _extract_entity_id_from_payload(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _extract_kyc_session_id_from_payload(payload: Dict[str, Any]) -> Optional[str]:
-    """
-    Extract kyc_session_id from webhook payload.
-    KYC session ID might be in various locations depending on event type.
-    """
-    # Try direct kycSessionId or routingId fields
     if "kycSessionId" in payload:
         return payload["kycSessionId"]
     if "kyc_session_id" in payload:
@@ -262,11 +228,7 @@ def _extract_kyc_session_id_from_payload(payload: Dict[str, Any]) -> Optional[st
 
 
 def _extract_teleport_id_from_payload(payload: Dict[str, Any]) -> Optional[str]:
-    """
-    Extract teleport_id from webhook payload.
-    Teleport ID might be in various locations depending on event type.
-    """
-    # Try direct teleportId field
+
     if "teleportId" in payload:
         return payload["teleportId"]
     if "teleport_id" in payload:
@@ -288,15 +250,7 @@ def _extract_teleport_id_from_payload(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _map_webhook_status_to_kyc_status(webhook_status: str) -> Optional[KycStatusEnum]:
-    """
-    Map webhook KYC status string to internal KycStatusEnum.
-    
-    Args:
-        webhook_status: Status string from webhook (e.g., "approved", "rejected", "reviewing")
-    
-    Returns:
-        KycStatusEnum value or None if status is not recognized
-    """
+
     status_mapping = {
         "approved": KycStatusEnum.APPROVED,
         "rejected": KycStatusEnum.REJECTED,
@@ -523,24 +477,13 @@ async def _save_webhook_event(
     event_category: WebhookEventCategory, 
     client_ip: str
 ) -> None:
-    """
-    Save webhook event to database after verification.
-    
-    Args:
-        payload: The verified webhook payload
-        event_category: The event category enum
-        client_ip: IP address of the webhook sender
-    """
+
     try:
         # Extract event type (required field)
         event_type = payload.get("eventType", "unknown")
         if not event_type:
             event_type = "unknown"
-        
-        # Extract event status (optional)
         event_status = payload.get("eventStatus")
-        
-        # Extract entity_id, kyc_session_id, and teleport_id
         entity_id_str = _extract_entity_id_from_payload(payload)
         kyc_session_id_str = _extract_kyc_session_id_from_payload(payload)
         teleport_id_str = _extract_teleport_id_from_payload(payload)

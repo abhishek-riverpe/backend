@@ -12,7 +12,7 @@ from ..core.config import settings
 from .. import schemas
 from prisma.errors import UniqueViolationError, PrismaError, DataError
 from utils.enums import LoginMethodEnum
-from services.zynk_client import _auth_header
+from core.auth import _auth_header
 from passlib.context import CryptContext
 from app.services.otp_service import OTPService
 from app.services.otp_service import OTPService

@@ -1,18 +1,3 @@
-"""
-Wallet Router
-
-Handles wallet creation endpoints for Zynk Labs Continuum API integration.
-Complete wallet creation flow:
-1. Register Auth (always proceed)
-2. Initiate OTP
-3. Generate P-256 key pair
-4. Start session with OTP verification
-5. Decrypt credential bundle (HPKE)
-6. Prepare wallet creation
-7. Sign payload with session key
-8. Submit wallet creation
-"""
-
 import json
 import logging
 import httpx
@@ -22,6 +7,8 @@ from slowapi.util import get_remote_address
 from app.core.config import settings
 from app.core.auth import get_current_entity
 from app.core.database import prisma
+from core.auth import _auth_header
+from core.config import settings
 from prisma.models import entities as Entities
 from app.utils.wallet_crypto import (
     generate_keypair as generate_keypair_crypto,
@@ -32,17 +19,13 @@ from app.utils.wallet_crypto import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/wallets", tags=["Wallets"])
 
-# Rate limiter instance (will be set from app.state.limiter)
 limiter = Limiter(key_func=get_remote_address)
 
-# Zynk API base URL
-ZYNK_BASE_URL = "https://qaapi.zynklabs.xyz"
 
-logger.info(f"[WALLET] Router initialized with Zynk API: {ZYNK_BASE_URL}")
+logger.info(f"[WALLET] Router initialized with Zynk API: {settings.zynk_base_url}")
 
 
 def _clean_entity_id(entity_id) -> str:
-    """Clean entity ID by removing whitespace and validating format."""
     if not entity_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -59,37 +42,11 @@ def _clean_entity_id(entity_id) -> str:
     return entity_id
 
 
-def _zynk_auth_header():
-    """Get Zynk API authentication header"""
-    if not settings.zynk_api_key:
-        raise HTTPException(status_code=500, detail="Zynk API key not configured")
-    return {
-        "x-api-token": settings.zynk_api_key,
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-
-
-async def _initiate_otp_internal(entity_id: str, user_email: str) -> dict:
-    """
-    Internal helper function to initiate OTP.
-    Can be called from register-auth or the initiate-otp endpoint.
-    
-    Args:
-        entity_id: Cleaned entity ID
-        user_email: User email for logging
-        
-    Returns:
-        dict: OTP response with otpId, otpType, otpContact
-    """
-    logger.info("[WALLET] ========== INITIATE OTP (INTERNAL) START ==========")
-    logger.info(f"[WALLET] Initiating OTP for entity: {entity_id}, user: {user_email}")
-    
-    # Call Zynk initiate-otp endpoint (entityId in path, no payload needed)
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/initiate-otp"
+async def _initiate_otp_internal(entity_id: str) -> dict:
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{entity_id}/initiate-otp"
     logger.info(f"[WALLET] Zynk API URL: {url}")
     
-    headers = _zynk_auth_header()
+    headers = _auth_header()
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         logger.info("[WALLET] Sending POST request to Zynk API for initiate-otp")
@@ -141,23 +98,10 @@ async def register_auth(
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
-    """
-    Register auth for wallet creation.
-    Always proceeds to next step regardless of response.
 
-    Returns:
-        Success response (always proceeds)
-    """
-    logger.info("[WALLET] ========== REGISTER AUTH START ==========")
-    logger.info(f"[WALLET] Step 1: Received register-auth request from user: {current_user.email}")
-
-    # Get and clean entity ID from authenticated user
-    logger.info("[WALLET] Step 2: Getting and cleaning entity ID")
     entity_id = _clean_entity_id(current_user.zynk_entity_id)
     logger.info(f"[WALLET] Step 2 Complete: Entity ID = {entity_id}")
-
-    # Call Zynk register-auth endpoint
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/register-auth"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{entity_id}/register-auth"
     payload = {
         "authType": "Email_Auth",
         "authPayload": {
@@ -171,20 +115,14 @@ async def register_auth(
 
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         logger.info("[WALLET] Step 4: Sending request to Zynk API")
-        response = await client.post(url, json=payload, headers=_zynk_auth_header())
+        response = await client.post(url, json=payload, headers=_auth_header())
         logger.info(f"[WALLET] Step 4 Complete: Received response with status {response.status_code}")
 
-        # Handle both 200 (success) and 400 (already registered) responses
         if response.status_code == 200:
             body = response.json()
             logger.info(f"[WALLET] Register auth response: {body}")
 
             if body.get("success"):
-                logger.info("[WALLET] Step 5 Complete: New user registered successfully")
-                logger.info("[WALLET] ========== REGISTER AUTH SUCCESS (New Registration) ==========")
-                logger.info("[WALLET] ✅ Automatically calling initiate-otp...")
-                
-                # Automatically call initiate-otp
                 try:
                     otp_response = await _initiate_otp_internal(entity_id, current_user.email)
                     logger.info("[WALLET] ✅ Initiate OTP completed successfully")
@@ -301,17 +239,14 @@ async def initiate_otp(
         - otpContact: Contact method
     """
     try:
-        logger.info("[WALLET] ========== INITIATE OTP (ENDPOINT) START ==========")
-        logger.info(f"[WALLET] Received initiate-otp request from user: {current_user.email}")
-
-        # Get and clean entity ID from authenticated user
+      
         entity_id = _clean_entity_id(current_user.zynk_entity_id)
         logger.info(f"[WALLET] Entity ID: {entity_id}")
 
         # Call the internal helper function
         result = await _initiate_otp_internal(entity_id, current_user.email)
         
-        logger.info("[WALLET] ========== INITIATE OTP (ENDPOINT) SUCCESS ==========")
+       
         return result
 
     except HTTPException as he:
@@ -337,23 +272,6 @@ async def start_session(
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
-    """
-    Start session with OTP code. Generates keypair (or uses provided publicKey) and calls Zynk API.
-
-    Body:
-        - otpId: OTP session ID from initiate-otp response (required)
-        - otpCode: OTP code entered by user (required)
-        - publicKey: Optional public key (if not provided, will generate a new keypair)
-
-    Returns:
-        - success: true
-        - data:
-            - credentialBundle: Encrypted credential bundle from Zynk API
-            - privateKey: Private key (if generated, for decryption later)
-    """
-    logger.info("[WALLET] ========== START SESSION START ==========")
-    logger.info(f"[WALLET] Request payload keys: {list(data.keys())}")
-    logger.info(f"[WALLET] Full request payload: {data}")
 
     otp_id = data.get("otpId")
     otp_code = data.get("otpCode")
@@ -389,7 +307,7 @@ async def start_session(
 
     # Call Zynk wallets start-session endpoint
     logger.info("[WALLET] Step 4: Preparing Zynk API call")
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/start-session"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{entity_id}/start-session"
     payload = {
         "publicKey": public_key,
         "otpId": otp_id,
@@ -402,13 +320,13 @@ async def start_session(
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
         logger.info("[WALLET] Step 5: Sending POST request to Zynk API")
         logger.info(f"[WALLET] Request URL: {url}")
-        logger.info(f"[WALLET] Request headers: {_zynk_auth_header()}")
+        logger.info(f"[WALLET] Request headers: {_auth_header()}")
         logger.info(f"[WALLET] Request payload: {payload}")
         
         response = await client.post(
             url,
             json=payload,
-            headers=_zynk_auth_header()
+            headers=_auth_header()
         )
 
         logger.info(f"[WALLET] Step 5 Complete: Response status = {response.status_code}")
@@ -560,7 +478,7 @@ async def prepare_wallet(
     logger.info(f"[WALLET] Preparing wallet - Name: {wallet_name}, Chain: {chain}, Entity ID: {entity_id}")
 
     # Call Zynk prepare wallet creation endpoint
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{entity_id}/create/prepare"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{entity_id}/create/prepare"
     payload = {
         "walletName": wallet_name,
         "chain": chain
@@ -572,7 +490,7 @@ async def prepare_wallet(
         response = await client.post(
             url,
             json=payload,
-            headers=_zynk_auth_header()
+            headers=_auth_header()
         )
 
         logger.info(f"[WALLET] Prepare wallet response status: {response.status_code}")
@@ -623,19 +541,6 @@ async def get_user_wallet(
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
-    """
-    Get user's wallet from database.
-    Returns the first active wallet for the authenticated user.
-    
-    Returns:
-        - walletId: Zynk wallet ID
-        - walletName: User-defined wallet name
-        - chain: Blockchain (SOLANA, etc.)
-        - addresses: List of addresses from wallet_accounts
-        - created_at: Wallet creation timestamp
-    """
-    logger.info(f"[WALLET] Fetching wallet for user: {current_user.email} (ID: {current_user.id})")
-    
     try:
         # Get user's wallet with its accounts
         wallet = await prisma.wallets.find_first(
@@ -741,10 +646,10 @@ async def get_wallet_details(
 
     user, _ = await _get_validated_user_wallet(current_user)
 
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{user.wallet_id}"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{user.wallet_id}"
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-        response = await client.get(url, headers=_zynk_auth_header())
+        response = await client.get(url, headers=_auth_header())
 
     if response.status_code != 200:
         raise HTTPException(
@@ -764,10 +669,10 @@ async def get_wallet_balances(
 
     user, _ = await _get_validated_user_wallet(current_user)
 
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{user.wallet_id}/balances"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{user.wallet_id}/balances"
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-        response = await client.get(url, headers=_zynk_auth_header())
+        response = await client.get(url, headers=_auth_header())
 
     if response.status_code != 200:
         raise HTTPException(
@@ -822,12 +727,12 @@ async def get_wallet_transactions(
         )
     
     # Call Zynk API
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/{address}/transactions"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{wallet_id}/{address}/transactions"
     params = {"limit": limit, "offset": offset}
     logger.info(f"[WALLET] Calling Zynk API: {url} with params: {params}")
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-        response = await client.get(url, headers=_zynk_auth_header(), params=params)
+        response = await client.get(url, headers=_auth_header(), params=params)
         
         if response.status_code != 200:
             logger.error(f"[WALLET] Zynk API error: {response.status_code}")
@@ -931,7 +836,7 @@ async def submit_wallet(
     logger.info(f"[WALLET] Session keys provided: {bool(session_private_key)}/{bool(session_public_key)}")
 
     # Call Zynk submit wallet creation endpoint
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/create/submit"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/create/submit"
     payload = {
         "payloadId": payload_id,
         "signatureType": signature_type,
@@ -944,7 +849,7 @@ async def submit_wallet(
         response = await client.post(
             url,
             json=payload,
-            headers=_zynk_auth_header()
+            headers=_auth_header()
         )
 
         logger.info(f"[WALLET] Submit wallet response status: {response.status_code}")
@@ -1008,7 +913,7 @@ async def submit_wallet(
         
         try:
             # Call Zynk prepare account creation endpoint
-            prepare_url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/accounts/prepare"
+            prepare_url = f"{settings.zynk_base_url}/api/v1/wallets/{wallet_id}/accounts/prepare"
             prepare_payload = {"chain": chain}
             
             logger.info(f"[WALLET] Calling account prepare: {prepare_url}")
@@ -1017,7 +922,7 @@ async def submit_wallet(
                 prepare_response = await client.post(
                     prepare_url,
                     json=prepare_payload,
-                    headers=_zynk_auth_header()
+                    headers=_auth_header()
                 )
                 
                 if prepare_response.status_code == 200:
@@ -1050,7 +955,7 @@ async def submit_wallet(
                                 
                                 # Submit the account
                                 logger.info(f"[WALLET] Submitting account to Zynk...")
-                                submit_url = f"{ZYNK_BASE_URL}/api/v1/wallets/accounts/submit"
+                                submit_url = f"{settings.zynk_base_url}/api/v1/wallets/accounts/submit"
                                 submit_payload = {
                                     "payloadId": account_payload_id,
                                     "signatureType": "ApiKey",
@@ -1060,7 +965,7 @@ async def submit_wallet(
                                 submit_response = await client.post(
                                     submit_url,
                                     json=submit_payload,
-                                    headers=_zynk_auth_header()
+                                    headers=_auth_header()
                                 )
                                 
                                 if submit_response.status_code == 200:
@@ -1190,7 +1095,7 @@ async def prepare_account(
     logger.info(f"[WALLET] Preparing account - Chain: {chain}, Wallet ID: {wallet_id}")
     
     # Call Zynk prepare account creation endpoint
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/{wallet_id}/accounts/prepare"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{wallet_id}/accounts/prepare"
     payload = {
         "chain": chain
     }
@@ -1202,7 +1107,7 @@ async def prepare_account(
         response = await client.post(
             url,
             json=payload,
-            headers=_zynk_auth_header()
+            headers=_auth_header()
         )
         
         logger.info(f"[WALLET] Prepare account response status: {response.status_code}")
@@ -1290,7 +1195,7 @@ async def submit_account(
     logger.info(f"[WALLET] Validated input - payloadId: {payload_id}, signatureType: {signature_type}, signature: {len(signature)} chars")
     
     # Call Zynk submit account creation endpoint
-    url = f"{ZYNK_BASE_URL}/api/v1/wallets/accounts/submit"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/accounts/submit"
     payload = {
         "payloadId": payload_id,
         "signatureType": signature_type,
@@ -1303,7 +1208,7 @@ async def submit_account(
         response = await client.post(
             url,
             json=payload,
-            headers=_zynk_auth_header()
+            headers=_auth_header()
         )
         
         logger.info(f"[WALLET] Submit account response status: {response.status_code}")

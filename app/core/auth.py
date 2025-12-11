@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from typing import Dict
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, ExpiredSignatureError
@@ -23,6 +24,15 @@ ALLOWED_ALGORITHMS = settings.jwt_allowed_algorithms if hasattr(settings, 'jwt_a
 FORBIDDEN_ALGORITHMS = ["none", "NONE", "None"]
 ALLOWED_ALGORITHMS = settings.jwt_allowed_algorithms if hasattr(settings, 'jwt_allowed_algorithms') else ["HS256"]
 FORBIDDEN_ALGORITHMS = ["none", "NONE", "None"]
+
+
+def _auth_header() -> Dict[str, str]:
+    if not settings.zynk_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ZynkLabs API key not configured",
+        )
+    return {"x-api-token": settings.zynk_api_key}
 
 def get_password_hash(password):
     return pwd_context.hash(password)
