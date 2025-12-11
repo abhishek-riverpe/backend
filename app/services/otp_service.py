@@ -15,6 +15,7 @@ from app.core.config import settings
 from prisma import Prisma
 from prisma.enums import OtpStatusEnum, OtpTypeEnum
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
+from app.utils.log_sanitizer import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ class OTPService:
         """
         try:
             full_phone = f"{country_code}{phone_number}"
-            logger.info(f"[OTP] Sending OTP to {full_phone}")
+            logger.info("[OTP] Sending OTP to %s", sanitize_for_log(full_phone))
 
             # Check rate limiting - prevent spam
             recent_otp = await self._check_rate_limit(phone_number, country_code)
@@ -85,7 +86,7 @@ class OTPService:
                     recent_otp.created_at + timedelta(seconds=self.RATE_LIMIT_SECONDS) - datetime.now(timezone.utc)
                 ).total_seconds()
                 if seconds_remaining > 0:
-                    logger.warning(f"[OTP] Rate limit hit for {full_phone}")
+                    logger.warning("[OTP] Rate limit hit for %s", sanitize_for_log(full_phone))
                     return False, f"Please wait {int(seconds_remaining)} seconds before requesting a new OTP", None
 
             # Invalidate any existing pending OTPs for this number
@@ -109,16 +110,16 @@ class OTPService:
                 }
             )
 
-            logger.info(f"[OTP] Created OTP record: {otp_record.id}")
+            logger.info("[OTP] Created OTP record: %s", sanitize_for_log(otp_record.id))
 
             # Send OTP via SMS
             sms_sent = await self._send_sms(full_phone, otp_code)
             
             if not sms_sent:
-                logger.error(f"[OTP] Failed to send SMS to {full_phone}")
+                logger.error("[OTP] Failed to send SMS to %s", sanitize_for_log(full_phone))
                 return False, "Failed to send OTP. Please try again.", None
 
-            logger.info(f"[OTP] OTP sent successfully to {full_phone}")
+            logger.info("[OTP] OTP sent successfully to %s", sanitize_for_log(full_phone))
             
             return True, "OTP sent successfully", {
                 "id": otp_record.id,
@@ -130,7 +131,7 @@ class OTPService:
             }
 
         except Exception as e:
-            logger.error(f"[OTP] Error sending OTP: {str(e)}", exc_info=True)
+            logger.error("[OTP] Error sending OTP: %s", sanitize_for_log(str(e)), exc_info=True)
             return False, "An error occurred while sending OTP", None
 
     async def verify_otp(
@@ -152,7 +153,7 @@ class OTPService:
         """
         try:
             full_phone = f"{country_code}{phone_number}"
-            logger.info(f"[OTP] Verifying OTP for {full_phone}")
+            logger.info("[OTP] Verifying OTP for %s", sanitize_for_log(full_phone))
 
             # Find the most recent pending OTP
             otp_record = await self.prisma.otp_verifications.find_first(
@@ -165,12 +166,12 @@ class OTPService:
             )
 
             if not otp_record:
-                logger.warning(f"[OTP] No pending OTP found for {full_phone}")
+                logger.warning("[OTP] No pending OTP found for %s", sanitize_for_log(full_phone))
                 return False, "No pending OTP found. Please request a new one.", None
 
             # Check if OTP has expired
             if datetime.now(timezone.utc) > otp_record.expires_at:
-                logger.warning(f"[OTP] Expired OTP for {full_phone}")
+                logger.warning("[OTP] Expired OTP for %s", sanitize_for_log(full_phone))
                 await self.prisma.otp_verifications.update(
                     where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.EXPIRED}
@@ -179,7 +180,7 @@ class OTPService:
 
             # Check max attempts
             if otp_record.attempts >= otp_record.max_attempts:
-                logger.warning(f"[OTP] Max attempts exceeded for {full_phone}")
+                logger.warning("[OTP] Max attempts exceeded for %s", sanitize_for_log(full_phone))
                 await self.prisma.otp_verifications.update(
                     where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.FAILED}
@@ -196,7 +197,7 @@ class OTPService:
             # Verify OTP code
             if otp_record.otp_code != otp_code:
                 attempts_remaining = otp_record.max_attempts - updated_attempts
-                logger.warning(f"[OTP] Invalid OTP for {full_phone}, {attempts_remaining} attempts remaining")
+                logger.warning("[OTP] Invalid OTP for %s, %s attempts remaining", sanitize_for_log(full_phone), sanitize_for_log(attempts_remaining))
                 
                 if attempts_remaining <= 0:
                     await self.prisma.otp_verifications.update(
@@ -216,7 +217,7 @@ class OTPService:
                 }
             )
 
-            logger.info(f"[OTP] Successfully verified OTP for {full_phone}")
+            logger.info("[OTP] Successfully verified OTP for %s", sanitize_for_log(full_phone))
             return True, "Phone number verified successfully", {
                 "verified": True,
                 "phone_number": phone_number,
@@ -224,7 +225,7 @@ class OTPService:
             }
 
         except Exception as e:
-            logger.error(f"[OTP] Error verifying OTP: {str(e)}", exc_info=True)
+            logger.error("[OTP] Error verifying OTP: %s", sanitize_for_log(str(e)), exc_info=True)
             return False, "An error occurred while verifying OTP", None
 
     async def send_email_otp(self, email: str) -> Tuple[bool, str, Optional[dict]]:
@@ -238,7 +239,7 @@ class OTPService:
             Tuple of (success, message, data)
         """
         try:
-            logger.info(f"[OTP] Sending email OTP to {email}")
+            logger.info("[OTP] Sending email OTP to %s", sanitize_for_log(email))
 
             # Check rate limiting - prevent spam
             recent_otp = await self._check_email_rate_limit(email)
@@ -247,7 +248,7 @@ class OTPService:
                     recent_otp.created_at + timedelta(seconds=self.RATE_LIMIT_SECONDS) - datetime.now(timezone.utc)
                 ).total_seconds()
                 if seconds_remaining > 0:
-                    logger.warning(f"[OTP] Rate limit hit for {email}")
+                    logger.warning("[OTP] Rate limit hit for %s", sanitize_for_log(email))
                     return False, f"Please wait {int(seconds_remaining)} seconds before requesting a new OTP", None
 
             # Invalidate any existing pending OTPs for this email
@@ -270,16 +271,16 @@ class OTPService:
                 }
             )
 
-            logger.info(f"[OTP] Created email OTP record: {otp_record.id}")
+            logger.info("[OTP] Created email OTP record: %s", sanitize_for_log(otp_record.id))
 
             # Send OTP via email
             email_sent = await self._send_email(email, otp_code)
             
             if not email_sent:
-                logger.error(f"[OTP] Failed to send email to {email}")
+                logger.error("[OTP] Failed to send email to %s", sanitize_for_log(email))
                 return False, "Failed to send OTP. Please try again.", None
 
-            logger.info(f"[OTP] OTP sent successfully to {email}")
+            logger.info("[OTP] OTP sent successfully to %s", sanitize_for_log(email))
             
             return True, "OTP sent successfully", {
                 "id": otp_record.id,
@@ -290,7 +291,7 @@ class OTPService:
             }
 
         except Exception as e:
-            logger.error(f"[OTP] Error sending email OTP: {str(e)}", exc_info=True)
+            logger.error("[OTP] Error sending email OTP: %s", sanitize_for_log(str(e)), exc_info=True)
             return False, "An error occurred while sending OTP", None
 
     async def verify_email_otp(self, email: str, otp_code: str) -> Tuple[bool, str, Optional[dict]]:
@@ -305,7 +306,7 @@ class OTPService:
             Tuple of (success, message, data)
         """
         try:
-            logger.info(f"[OTP] Verifying email OTP for {email}")
+            logger.info("[OTP] Verifying email OTP for %s", sanitize_for_log(email))
 
             # Find the most recent pending OTP
             otp_record = await self.prisma.otp_verifications.find_first(
@@ -318,12 +319,12 @@ class OTPService:
             )
 
             if not otp_record:
-                logger.warning(f"[OTP] No pending email OTP found for {email}")
+                logger.warning("[OTP] No pending email OTP found for %s", sanitize_for_log(email))
                 return False, "No pending OTP found. Please request a new one.", None
 
             # Check if OTP has expired
             if datetime.now(timezone.utc) > otp_record.expires_at:
-                logger.warning(f"[OTP] Expired email OTP for {email}")
+                logger.warning("[OTP] Expired email OTP for %s", sanitize_for_log(email))
                 await self.prisma.otp_verifications.update(
                     where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.EXPIRED}
@@ -332,7 +333,7 @@ class OTPService:
 
             # Check max attempts
             if otp_record.attempts >= otp_record.max_attempts:
-                logger.warning(f"[OTP] Max attempts exceeded for {email}")
+                logger.warning("[OTP] Max attempts exceeded for %s", sanitize_for_log(email))
                 await self.prisma.otp_verifications.update(
                     where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.FAILED}
@@ -349,7 +350,7 @@ class OTPService:
             # Verify OTP code
             if otp_record.otp_code != otp_code:
                 attempts_remaining = otp_record.max_attempts - updated_attempts
-                logger.warning(f"[OTP] Invalid email OTP for {email}, {attempts_remaining} attempts remaining")
+                logger.warning("[OTP] Invalid email OTP for %s, %s attempts remaining", sanitize_for_log(email), sanitize_for_log(attempts_remaining))
                 
                 if attempts_remaining <= 0:
                     await self.prisma.otp_verifications.update(
@@ -369,14 +370,14 @@ class OTPService:
                 }
             )
 
-            logger.info(f"[OTP] Successfully verified email OTP for {email}")
+            logger.info("[OTP] Successfully verified email OTP for %s", sanitize_for_log(email))
             return True, "Email verified successfully", {
                 "verified": True,
                 "email": email,
             }
 
         except Exception as e:
-            logger.error(f"[OTP] Error verifying email OTP: {str(e)}", exc_info=True)
+            logger.error("[OTP] Error verifying email OTP: %s", sanitize_for_log(str(e)), exc_info=True)
             return False, "An error occurred while verifying OTP", None
 
     async def _send_email(self, email: str, otp_code: str) -> bool:
@@ -392,8 +393,8 @@ class OTPService:
         """
         try:
             if not self.mail_config:
-                # Mock mode - just log the OTP
-                logger.info(f"[OTP] MOCK EMAIL - To: {email}, Code: {otp_code}")
+                # Mock mode - just log the OTP (REDACTED for security)
+                logger.info("[OTP] MOCK EMAIL - To: %s, Code: [REDACTED]", sanitize_for_log(email))
                 return True
 
             # Create email message
@@ -418,11 +419,11 @@ class OTPService:
 
             # Send email
             await self.fast_mail.send_message(message)
-            logger.info(f"[OTP] Email sent successfully to {email}")
+            logger.info("[OTP] Email sent successfully to %s", sanitize_for_log(email))
             return True
 
         except Exception as e:
-            logger.error(f"[OTP] Email sending error: {str(e)}", exc_info=True)
+            logger.error("[OTP] Email sending error: %s", sanitize_for_log(str(e)), exc_info=True)
             return False
 
     async def _check_email_rate_limit(self, email: str) -> Optional[any]:
@@ -455,7 +456,7 @@ class OTPService:
             Tuple of (success, message, data)
         """
         try:
-            logger.info(f"[OTP] Sending password reset OTP to {email}")
+            logger.info("[OTP] Sending password reset OTP to %s", sanitize_for_log(email))
 
             # Check rate limiting
             recent_otp = await self._check_email_rate_limit(email)
@@ -464,7 +465,7 @@ class OTPService:
                     recent_otp.created_at + timedelta(seconds=self.RATE_LIMIT_SECONDS) - datetime.now(timezone.utc)
                 ).total_seconds()
                 if seconds_remaining > 0:
-                    logger.warning(f"[OTP] Password reset rate limit hit for {email}")
+                    logger.warning("[OTP] Password reset rate limit hit for %s", sanitize_for_log(email))
                     return False, f"Please wait {int(seconds_remaining)} seconds before requesting another code", None
 
             await self._invalidate_existing_email_otps(email, OtpTypeEnum.PASSWORD_RESET)
@@ -484,12 +485,12 @@ class OTPService:
                 }
             )
 
-            logger.info(f"[OTP] Created password reset OTP record: {otp_record.id}")
+            logger.info("[OTP] Created password reset OTP record: %s", sanitize_for_log(otp_record.id))
 
             email_sent = await self._send_email(email, otp_code)
 
             if not email_sent:
-                logger.error(f"[OTP] Failed to send password reset email to {email}")
+                logger.error("[OTP] Failed to send password reset email to %s", sanitize_for_log(email))
                 return False, "Failed to send password reset code. Please try again.", None
 
             return True, "Password reset code sent successfully", {
@@ -500,7 +501,7 @@ class OTPService:
             }
 
         except Exception as e:
-            logger.error(f"[OTP] Error sending password reset OTP: {str(e)}", exc_info=True)
+            logger.error("[OTP] Error sending password reset OTP: %s", sanitize_for_log(str(e)), exc_info=True)
             return False, "An error occurred while sending reset code", None
 
     async def verify_password_reset_otp(self, email: str, otp_code: str) -> Tuple[bool, str, Optional[dict]]:
@@ -508,7 +509,7 @@ class OTPService:
         Verify password reset OTP code
         """
         try:
-            logger.info(f"[OTP] Verifying password reset OTP for {email}")
+            logger.info("[OTP] Verifying password reset OTP for %s", sanitize_for_log(email))
 
             otp_record = await self.prisma.otp_verifications.find_first(
                 where={
@@ -520,11 +521,11 @@ class OTPService:
             )
 
             if not otp_record:
-                logger.warning(f"[OTP] No pending password reset OTP found for {email}")
+                logger.warning("[OTP] No pending password reset OTP found for %s", sanitize_for_log(email))
                 return False, "No pending password reset request found. Please request a new code.", None
 
             if datetime.now(timezone.utc) > otp_record.expires_at:
-                logger.warning(f"[OTP] Expired password reset OTP for {email}")
+                logger.warning("[OTP] Expired password reset OTP for %s", sanitize_for_log(email))
                 await self.prisma.otp_verifications.update(
                     where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.EXPIRED}
@@ -532,7 +533,7 @@ class OTPService:
                 return False, "Password reset code has expired. Please request a new one.", None
 
             if otp_record.attempts >= otp_record.max_attempts:
-                logger.warning(f"[OTP] Max password reset attempts exceeded for {email}")
+                logger.warning("[OTP] Max password reset attempts exceeded for %s", sanitize_for_log(email))
                 await self.prisma.otp_verifications.update(
                     where={"id": otp_record.id},
                     data={"status": OtpStatusEnum.FAILED}
@@ -547,7 +548,7 @@ class OTPService:
 
             if otp_record.otp_code != otp_code:
                 attempts_remaining = otp_record.max_attempts - updated_attempts
-                logger.warning(f"[OTP] Invalid password reset OTP for {email}, {attempts_remaining} attempts remaining")
+                logger.warning("[OTP] Invalid password reset OTP for %s, %s attempts remaining", sanitize_for_log(email), sanitize_for_log(attempts_remaining))
 
                 if attempts_remaining <= 0:
                     await self.prisma.otp_verifications.update(
@@ -566,14 +567,14 @@ class OTPService:
                 }
             )
 
-            logger.info(f"[OTP] Successfully verified password reset OTP for {email}")
+            logger.info("[OTP] Successfully verified password reset OTP for %s", sanitize_for_log(email))
             return True, "Password reset code verified", {
                 "verified": True,
                 "email": email,
             }
 
         except Exception as e:
-            logger.error(f"[OTP] Error verifying password reset OTP: {str(e)}", exc_info=True)
+            logger.error("[OTP] Error verifying password reset OTP: %s", sanitize_for_log(str(e)), exc_info=True)
             return False, "An error occurred while verifying reset code", None
 
     async def _invalidate_existing_email_otps(self, email: str, otp_type: OtpTypeEnum) -> None:
@@ -604,11 +605,11 @@ class OTPService:
             if self.sms_provider == "twilio":
                 return await self._send_via_twilio(phone_number, otp_code)
             else:
-                # Mock mode - just log the OTP
-                logger.info(f"[OTP] MOCK SMS - Phone: {phone_number}, Code: {otp_code}")
+                # Mock mode - just log the OTP (REDACTED for security)
+                logger.info("[OTP] MOCK SMS - Phone: %s, Code: [REDACTED]", sanitize_for_log(phone_number))
                 return True
         except Exception as e:
-            logger.error(f"[OTP] SMS sending error: {str(e)}", exc_info=True)
+            logger.error("[OTP] SMS sending error: %s", sanitize_for_log(str(e)), exc_info=True)
             return False
 
     async def _send_via_twilio(self, phone_number: str, otp_code: str) -> bool:
@@ -623,8 +624,8 @@ class OTPService:
             bool: True if sent successfully
         """
         try:
-            # Mock mode for development/testing: do not call Twilio, just log and succeed
-            logger.info(f"[OTP] MOCK SMS (Twilio disabled) - To: {phone_number}, Code: {otp_code}")
+            # Mock mode for development/testing: do not call Twilio, just log and succeed (REDACTED for security)
+            logger.info("[OTP] MOCK SMS (Twilio disabled) - To: %s, Code: [REDACTED]", sanitize_for_log(phone_number))
             return True
 
             # Real Twilio integration (disabled/commented for now):
@@ -654,7 +655,7 @@ class OTPService:
             #         return False
 
         except Exception as e:
-            logger.error(f"[OTP] Twilio sending error: {str(e)}", exc_info=True)
+            logger.error("[OTP] Twilio sending error: %s", sanitize_for_log(str(e)), exc_info=True)
             return False
 
     async def _check_rate_limit(
@@ -713,10 +714,10 @@ class OTPService:
                     "created_at": {"lt": cutoff_time}
                 }
             )
-            
-            logger.info(f"[OTP] Cleaned up {result} expired OTP records")
+
+            logger.info("[OTP] Cleaned up %s expired OTP records", result)
             return result
         except Exception as e:
-            logger.error(f"[OTP] Cleanup error: {str(e)}", exc_info=True)
+            logger.error("[OTP] Cleanup error: %s", sanitize_for_log(str(e)), exc_info=True)
             return 0
 

@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, List
 from prisma import Prisma
 from prisma.enums import SessionStatusEnum, LoginMethodEnum
 from app.core.config import settings
+from app.utils.log_sanitizer import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ class SessionService:
                 }
             )
             
-            logger.info(f"[SESSION] Created session {session.id} for entity {entity_id}")
+            logger.info("[SESSION] Created session %s for entity %s", sanitize_for_log(str(session.id)), sanitize_for_log(str(entity_id)))
             
             return {
                 "id": session.id,
@@ -108,7 +109,7 @@ class SessionService:
             }
             
         except Exception as e:
-            logger.error(f"[SESSION] Error creating session: {str(e)}", exc_info=True)
+            logger.error("[SESSION] Error creating session: %s", sanitize_for_log(str(e)), exc_info=True)
             raise
 
     async def _enforce_concurrent_limit(self, entity_id: str) -> None:
@@ -135,9 +136,9 @@ class SessionService:
                     where={"id": {"in": old_ids}},
                     data={"status": SessionStatusEnum.REVOKED},
                 )
-                logger.info(f"[SESSION] Evicted {len(old_ids)} oldest sessions to enforce limit for entity {entity_id}")
+                logger.info("[SESSION] Evicted %s oldest sessions to enforce limit for entity %s", len(old_ids), sanitize_for_log(str(entity_id)))
         except Exception as e:
-            logger.warning(f"[SESSION] Error enforcing concurrent limit: {str(e)}")
+            logger.warning("[SESSION] Error enforcing concurrent limit: %s", sanitize_for_log(str(e)))
 
     async def update_activity(self, session_token: str) -> Optional[bool]:
         """
@@ -184,7 +185,7 @@ class SessionService:
             )
             return True
         except Exception as e:
-            logger.warning(f"[SESSION] Error updating activity: {str(e)}")
+            logger.warning("[SESSION] Error updating activity: %s", sanitize_for_log(str(e)))
             return None
 
     async def enforce_and_update_activity(self, session_token: str) -> Optional[bool]:
@@ -212,10 +213,10 @@ class SessionService:
                     "logout_at": datetime.now(),
                 }
             )
-            logger.info(f"[SESSION] Logged out session with token {session_token}")
+            logger.info("[SESSION] Logged out session with token %s", sanitize_for_log(str(session_token)))
             return True
         except Exception as e:
-            logger.error(f"[SESSION] Error logging out session: {str(e)}")
+            logger.error("[SESSION] Error logging out session: %s", sanitize_for_log(str(e)))
             return False
 
     async def revoke_session(self, session_id: str) -> bool:
@@ -236,10 +237,10 @@ class SessionService:
                     "logout_at": datetime.now(timezone.utc),
                 }
             )
-            logger.info(f"[SESSION] Revoked session {session_id}")
+            logger.info("[SESSION] Revoked session %s", sanitize_for_log(str(session_id)))
             return True
         except Exception as e:
-            logger.error(f"[SESSION] Error revoking session: {str(e)}")
+            logger.error("[SESSION] Error revoking session: %s", sanitize_for_log(str(e)))
             return False
 
     async def get_active_sessions(self, entity_id: str) -> List[Dict[str, Any]]:
@@ -279,7 +280,7 @@ class SessionService:
                 for s in sessions
             ]
         except Exception as e:
-            logger.error(f"[SESSION] Error getting active sessions: {str(e)}")
+            logger.error("[SESSION] Error getting active sessions: %s", sanitize_for_log(str(e)))
             return []
 
     async def get_session_history(
@@ -319,7 +320,7 @@ class SessionService:
                 for s in sessions
             ]
         except Exception as e:
-            logger.error(f"[SESSION] Error getting session history: {str(e)}")
+            logger.error("[SESSION] Error getting session history: %s", sanitize_for_log(str(e)))
             return []
 
     async def cleanup_expired_sessions(self) -> int:
@@ -338,10 +339,10 @@ class SessionService:
                 data={"status": SessionStatusEnum.EXPIRED}
             )
             
-            logger.info(f"[SESSION] Marked {result} expired sessions")
+            logger.info("[SESSION] Marked %s expired sessions", result)
             return result
         except Exception as e:
-            logger.error(f"[SESSION] Error cleaning up sessions: {str(e)}")
+            logger.error("[SESSION] Error cleaning up sessions: %s", sanitize_for_log(str(e)))
             return 0
 
     async def revoke_all_sessions(self, entity_id: str, except_token: Optional[str] = None) -> int:
@@ -372,10 +373,10 @@ class SessionService:
                 }
             )
             
-            logger.info(f"[SESSION] Revoked {result} sessions for entity {entity_id}")
+            logger.info("[SESSION] Revoked %s sessions for entity %s", result, sanitize_for_log(str(entity_id)))
             return result
         except Exception as e:
-            logger.error(f"[SESSION] Error revoking all sessions: {str(e)}")
+            logger.error("[SESSION] Error revoking all sessions: %s", sanitize_for_log(str(e)))
             return 0
 
     async def _check_suspicious_login(
@@ -413,7 +414,7 @@ class SessionService:
             if country:
                 recent_countries = [s.country for s in recent_sessions if s.country]
                 if recent_countries and country not in recent_countries:
-                    logger.warning(f"[SESSION] Suspicious: New country {country} for entity {entity_id}")
+                    logger.warning("[SESSION] Suspicious: New country %s for entity %s", sanitize_for_log(str(country)), sanitize_for_log(str(entity_id)))
                     return True
             
             # Check for rapid logins from different IPs
@@ -423,12 +424,12 @@ class SessionService:
                     # New IP within last 5 logins might be suspicious
                     latest_login = recent_sessions[0].login_at
                     if latest_login and (datetime.now() - latest_login).total_seconds() < 300:  # 5 minutes
-                        logger.warning(f"[SESSION] Suspicious: Rapid login from new IP {ip_address}")
+                        logger.warning("[SESSION] Suspicious: Rapid login from new IP %s", sanitize_for_log(str(ip_address)))
                         return True
             
             return False
             
         except Exception as e:
-            logger.error(f"[SESSION] Error checking suspicious login: {str(e)}")
+            logger.error("[SESSION] Error checking suspicious login: %s", sanitize_for_log(str(e)))
             return False
 

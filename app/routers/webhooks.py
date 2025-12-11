@@ -12,6 +12,7 @@ from ..core.config import settings
 from ..core.database import prisma
 from prisma.enums import WebhookEventCategory, KycStatusEnum, AccountStatusEnum
 from datetime import datetime, timezone
+from ..utils.log_sanitizer import sanitize_for_log, sanitize_dict_for_log
 try:
     from prisma import types
     # Prisma Python Json type wrapper if available
@@ -50,7 +51,7 @@ def verify_webhook_signature(payload: dict, received_signature: str, secret: str
         # Extract timestamp and signature from header (format: timestamp:signature)
         match = re.match(r'^(\d+):(.+)$', received_signature)
         if not match:
-            logger.warning(f"[WEBHOOK] Invalid signature format: {received_signature}")
+            logger.warning("[WEBHOOK] Invalid signature format: %s", sanitize_for_log(received_signature))
             return False
         
         timestamp, signature = match.groups()
@@ -77,7 +78,7 @@ def verify_webhook_signature(payload: dict, received_signature: str, secret: str
             expected_signature_b64.encode('utf-8')
         )
     except Exception as e:
-        logger.error(f"[WEBHOOK] Signature verification error: {e}")
+        logger.error("[WEBHOOK] Signature verification error: %s", sanitize_for_log(str(e)))
         return False
 
 
@@ -90,11 +91,11 @@ async def receive_zynk_webhook(request: Request):
     """
     # Get client IP for logging
     client_ip = request.client.host if request.client else "unknown"
-    
+
     # 1. Get signature from header
     received_signature = request.headers.get("z-webhook-signature")
     if not received_signature:
-        logger.warning(f"[WEBHOOK] Missing signature header from {client_ip}")
+        logger.warning("[WEBHOOK] Missing signature header from %s", sanitize_for_log(client_ip))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing webhook signature"
@@ -113,7 +114,7 @@ async def receive_zynk_webhook(request: Request):
     try:
         body = json.loads(raw_body)
     except json.JSONDecodeError as e:
-        logger.warning(f"[WEBHOOK] Invalid JSON from {client_ip}: {e}")
+        logger.warning("[WEBHOOK] Invalid JSON from %s: %s", sanitize_for_log(client_ip), sanitize_for_log(str(e)))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid JSON payload"
@@ -122,8 +123,9 @@ async def receive_zynk_webhook(request: Request):
     # 4. Verify signature
     if not verify_webhook_signature(body, received_signature, settings.zynk_webhook_secret):
         logger.warning(
-            f"[WEBHOOK] Invalid signature from {client_ip}. "
-            f"Event: {body.get('eventCategory', 'unknown')}"
+            "[WEBHOOK] Invalid signature from %s. Event: %s",
+            sanitize_for_log(client_ip),
+            sanitize_for_log(body.get('eventCategory', 'unknown'))
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -140,59 +142,62 @@ async def receive_zynk_webhook(request: Request):
             # Allow 5 minute window for clock skew and processing delays
             if abs(current_time - timestamp) > 300:
                 logger.warning(
-                    f"[WEBHOOK] Expired webhook from {client_ip}. "
-                    f"Timestamp: {timestamp}, Current: {current_time}, Diff: {abs(current_time - timestamp)}s"
+                    "[WEBHOOK] Expired webhook from %s. Timestamp: %s, Current: %s, Diff: %ss",
+                    sanitize_for_log(client_ip),
+                    sanitize_for_log(timestamp),
+                    sanitize_for_log(current_time),
+                    sanitize_for_log(abs(current_time - timestamp))
                 )
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Webhook timestamp expired or too far in future"
                 )
         except (ValueError, TypeError):
-            logger.warning(f"[WEBHOOK] Invalid timestamp format from {client_ip}")
+            logger.warning("[WEBHOOK] Invalid timestamp format from %s", sanitize_for_log(client_ip))
             # Don't fail if timestamp is invalid format, just log it
     
     # 6. Process webhook (signature verified)
     event_category = body.get("eventCategory")
-    logger.info(f"[WEBHOOK] Verified webhook received from {client_ip}. Event: {event_category}")
-    
+    logger.info("[WEBHOOK] Verified webhook received from %s. Event: %s", sanitize_for_log(client_ip), sanitize_for_log(event_category))
+
     if event_category == "webhook":
-        logger.info(f"[WEBHOOK] Webhook configuration event: {body}")
+        logger.info("[WEBHOOK] Webhook configuration event: %s", sanitize_dict_for_log(body))
         # Save webhook event to database
         try:
             await _save_webhook_event(body, WebhookEventCategory.WEBHOOK, client_ip)
         except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to save webhook event to database: {e}", exc_info=True)
+            logger.error("[WEBHOOK] Failed to save webhook event to database: %s", sanitize_for_log(str(e)), exc_info=True)
         # Process webhook configuration event
     elif event_category == "kyc":
-        logger.info(f"[WEBHOOK] KYC event received: {body}")
+        logger.info("[WEBHOOK] KYC event received: %s", sanitize_dict_for_log(body))
         # Save webhook event to database
         try:
             await _save_webhook_event(body, WebhookEventCategory.KYC, client_ip)
         except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to save KYC webhook event to database: {e}", exc_info=True)
-        
+            logger.error("[WEBHOOK] Failed to save KYC webhook event to database: %s", sanitize_for_log(str(e)), exc_info=True)
+
         # Process KYC event - Update KYC session status
         try:
             await _update_kyc_status_from_webhook(body)
         except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to update KYC status from webhook: {e}", exc_info=True)
+            logger.error("[WEBHOOK] Failed to update KYC status from webhook: %s", sanitize_for_log(str(e)), exc_info=True)
             # Don't raise - webhook event is already saved, status update failure is logged
     elif event_category == "TRANSFER":
-        logger.info(f"[WEBHOOK] Transfer event received: {body}")
+        logger.info("[WEBHOOK] Transfer event received: %s", sanitize_dict_for_log(body))
         # Save webhook event to database
         try:
             await _save_webhook_event(body, WebhookEventCategory.TRANSFER, client_ip)
         except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to save TRANSFER webhook event to database: {e}", exc_info=True)
+            logger.error("[WEBHOOK] Failed to save TRANSFER webhook event to database: %s", sanitize_for_log(str(e)), exc_info=True)
         # Process transfer event
         # TODO: Implement transfer processing logic here
     else:
-        logger.warning(f"[WEBHOOK] Unknown event category: {event_category} with payload: {body}")
+        logger.warning("[WEBHOOK] Unknown event category: %s with payload: %s", sanitize_for_log(event_category), sanitize_dict_for_log(body))
         # Save unknown event category as WEBHOOK for now
         try:
             await _save_webhook_event(body, WebhookEventCategory.WEBHOOK, client_ip)
         except Exception as e:
-            logger.error(f"[WEBHOOK] Failed to save unknown webhook event to database: {e}", exc_info=True)
+            logger.error("[WEBHOOK] Failed to save unknown webhook event to database: %s", sanitize_for_log(str(e)), exc_info=True)
     
     return {"success": True, "message": "Webhook received and verified"}
 
@@ -355,13 +360,13 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
                 except ValueError:
                     pass
         except Exception as e:
-            logger.warning(f"[WEBHOOK] Error looking up entity for KYC update: {e}")
+            logger.warning("[WEBHOOK] Error looking up entity for KYC update: %s", sanitize_for_log(str(e)))
             return
-        
+
         if not entity:
-            logger.warning(f"[WEBHOOK] Entity not found for KYC update: {entity_id_str}")
+            logger.warning("[WEBHOOK] Entity not found for KYC update: %s", sanitize_for_log(entity_id_str))
             return
-        
+
         # Find KYC session by routing_id and entity_id
         kyc_session = await prisma.kyc_sessions.find_first(
             where={
@@ -370,24 +375,25 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
                 "deleted_at": None
             }
         )
-        
+
         if not kyc_session:
             logger.warning(
-                f"[WEBHOOK] KYC session not found for routing_id: {routing_id}, "
-                f"entity_id: {entity.id}"
+                "[WEBHOOK] KYC session not found for routing_id: %s, entity_id: %s",
+                sanitize_for_log(routing_id),
+                sanitize_for_log(str(entity.id))
             )
             return
-        
+
         # Extract status from eventObject
         webhook_status = event_object.get("status")
         if not webhook_status:
             logger.warning("[WEBHOOK] KYC webhook missing status in eventObject")
             return
-        
+
         # Map webhook status to internal enum
         kyc_status = _map_webhook_status_to_kyc_status(webhook_status)
         if not kyc_status:
-            logger.warning(f"[WEBHOOK] Unknown KYC status from webhook: {webhook_status}")
+            logger.warning("[WEBHOOK] Unknown KYC status from webhook: %s", sanitize_for_log(webhook_status))
             return
         
         # Prepare update data
@@ -427,10 +433,13 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
             where={"id": kyc_session.id},
             data=update_data
         )
-        
+
         logger.info(
-            f"[WEBHOOK] Updated KYC session {kyc_session.id} status to {kyc_status.value} "
-            f"(routing_id: {routing_id}, entity_id: {entity.id})"
+            "[WEBHOOK] Updated KYC session %s status to %s (routing_id: %s, entity_id: %s)",
+            sanitize_for_log(str(kyc_session.id)),
+            sanitize_for_log(kyc_status.value),
+            sanitize_for_log(routing_id),
+            sanitize_for_log(str(entity.id))
         )
         
         # Automatically create funding account when KYC is approved
@@ -443,31 +452,32 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
                 
                 if existing_funding_account:
                     logger.info(
-                        f"[WEBHOOK] Funding account already exists for entity_id={entity.id}, "
-                        f"skipping auto-creation"
+                        "[WEBHOOK] Funding account already exists for entity_id=%s, skipping auto-creation",
+                        sanitize_for_log(str(entity.id))
                     )
                 elif entity.zynk_entity_id:
                     # Import here to avoid circular dependencies
                     from ..services.zynk_client import create_funding_account_from_zynk
                     from ..services.funding_account_service import save_funding_account_to_db, US_FUNDING_JURISDICTION_ID
                     from ..services.email_service import email_service
-                    
+
                     logger.info(
-                        f"[WEBHOOK] KYC approved for entity_id={entity.id}. "
-                        f"Auto-creating funding account via Zynk Labs API."
+                        "[WEBHOOK] KYC approved for entity_id=%s. Auto-creating funding account via Zynk Labs API.",
+                        sanitize_for_log(str(entity.id))
                     )
-                    
+
                     # Create funding account via Zynk Labs
                     zynk_response_data = await create_funding_account_from_zynk(
                         entity.zynk_entity_id,
                         US_FUNDING_JURISDICTION_ID
                     )
-                    
+
                     # Save to database using shared service function
                     funding_account = await save_funding_account_to_db(str(entity.id), zynk_response_data)
                     logger.info(
-                        f"[WEBHOOK] Successfully created funding account {funding_account.id} "
-                        f"for entity_id={entity.id} after KYC approval"
+                        "[WEBHOOK] Successfully created funding account %s for entity_id=%s after KYC approval",
+                        sanitize_for_log(str(funding_account.id)),
+                        sanitize_for_log(str(entity.id))
                     )
                     
                     # Send email notification
@@ -486,35 +496,39 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
                         )
                         if email_sent:
                             logger.info(
-                                f"[WEBHOOK] Funding account creation email sent to {entity.email}"
+                                "[WEBHOOK] Funding account creation email sent to %s",
+                                sanitize_for_log(entity.email)
                             )
                         else:
                             logger.warning(
-                                f"[WEBHOOK] Failed to send funding account creation email to {entity.email}"
+                                "[WEBHOOK] Failed to send funding account creation email to %s",
+                                sanitize_for_log(entity.email)
                             )
                     except Exception as email_exc:
                         # Don't fail webhook processing if email fails
                         logger.error(
-                            f"[WEBHOOK] Error sending funding account creation email: {email_exc}",
+                            "[WEBHOOK] Error sending funding account creation email: %s",
+                            sanitize_for_log(str(email_exc)),
                             exc_info=email_exc,
                         )
                 else:
                     logger.warning(
-                        f"[WEBHOOK] Entity {entity.id} not linked to Zynk Labs. "
-                        f"Cannot auto-create funding account."
+                        "[WEBHOOK] Entity %s not linked to Zynk Labs. Cannot auto-create funding account.",
+                        sanitize_for_log(str(entity.id))
                     )
-                    
+
             except Exception as funding_exc:
                 # Log error but don't fail webhook processing
                 # Funding account creation can be retried later via manual endpoint
                 logger.error(
-                    f"[WEBHOOK] Error auto-creating funding account for entity_id={entity.id} "
-                    f"after KYC approval: {funding_exc}",
+                    "[WEBHOOK] Error auto-creating funding account for entity_id=%s after KYC approval: %s",
+                    sanitize_for_log(str(entity.id)),
+                    sanitize_for_log(str(funding_exc)),
                     exc_info=funding_exc,
                 )
         
     except Exception as e:
-        logger.error(f"[WEBHOOK] Error updating KYC status from webhook: {e}", exc_info=True)
+        logger.error("[WEBHOOK] Error updating KYC status from webhook: %s", sanitize_for_log(str(e)), exc_info=True)
         raise
 
 
@@ -572,9 +586,9 @@ async def _save_webhook_event(
                     if entity:
                         entity_id = str(entity.id)
                     else:
-                        logger.debug(f"[WEBHOOK] Entity not found for zynk_entity_id: {entity_id_str}")
+                        logger.debug("[WEBHOOK] Entity not found for zynk_entity_id: %s", sanitize_for_log(entity_id_str))
             except Exception as e:
-                logger.warning(f"[WEBHOOK] Error looking up entity: {e}")
+                logger.warning("[WEBHOOK] Error looking up entity: %s", sanitize_for_log(str(e)))
         
         # Try to find kyc_session_id in database if we have routing_id
         kyc_session_id = None
@@ -591,9 +605,9 @@ async def _save_webhook_event(
                 if kyc_session:
                     kyc_session_id = str(kyc_session.id)
                 else:
-                    logger.debug(f"[WEBHOOK] KYC session not found for routing_id: {kyc_session_id_str}, entity_id: {entity_id}")
+                    logger.debug("[WEBHOOK] KYC session not found for routing_id: %s, entity_id: %s", sanitize_for_log(kyc_session_id_str), sanitize_for_log(entity_id))
             except Exception as e:
-                logger.warning(f"[WEBHOOK] Error looking up KYC session: {e}")
+                logger.warning("[WEBHOOK] Error looking up KYC session: %s", sanitize_for_log(str(e)))
         
         # Store the full payload as JSON
         # Ensure payload is JSON-serializable
@@ -639,11 +653,14 @@ async def _save_webhook_event(
             raise Exception("Failed to create webhook event - no ID returned")
         
         logger.info(
-            f"[WEBHOOK] Saved webhook event to database: "
-            f"id={webhook_event_id}, category={event_category}, type={event_type}, "
-            f"entity_id={entity_id}, kyc_session_id={kyc_session_id}"
+            "[WEBHOOK] Saved webhook event to database: id=%s, category=%s, type=%s, entity_id=%s, kyc_session_id=%s",
+            sanitize_for_log(str(webhook_event_id)),
+            sanitize_for_log(event_category.value if event_category else "unknown"),
+            sanitize_for_log(event_type),
+            sanitize_for_log(entity_id) if entity_id else "[NULL]",
+            sanitize_for_log(kyc_session_id) if kyc_session_id else "[NULL]"
         )
-        
+
     except Exception as e:
-        logger.error(f"[WEBHOOK] Error saving webhook event to database: {e}", exc_info=True)
+        logger.error("[WEBHOOK] Error saving webhook event to database: %s", sanitize_for_log(str(e)), exc_info=True)
         raise
