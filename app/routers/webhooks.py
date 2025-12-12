@@ -97,12 +97,7 @@ async def receive_zynk_webhook(request: Request):
     
     event_category = body.get("eventCategory")
     
-    if event_category == "webhook":
-        try:
-            await _save_webhook_event(body, WebhookEventCategory.WEBHOOK, client_ip)
-        except Exception:
-            pass
-    elif event_category == "kyc":
+    if event_category == "kyc":
         try:
             await _save_webhook_event(body, WebhookEventCategory.KYC, client_ip)
         except Exception:
@@ -118,6 +113,7 @@ async def receive_zynk_webhook(request: Request):
         except Exception:
             pass
     else:
+        # Default to WEBHOOK category for "webhook" and any other event categories
         try:
             await _save_webhook_event(body, WebhookEventCategory.WEBHOOK, client_ip)
         except Exception:
