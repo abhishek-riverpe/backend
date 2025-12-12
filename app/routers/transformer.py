@@ -74,7 +74,7 @@ async def _upload_to_s3(file_content: bytes, file_name: str) -> str:
         url = f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{file_name}"
         
         return url
-    except Exception:
+    except Exception as e:
         raise internal_error(
             log_message=f"[S3] Failed to upload file '{file_name}' to S3: {e}",
             user_message="Failed to store uploaded file. Please try again later.",

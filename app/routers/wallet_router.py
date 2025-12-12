@@ -107,7 +107,7 @@ async def register_auth(
 
             if body.get("success"):
                 try:
-                    otp_response = await _initiate_otp_internal(entity_id, current_user.email)
+                    otp_response = await _initiate_otp_internal(entity_id)
                     return otp_response
                 except HTTPException:
                     raise
@@ -129,7 +129,7 @@ async def register_auth(
                 error_details = body.get("error", {}).get("details", "")
                 if "Entity already has a registered Turnkey organization" in error_details:
                     try:
-                        otp_response = await _initiate_otp_internal(entity_id, current_user.email)
+                        otp_response = await _initiate_otp_internal(entity_id)
                         return otp_response
                     except HTTPException:
                         raise
@@ -185,7 +185,7 @@ async def initiate_otp(
     try:
         entity_id = _clean_entity_id(current_user.zynk_entity_id)
 
-        result = await _initiate_otp_internal(entity_id, current_user.email)
+        result = await _initiate_otp_internal(entity_id)
         
         return result
 
@@ -221,7 +221,7 @@ async def start_session(
     if not public_key:
         private_hex, public_key = generate_keypair_crypto()
 
-    url = f"{settings.zynk_api_key}/api/v1/wallets/{entity_id}/start-session"
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{entity_id}/start-session"
     payload = {
         "publicKey": public_key,
         "otpId": otp_id,
@@ -630,6 +630,7 @@ async def submit_wallet(
         wallet_id = wallet_data.get("walletId")
         addresses = wallet_data.get("addresses", [])
 
+        wallet = None
         try:
             wallet_name = data.get("walletName", "Solana Wallet")
             chain = data.get("chain", "SOLANA")
@@ -697,17 +698,18 @@ async def submit_wallet(
                                         account_address = account_data.get("address") or account_details.get("address")
                                         
                                         try:
-                                            wallet_account = await prisma.wallet_accounts.create(
-                                                data={
-                                                    "wallet_id": wallet.id,
+                                            if wallet:
+                                                wallet_account = await prisma.wallet_accounts.create(
+                                                    data={
+                                                        "wallet_id": wallet.id,
                                                     "curve": account_details.get("curve", ""),
                                                     "path_format": account_details.get("pathFormat", ""),
                                                     "path": account_details.get("path", ""),
                                                     "address_format": account_details.get("addressFormat", ""),
                                                     "address": account_address
                                                 }
-                                            )
-                                            account_created = {
+                                                )
+                                                account_created = {
                                                 "address": account_address,
                                                 "curve": account_details.get("curve"),
                                                 "path": account_details.get("path"),

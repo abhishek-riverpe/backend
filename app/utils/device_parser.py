@@ -1,29 +1,8 @@
-"""
-Device and User-Agent Parser
-
-Parses user-agent strings to extract device, browser, and OS information.
-"""
-
 import re
-import logging
 from typing import Dict, Optional, Any
-
-logger = logging.getLogger(__name__)
 
 
 def parse_device_from_headers(request) -> Dict[str, Optional[str]]:
-    """
-    Extract device information from custom headers (prioritized for mobile apps)
-    or fall back to user-agent parsing.
-    
-    Args:
-        request: FastAPI Request object with headers
-        
-    Returns:
-        Dictionary with device_type, device_name, os_name, os_version, 
-        browser_name, browser_version, and app_version
-    """
-    # First, check for custom headers sent by mobile app (prioritized)
     device_type = request.headers.get("X-Device-Type")
     device_name = request.headers.get("X-Device-Name")
     os_name = request.headers.get("X-OS-Name")
@@ -32,37 +11,24 @@ def parse_device_from_headers(request) -> Dict[str, Optional[str]]:
     browser_version = request.headers.get("X-Browser-Version")
     app_version = request.headers.get("X-App-Version")
     
-    # Convert empty strings to None
     custom_headers = {
         "device_type": device_type if device_type else None,
         "device_name": device_name if device_name else None,
         "os_name": os_name if os_name else None,
         "os_version": os_version if os_version else None,
-        "browser_name": browser_name if browser_name else None,  # Usually null for apps
-        "browser_version": browser_version if browser_version else None,  # Usually null for apps
+        "browser_name": browser_name if browser_name else None,
+        "browser_version": browser_version if browser_version else None,
         "app_version": app_version if app_version else None,
     }
     
-    # If custom headers are present (mobile app), use them
     if custom_headers["device_type"] or custom_headers["os_name"]:
         return custom_headers
     
-    # Otherwise, fall back to user-agent parsing (web browsers)
     user_agent = request.headers.get("user-agent")
     return parse_user_agent(user_agent)
 
 
 def parse_user_agent(user_agent: Optional[str]) -> Dict[str, Optional[str]]:
-    """
-    Parse user-agent string to extract device, browser, and OS information.
-    
-    Args:
-        user_agent: User-agent string from request
-        
-    Returns:
-        Dictionary with device_type, device_name, os_name, os_version, 
-        browser_name, browser_version, and app_version
-    """
     if not user_agent:
         return {
             "device_type": None,
@@ -76,7 +42,6 @@ def parse_user_agent(user_agent: Optional[str]) -> Dict[str, Optional[str]]:
     
     user_agent_lower = user_agent.lower()
     
-    # Initialize defaults
     result: Dict[str, Optional[str]] = {
         "device_type": None,
         "device_name": None,
@@ -87,7 +52,6 @@ def parse_user_agent(user_agent: Optional[str]) -> Dict[str, Optional[str]]:
         "app_version": None,
     }
     
-    # Detect device type
     if "mobile" in user_agent_lower or "android" in user_agent_lower or "iphone" in user_agent_lower or "ipod" in user_agent_lower:
         result["device_type"] = "mobile"
     elif "tablet" in user_agent_lower or "ipad" in user_agent_lower:
@@ -95,10 +59,8 @@ def parse_user_agent(user_agent: Optional[str]) -> Dict[str, Optional[str]]:
     else:
         result["device_type"] = "desktop"
     
-    # Detect OS
     if "windows" in user_agent_lower:
         result["os_name"] = "Windows"
-        # Extract Windows version
         win_match = re.search(r'windows nt (\d+\.?\d*)', user_agent_lower)
         if win_match:
             version_map = {"10.0": "10", "6.3": "8.1", "6.2": "8", "6.1": "7"}
@@ -126,7 +88,6 @@ def parse_user_agent(user_agent: Optional[str]) -> Dict[str, Optional[str]]:
     elif "linux" in user_agent_lower:
         result["os_name"] = "Linux"
     
-    # Detect device name (mobile devices)
     if "iphone" in user_agent_lower:
         iphone_match = re.search(r'iphone(?:\s+os)?\s*(\d+)', user_agent_lower, re.IGNORECASE)
         if iphone_match:
@@ -142,14 +103,12 @@ def parse_user_agent(user_agent: Optional[str]) -> Dict[str, Optional[str]]:
         else:
             result["device_name"] = "Samsung"
     elif "android" in user_agent_lower:
-        # Try to extract device model
         model_match = re.search(r'android.*?;\s*([a-z0-9\s-]+?)(?:\s+build|\))', user_agent_lower)
         if model_match and len(model_match.group(1).strip()) < 30:
             result["device_name"] = model_match.group(1).strip().title()
         else:
             result["device_name"] = "Android Device"
     
-    # Detect browser
     if "chrome" in user_agent_lower and "edg" not in user_agent_lower:
         result["browser_name"] = "Chrome"
         chrome_match = re.search(r'chrome/([\d.]+)', user_agent_lower)
@@ -176,8 +135,6 @@ def parse_user_agent(user_agent: Optional[str]) -> Dict[str, Optional[str]]:
         if opera_match:
             result["browser_version"] = opera_match.group(1)
     
-    # Extract app version from custom headers or user-agent
-    # Look for app-specific patterns (e.g., RiverPe/1.0.0)
     app_match = re.search(r'riverpe[\/\s]+([\d.]+)', user_agent_lower, re.IGNORECASE)
     if app_match:
         result["app_version"] = app_match.group(1)

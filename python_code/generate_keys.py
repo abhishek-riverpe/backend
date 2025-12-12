@@ -18,7 +18,6 @@ def generate_keypair() -> Tuple[str, str]:
 if __name__ == "__main__":
     priv, pub = generate_keypair()
     
-    # Save to files (like JS version)
     with open('ephemeral_private.hex', 'w') as f:
         f.write(priv)
     with open('ephemeral_public.hex', 'w') as f:
