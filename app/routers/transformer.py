@@ -3,6 +3,7 @@ import base64
 import uuid
 import io
 import os
+import re
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File, Request
 from starlette.requests import Request
 from slowapi import Limiter
@@ -42,6 +43,45 @@ def _auth_header():
     return {
         "x-api-token": settings.zynk_api_key,
     }
+
+def _validate_safe_path_component(value: str, param_name: str, max_length: int = 100) -> str:
+    if not value or not isinstance(value, str):
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: must be a non-empty string")
+    
+    value = value.strip()
+    if not value:
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: cannot be empty")
+    
+    if len(value) > max_length:
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: exceeds maximum length of {max_length}")
+    
+    if not re.match(r'^[a-zA-Z0-9_-]+$', value):
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed")
+    
+    if '..' in value or '/' in value or '\\' in value:
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: path traversal characters are not allowed")
+    
+    return value
+
+def _validate_email_for_path(email: str) -> str:
+    if not email or not isinstance(email, str):
+        raise HTTPException(status_code=400, detail="Invalid email: must be a non-empty string")
+    
+    email = email.strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid email: cannot be empty")
+    
+    if len(email) > 254:
+        raise HTTPException(status_code=400, detail="Invalid email: exceeds maximum length")
+    
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, email):
+        raise HTTPException(status_code=400, detail="Invalid email format")
+    
+    if '..' in email or '/' in email or '\\' in email:
+        raise HTTPException(status_code=400, detail="Invalid email: path traversal characters are not allowed")
+    
+    return email
 
 def _validate_magic_bytes(file_content: bytes) -> str:
     if len(file_content) < 12:
@@ -144,7 +184,9 @@ async def _create_entity_in_zynk(payload: dict) -> dict:
     return await _make_zynk_request("POST", url, headers, json=payload)
 
 async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) -> dict:
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{entity_id}/{routing_id}"
+    validated_entity_id = _validate_safe_path_component(entity_id, "entity_id")
+    validated_routing_id = _validate_safe_path_component(routing_id, "routing_id")
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{validated_entity_id}/{validated_routing_id}"
     headers = {**_auth_header(), "Content-Type": "application/json"}
     return await _make_zynk_request("POST", url, headers, json=payload)
 
@@ -166,13 +208,16 @@ async def get_entity_by_id(
     entity_id: str,
     current: Entities = Depends(auth.get_current_entity)
 ):
+    _validate_safe_path_component(entity_id, "entity_id")
+    
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own entity data.")
 
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.zynk_entity_id}"
+    validated_entity_id = _validate_safe_path_component(current.zynk_entity_id, "entity_id")
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{validated_entity_id}"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     body = await _make_zynk_request("GET", url, headers, allow_404=True, custom_404_message="Entity not found in external service.")
@@ -206,11 +251,17 @@ async def upload_kyc_documents(
     date_of_birth: str = Form(None),
     current: Entities = Depends(auth.get_current_entity)
 ):
+    _validate_safe_path_component(entity_id, "entity_id")
+    _validate_safe_path_component(routing_id, "routing_id")
+    
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only upload KYC documents for your own entity.")
+    
+    validated_entity_id = _validate_safe_path_component(current.zynk_entity_id, "entity_id")
+    validated_routing_id = _validate_safe_path_component(routing_id, "routing_id")
 
     file_content = await file.read()
     
@@ -255,10 +306,10 @@ async def upload_kyc_documents(
     if safe_extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Invalid file extension")
     
-    secure_filename = f"kyc-{entity_id}-{uuid.uuid4()}{safe_extension}"
-    
+    secure_filename = f"kyc-{validated_entity_id}-{uuid.uuid4()}{safe_extension}"
+
     s3_url = await _upload_to_s3(file_content, secure_filename)
-    
+
     base64_document = base64.b64encode(file_content).decode('utf-8')
 
     payload = {}
@@ -278,7 +329,7 @@ async def upload_kyc_documents(
     personal_details['identity_document'] = f"data:{detected_mime_type};base64,{base64_document}"
     payload['personal_details'] = personal_details
 
-    zynk_response = await _submit_kyc_to_zynk(entity_id, routing_id, payload)
+    zynk_response = await _submit_kyc_to_zynk(validated_entity_id, validated_routing_id, payload)
 
     return KycUploadResponse(
         success=True,
@@ -293,6 +344,8 @@ async def get_entity_kyc_status(
     entity_id: str,
     current: Entities = Depends(auth.get_current_entity)
 ):
+    _validate_safe_path_component(entity_id, "entity_id")
+    
     zynk_entity_id = getattr(current, "zynk_entity_id", None) or getattr(current, "external_entity_id", None)
     if not zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
@@ -300,7 +353,8 @@ async def get_entity_kyc_status(
     if zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC data.")
 
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{zynk_entity_id}"
+    validated_entity_id = _validate_safe_path_component(zynk_entity_id, "entity_id")
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/{validated_entity_id}"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     body = await _make_zynk_request("GET", url, headers, allow_404=True, custom_404_message="KYC data not found for the entity in external service.", reject_message="Verification service rejected the request. Please try again later.")
@@ -325,13 +379,18 @@ async def get_entity_kyc_requirements(
     routing_id: str,
     current: Entities = Depends(auth.get_current_entity)
 ):
+    _validate_safe_path_component(entity_id, "entity_id")
+    _validate_safe_path_component(routing_id, "routing_id")
+    
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC requirements.")
 
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{current.zynk_entity_id}/{routing_id}"
+    validated_entity_id = _validate_safe_path_component(current.zynk_entity_id, "entity_id")
+    validated_routing_id = _validate_safe_path_component(routing_id, "routing_id")
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/kyc/requirements/{validated_entity_id}/{validated_routing_id}"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     body = await _make_zynk_request("GET", url, headers, allow_404=True, custom_404_message="KYC requirements not found for the entity and routing ID in external service.")
@@ -353,13 +412,16 @@ async def get_entity_kyc_documents(
     entity_id: str,
     current: Entities = Depends(auth.get_current_entity)
 ):
+    _validate_safe_path_component(entity_id, "entity_id")
+    
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
     if current.zynk_entity_id != entity_id:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own KYC documents.")
 
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{current.zynk_entity_id}/kyc/documents"
+    validated_entity_id = _validate_safe_path_component(current.zynk_entity_id, "entity_id")
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/{validated_entity_id}/kyc/documents"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     body = await _make_zynk_request("GET", url, headers, allow_404=True, custom_404_message="KYC documents not found for the entity in external service.")
@@ -375,13 +437,16 @@ async def get_entity_by_email(
     email: str,
     current: Entities = Depends(auth.get_current_entity)
 ):
-    if current.email != email:
+    validated_email = _validate_email_for_path(email)
+    
+    if current.email != validated_email:
         raise HTTPException(status_code=403, detail="Access denied. You can only access your own entity data.")
 
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
 
-    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/email/{email}"
+    safe_email = _validate_email_for_path(current.email)
+    url = f"{settings.zynk_base_url}/api/v1/transformer/entity/email/{safe_email}"
     headers = {**_auth_header(), "Accept": "application/json"}
 
     body = await _make_zynk_request("GET", url, headers, allow_404=True, custom_404_message="Entity not found in external service.")
