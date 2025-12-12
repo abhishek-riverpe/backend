@@ -39,9 +39,7 @@ router = APIRouter(
     tags=["auth"],
 )
 
-
 limiter = Limiter(key_func=get_remote_address)
-
 
 async def _email_exists_in_zynk(email: str) -> bool:
     if not settings.zynk_base_url or not settings.zynk_api_key:
@@ -79,8 +77,6 @@ async def _email_exists_in_zynk(email: str) -> bool:
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"Upstream email lookup failed: {error_detail}",
     )
-
-
 
 @router.post("/check-captcha-required")
 async def check_captcha_required(data: dict):
@@ -120,7 +116,6 @@ async def check_email(data: dict, request: Request):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email is required"
         )
-    
 
     if not "@" in email or "." not in email.split("@")[1]:
         raise HTTPException(
@@ -195,7 +190,6 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             detail="Email already registered",
         )
 
-
     pwd_hash = hash_password(password)
 
     entity = None
@@ -243,8 +237,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
                         "status": "ACTIVE",
                     }
                 )
-            
-    
+
             try:
                 await prisma.kyc_sessions.create(
                     data={
@@ -272,7 +265,6 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     access_token = auth.create_access_token(data={"sub": str(entity.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(entity.id), "type": "refresh"})
 
-
     is_production = not settings.frontend_url.startswith("http://localhost")
     
     response.set_cookie(
@@ -294,7 +286,6 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
         max_age=24 * 60 * 60,        
         path="/",
     )
-
 
     response.headers["Location"] = f"/api/v1/entities/{entity.id}"
 
@@ -550,7 +541,6 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         "meta": {},
     }
 
-
 @router.post("/forgot-password/request", response_model=schemas.ApiResponse)
 async def request_password_reset(payload: schemas.ForgotPasswordRequest):
     email = normalize_email(payload.email)
@@ -574,7 +564,6 @@ async def request_password_reset(payload: schemas.ForgotPasswordRequest):
         "error": None,
         "meta": {},
     }
-
 
 @router.post("/forgot-password/confirm", response_model=schemas.ApiResponse)
 async def confirm_password_reset(payload: schemas.ForgotPasswordConfirm):
@@ -753,7 +742,7 @@ async def logout(request: Request, response: Response):
         "error": None,
         "meta": {},
     }
-    
+
 @router.post("/change-password", response_model=schemas.ApiResponse)
 async def change_password(
     payload: schemas.ChangePasswordRequest,

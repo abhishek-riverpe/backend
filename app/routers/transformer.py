@@ -169,7 +169,6 @@ async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) ->
         user_message="Verification service is currently unavailable. Please try again later.",
     )
 
-
 @router.get("/entity/entities", response_model=ZynkEntitiesResponse)
 async def get_all_entities(current: Entities = Depends(auth.get_current_entity)):
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/entities"
@@ -284,8 +283,8 @@ async def get_entity_by_id(
         for field in required_fields:
             if field not in entity:
                 raise upstream_error(
-                user_message="Verification service returned an unexpected response. Please try again later.",
-            )
+                    user_message="Verification service returned an unexpected response. Please try again later.",
+                )
 
         return body
 
@@ -653,8 +652,8 @@ async def get_entity_by_email(
         for field in required_fields:
             if field not in entity:
                 raise upstream_error(
-                user_message="Verification service response is incomplete. Please try again later.",
-            )
+                    user_message="Verification service response is incomplete. Please try again later.",
+                )
 
         return body
 
