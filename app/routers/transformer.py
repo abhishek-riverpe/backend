@@ -87,7 +87,7 @@ async def _create_entity_in_zynk(payload: dict) -> dict:
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.post(url, headers=headers, json=payload)
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -102,7 +102,6 @@ async def _create_entity_in_zynk(payload: dict) -> dict:
             )
 
         if not (200 <= resp.status_code < 300):
-            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             raise upstream_error(
                 user_message="Verification service is currently unavailable. Please try again later.",
             )
@@ -132,7 +131,7 @@ async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) ->
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.post(url, headers=headers, json=payload)
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -147,7 +146,6 @@ async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) ->
             )
 
         if not (200 <= resp.status_code < 300):
-            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             raise upstream_error(
                 user_message="Verification service is currently unavailable. Please try again later.",
             )
@@ -178,7 +176,7 @@ async def get_all_entities(current: Entities = Depends(auth.get_current_entity))
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -193,7 +191,6 @@ async def get_all_entities(current: Entities = Depends(auth.get_current_entity))
             )
 
         if not (200 <= resp.status_code < 300):
-            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             raise upstream_error(
                 user_message="Verification service is currently unavailable. Please try again later.",
             )
@@ -237,7 +234,7 @@ async def get_entity_by_id(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -404,7 +401,7 @@ async def get_entity_kyc_status(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -475,7 +472,7 @@ async def get_entity_kyc_requirements(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -543,7 +540,7 @@ async def get_entity_kyc_documents(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -606,7 +603,7 @@ async def get_entity_by_email(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.get(url, headers=headers)
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
