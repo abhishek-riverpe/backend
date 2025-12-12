@@ -163,7 +163,6 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             prisma_date_of_birth = datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
         except (ValueError, TypeError) as e:
             raise internal_error(
-                log_message=f"[SIGNUP] Invalid date format for email {email}: {date_of_birth}. Error: {e}",
                 user_message="Invalid date format. Please use MM/DD/YYYY format.",
                 status_code=400,
             )
@@ -264,7 +263,6 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             if isinstance(e, HTTPException):
                 raise
             raise upstream_error(
-                log_message=f"[SIGNUP] Failed to create entity in Zynk Labs for email {email}: {e}",
                 user_message="Failed to create account with verification service. Please try again later.",
             )
 
@@ -681,7 +679,6 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
         raise
     except Exception as e:
         raise internal_error(
-            log_message=f"[AUTH] Error during token refresh: {e}",
             user_message="Token refresh failed. Please log in again.",
             status_code=status.HTTP_401_UNAUTHORIZED,
         )

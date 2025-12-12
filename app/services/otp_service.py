@@ -97,8 +97,6 @@ class OTPService:
         otp_code: str
     ) -> Tuple[bool, str, Optional[dict]]:
         try:
-            full_phone = f"{country_code}{phone_number}"
-
             otp_record = await self.prisma.otp_verifications.find_first(
                 where={
                     "phone_number": phone_number,
@@ -425,13 +423,13 @@ class OTPService:
     async def _send_sms(self, phone_number: str, otp_code: str) -> bool:
         try:
             if self.sms_provider == "twilio":
-                return await self._send_via_twilio(phone_number, otp_code)
+                return await self._send_via_twilio()
             else:
                 return True
         except Exception:
             return False
 
-    async def _send_via_twilio(self, phone_number: str, otp_code: str) -> bool:
+    async def _send_via_twilio(self) -> bool:
         try:
             return True
 

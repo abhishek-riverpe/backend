@@ -37,7 +37,6 @@ async def google_callback(request: Request):
         token = await oauth.google.authorize_access_token(request)
     except OAuthError as e:
         raise internal_error(
-            log_message=f"[OAUTH] Google OAuth error during callback: {e.error}",
             user_message="Authentication failed. Please try again.",
         )
 

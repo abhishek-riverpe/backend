@@ -58,7 +58,7 @@ async def get_location_from_ip(ip_address: Optional[str]) -> Dict[str, Optional[
             "latitude": None,
             "longitude": None,
         }
-    except Exception as e:
+    except Exception:
         return {
             "country": None,
             "city": None,

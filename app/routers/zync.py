@@ -42,28 +42,24 @@ async def _call_zynk_create_entity(payload: dict) -> str:
             body = resp.json()
         except ValueError:
             raise upstream_error(
-                log_message=f"[ZYNK] Invalid JSON while creating entity at {url}. Response preview: {resp.text[:200]}",
                 user_message="Verification service returned an invalid response. Please try again later.",
             )
 
         if not (200 <= resp.status_code < 300):
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             raise upstream_error(
-                log_message=f"[ZYNK] Upstream error {resp.status_code} while creating entity at {url}: {error_detail}",
                 user_message="Verification service is currently unavailable. Please try again later.",
             )
 
         if not isinstance(body, dict) or body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Upstream returned unsuccessful response"))
             raise upstream_error(
-                log_message=f"[ZYNK] Upstream rejected request while creating entity at {url}: {error_detail}",
                 user_message="Verification service rejected the request. Please try again later.",
             )
 
         ext_id = body.get("data", {}).get("entityId")
         if not ext_id or not isinstance(ext_id, str):
             raise upstream_error(
-                log_message=f"[ZYNK] Invalid or missing entityId while creating entity at {url}. Response data: {body.get('data', {})}",
                 user_message="Verification service returned an invalid response. Please try again later.",
             )
 
@@ -140,13 +136,11 @@ async def get_kyc_requirements(
         raise HTTPException(status_code=502, detail="Upstream service unavailable")
     except ValueError:
         raise upstream_error(
-            log_message=f"[ZYNK] Invalid JSON response from KYC requirements endpoint",
             user_message="Verification service returned an invalid response"
         )
     
     if not isinstance(data, dict):
         raise upstream_error(
-            log_message=f"[ZYNK] Unexpected response format from KYC requirements: {data}",
             user_message="Verification service returned an unexpected response"
         )
     

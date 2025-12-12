@@ -212,7 +212,6 @@ async def create_teleport(
             if attempt == 0:
                 continue
             raise upstream_error(
-                log_message=f"[ZYNK] Request error while creating teleport for entity {entity_id} at {url}: {exc}",
                 user_message="Verification service is currently unreachable. Please try again later.",
             )
         
@@ -220,27 +219,23 @@ async def create_teleport(
             body = resp.json()
         except ValueError:
             raise upstream_error(
-                log_message=f"[ZYNK] Invalid JSON while creating teleport for entity {entity_id} at {url}. Response preview: {resp.text[:200]}",
                 user_message="Verification service returned an invalid response. Please try again later.",
             )
         
         if not (200 <= resp.status_code < 300):
             error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             raise upstream_error(
-                log_message=f"[ZYNK] Upstream error {resp.status_code} while creating teleport for entity {entity_id} at {url}: {error_detail}",
                 user_message="Verification service is currently unavailable. Please try again later.",
             )
         
         if not isinstance(body, dict):
             raise upstream_error(
-                log_message=f"[ZYNK] Unexpected response structure while creating teleport for entity {entity_id} at {url}: {body}",
                 user_message="Verification service returned an unexpected response. Please try again later.",
             )
         
         if body.get("success") is not True:
             error_detail = body.get("message", body.get("error", "Request was not successful"))
             raise upstream_error(
-                log_message=f"[ZYNK] Teleport creation rejected by upstream for entity {entity_id} at {url}: {error_detail}",
                 user_message="Verification service rejected the request. Please contact support if this continues.",
             )
         
@@ -254,7 +249,6 @@ async def create_teleport(
         
         if not teleport_id:
             raise upstream_error(
-                log_message=f"[ZYNK] Missing teleportId in ZynkLabs response for entity {entity_id} at {url}: {body}",
                 user_message="Verification service returned an incomplete response. Please try again later.",
             )
         
@@ -267,7 +261,6 @@ async def create_teleport(
         )
     
     raise upstream_error(
-        log_message=f"[ZYNK] Failed to create teleport for entity {entity_id} at {url} after multiple attempts",
         user_message="Verification service is currently unavailable. Please try again later.",
     )
 

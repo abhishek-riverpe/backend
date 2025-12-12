@@ -644,7 +644,7 @@ async def submit_wallet(
                     "status": "ACTIVE"
                 }
             )
-        except Exception as db_error:
+        except Exception:
             pass
     
         account_prepare_data = None
@@ -698,7 +698,7 @@ async def submit_wallet(
                                         
                                         try:
                                             if wallet:
-                                                wallet_account = await prisma.wallet_accounts.create(
+                                                await prisma.wallet_accounts.create(
                                                     data={
                                                         "wallet_id": wallet.id,
                                                     "curve": account_details.get("curve", ""),
@@ -715,19 +715,19 @@ async def submit_wallet(
                                                 "pathFormat": account_details.get("pathFormat"),
                                                 "addressFormat": account_details.get("addressFormat")
                                             }
-                                        except Exception as db_error:
+                                        except Exception:
                                             pass
                                     else:
                                         pass
                                 else:
                                     pass
-                            except Exception as account_error:
+                            except Exception:
                                 pass
                     else:
                         pass
                 else:
                     pass
-        except Exception as prepare_error:
+        except Exception:
             pass
 
         response_data = {
@@ -896,7 +896,7 @@ async def submit_account(
                     detail="Wallet not found in database"
                 )
             
-            wallet_account = await prisma.wallet_accounts.create(
+            await prisma.wallet_accounts.create(
                 data={
                     "wallet_id": wallet.id,
                     "curve": account.get("curve", ""),
@@ -907,7 +907,7 @@ async def submit_account(
                 }
             )
             
-        except Exception as db_error:
+        except Exception:
             pass
 
         return {
