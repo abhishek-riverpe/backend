@@ -112,7 +112,6 @@ async def _create_entity_in_zynk(payload: dict) -> dict:
             )
 
         if body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Request was not successful"))
             raise upstream_error(
                 user_message="Verification service rejected the request. Please contact support if this continues.",
             )
@@ -156,7 +155,6 @@ async def _submit_kyc_to_zynk(entity_id: str, routing_id: str, payload: dict) ->
             )
 
         if body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Request was not successful"))
             raise upstream_error(
                 user_message="Verification service rejected the request. Please contact support if this continues.",
             )
@@ -201,7 +199,6 @@ async def get_all_entities(current: Entities = Depends(auth.get_current_entity))
             )
 
         if body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Request was not successful"))
             raise upstream_error(
                 user_message="Verification service rejected the request. Please contact support if this continues.",
             )
