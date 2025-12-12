@@ -1,4 +1,3 @@
-# Export all schemas for convenient imports
 from .auth import (
     SignInInput,
     UserCreate,

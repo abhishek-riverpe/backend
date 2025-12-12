@@ -13,7 +13,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     date_of_birth: str = Field(..., min_length=1)
-    nationality: str = Field(..., min_length=1, max_length=3)  # Country code like 'US', 'IN'
+    nationality: str = Field(..., min_length=1, max_length=3)
     phone_number: str = Field(..., min_length=1)
     country_code: str = Field(..., min_length=1)
     captcha_id: str = Field(..., description="CAPTCHA identifier")
@@ -44,10 +44,6 @@ class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., min_length=1, description="Current password")
     new_password: str = Field(..., min_length=8, max_length=128, description="New password")
 
-
-# -----------------------------
-# Unified API response schemas
-# -----------------------------
 
 class UserOut(BaseModel):
     entity_id: Optional[str] = None

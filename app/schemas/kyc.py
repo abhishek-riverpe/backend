@@ -4,7 +4,6 @@ from typing import Optional, Dict, Any
 
 
 class KycLinkData(BaseModel):
-    """KYC link data returned to the frontend"""
     message: str = Field(..., description="Success message")
     kycLink: Optional[str] = Field(None, description="Persona verification link")
     tosLink: Optional[str] = Field(None, description="Terms of service link")
@@ -13,7 +12,6 @@ class KycLinkData(BaseModel):
 
 
 class KycLinkResponse(BaseModel):
-    """Standard API response for KYC link endpoint"""
     success: bool
     data: Optional[KycLinkData] = None
     error: Optional[Dict[str, Any]] = None
@@ -21,7 +19,6 @@ class KycLinkResponse(BaseModel):
 
 
 class KycStatusData(BaseModel):
-    """KYC status data for the authenticated user"""
     status: str = Field(..., description="Current KYC status for the user")
     routing_id: Optional[str] = Field(None, description="Routing identifier used for the KYC flow")
     kyc_link: Optional[str] = Field(None, description="KYC verification link if it exists")
@@ -31,7 +28,6 @@ class KycStatusData(BaseModel):
 
 
 class KycStatusResponse(BaseModel):
-    """Standard API response for KYC status endpoint"""
     success: bool
     data: Optional[KycStatusData] = None
     error: Optional[Dict[str, Any]] = None

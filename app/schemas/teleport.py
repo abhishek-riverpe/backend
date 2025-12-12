@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional
 from .auth import ApiResponse
 
 class CreateTeleportRequest(BaseModel):
