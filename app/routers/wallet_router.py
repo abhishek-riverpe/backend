@@ -62,6 +62,41 @@ def _zynk_auth_header():
     }
 
 
+def _handle_zynk_response_error(response: httpx.Response) -> None:
+    """Handle error responses from Zynk API."""
+    try:
+        error_detail = response.json().get("message", f"HTTP {response.status_code}")
+    except Exception:
+        error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"Zynk API error: {error_detail}"
+    )
+
+
+def _validate_zynk_response_success(body: dict) -> None:
+    """Validate that Zynk API response indicates success."""
+    if not body.get("success"):
+        error_msg = body.get("message", "Zynk API returned error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=error_msg
+        )
+
+
+async def _handle_otp_initiation_error(entity_id: str) -> dict:
+    """Handle OTP initiation with consistent error handling."""
+    try:
+        return await _initiate_otp_internal(entity_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initiate OTP: {str(e)}"
+        )
+
+
 async def _initiate_otp_internal(entity_id: str) -> dict:
     url = f"{settings.zynk_base_url}/api/v1/wallets/{entity_id}/initiate-otp"
     
@@ -71,25 +106,10 @@ async def _initiate_otp_internal(entity_id: str) -> dict:
         response = await client.post(url, headers=headers)
         
         if response.status_code != 200:
-            try:
-                error_body = response.json()
-                error_detail = error_body.get("message", f"HTTP {response.status_code}")
-            except:
-                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
-            
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
-            )
+            _handle_zynk_response_error(response)
         
         body = response.json()
-        
-        if not body.get("success"):
-            error_msg = body.get("message", "Zynk API returned error")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
-            )
+        _validate_zynk_response_success(body)
         
         data = body.get("data", {})
         
@@ -125,16 +145,8 @@ async def register_auth(
             body = response.json()
 
             if body.get("success"):
-                try:
-                    otp_response = await _initiate_otp_internal(entity_id)
-                    return otp_response
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to initiate OTP: {str(e)}"
-                    )
+                otp_response = await _handle_otp_initiation_error(entity_id)
+                return otp_response
             else:
                 error_msg = body.get("error", {}).get("message", "Unknown error")
                 raise HTTPException(
@@ -147,16 +159,8 @@ async def register_auth(
                 body = response.json()
                 error_details = body.get("error", {}).get("details", "")
                 if "Entity already has a registered Turnkey organization" in error_details:
-                    try:
-                        otp_response = await _initiate_otp_internal(entity_id)
-                        return otp_response
-                    except HTTPException:
-                        raise
-                    except Exception as e:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to initiate OTP: {str(e)}"
-                        )
+                    otp_response = await _handle_otp_initiation_error(entity_id)
+                    return otp_response
                 else:
                     error_msg = body.get("error", {}).get("message", "Bad Request")
                     raise HTTPException(
@@ -170,15 +174,7 @@ async def register_auth(
                 )
 
         else:
-            try:
-                error_detail = response.json().get("message", f"HTTP {response.status_code}")
-            except:
-                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
-
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
-            )
+            _handle_zynk_response_error(response)
 
 
 @router.post("/generate-keypair")
@@ -201,20 +197,9 @@ async def initiate_otp(
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
-    try:
-        entity_id = _clean_entity_id(current_user.zynk_entity_id)
-
-        result = await _initiate_otp_internal(entity_id)
-        
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initiate OTP: {str(e)}"
-        )
+    entity_id = _clean_entity_id(current_user.zynk_entity_id)
+    result = await _handle_otp_initiation_error(entity_id)
+    return result
 
 
 @router.post("/start-session")
@@ -255,25 +240,10 @@ async def start_session(
         )
 
         if response.status_code != 200:
-            try:
-                error_body = response.json()
-                error_detail = error_body.get("message", f"HTTP {response.status_code}")
-            except:
-                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
-            
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
-            )
+            _handle_zynk_response_error(response)
 
         body = response.json()
-
-        if not body.get("success"):
-            error_msg = body.get("message", "Zynk API returned error")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
-            )
+        _validate_zynk_response_success(body)
 
         credential_bundle = body.get("data", {}).get("credentialBundle")
         if not credential_bundle:
@@ -357,19 +327,10 @@ async def prepare_wallet(
         )
 
         if response.status_code != 200:
-            error_detail = response.json().get("message", f"HTTP {response.status_code}")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
-            )
+            _handle_zynk_response_error(response)
 
         body = response.json()
-        if not body.get("success"):
-            error_msg = body.get("message", "Zynk API returned error")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
-            )
+        _validate_zynk_response_success(body)
 
         data_response = body.get("data", {})
         payload_id = data_response.get("payloadId")
@@ -484,27 +445,29 @@ async def _get_validated_user_wallet(current_user):
     return user, wallet
 
 
+async def _make_zynk_get_request(url: str, error_message: str) -> dict:
+    """Make a GET request to Zynk API and return JSON response."""
+    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+        response = await client.get(url, headers=_zynk_auth_header())
+    
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=error_message
+        )
+    
+    return response.json()
+
+
 @router.get("/")
 @limiter.limit("60/minute")
 async def get_wallet_details(
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
-
     user, _ = await _get_validated_user_wallet(current_user)
-
     url = f"{settings.zynk_base_url}/api/v1/wallets/{user.wallet_id}"
-    
-    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-        response = await client.get(url, headers=_zynk_auth_header())
-
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to fetch wallet details from Zynk API"
-        )
-    
-    return response.json()
+    return await _make_zynk_get_request(url, "Failed to fetch wallet details from Zynk API")
 
 
 @router.get("/balances")
@@ -513,21 +476,9 @@ async def get_wallet_balances(
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
-
     user, _ = await _get_validated_user_wallet(current_user)
-
     url = f"{settings.zynk_base_url}/api/v1/wallets/{user.wallet_id}/balances"
-    
-    async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-        response = await client.get(url, headers=_zynk_auth_header())
-
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to fetch wallet balances from Zynk API"
-        )
-    
-    return response.json()
+    return await _make_zynk_get_request(url, "Failed to fetch wallet balances from Zynk API")
 
 
 
@@ -655,19 +606,10 @@ async def submit_wallet(
         )
 
         if response.status_code != 200:
-            error_detail = response.json().get("message", f"HTTP {response.status_code}")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
-            )
+            _handle_zynk_response_error(response)
 
         body = response.json()
-        if not body.get("success"):
-            error_msg = body.get("message", "Zynk API returned error")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
-            )
+        _validate_zynk_response_success(body)
 
         wallet_data = body.get("data", {})
         wallet_id = wallet_data.get("walletId")
@@ -833,22 +775,10 @@ async def prepare_account(
         )
         
         if response.status_code != 200:
-            try:
-                error_detail = response.json().get("message", f"HTTP {response.status_code}")
-            except:
-                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
-            )
+            _handle_zynk_response_error(response)
         
         body = response.json()
-        if not body.get("success"):
-            error_msg = body.get("message", "Zynk API returned error")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
-            )
+        _validate_zynk_response_success(body)
         
         data_response = body.get("data", {})
         payload_id = data_response.get("payloadId")
@@ -904,22 +834,10 @@ async def submit_account(
         )
         
         if response.status_code != 200:
-            try:
-                error_detail = response.json().get("message", f"HTTP {response.status_code}")
-            except:
-                error_detail = f"HTTP {response.status_code}: {response.text[:200]}"
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Zynk API error: {error_detail}"
-            )
+            _handle_zynk_response_error(response)
         
         body = response.json()
-        if not body.get("success"):
-            error_msg = body.get("message", "Zynk API returned error")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=error_msg
-            ) 
+        _validate_zynk_response_success(body) 
         
         account_data = body.get("data", {})
         wallet_id = account_data.get("walletId")
