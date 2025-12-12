@@ -72,7 +72,7 @@ class OTPService:
                 }
             )
 
-            sms_sent = await self._send_sms(full_phone, otp_code)
+            sms_sent = await self._send_sms()
             
             if not sms_sent:
                 return False, "Failed to send OTP. Please try again.", None
