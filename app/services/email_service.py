@@ -1,23 +1,12 @@
-"""
-Email Service
-
-Handles sending transactional emails including password change notifications.
-"""
-
-import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
+from fastapi_mail import FastMail, MessageSchema, ConnectionConfig # type: ignore
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
 
 
 class EmailService:
-    """Service for sending transactional emails"""
     
     def __init__(self):
-        # Initialize FastMail configuration
         self.mail_config = None
         if settings.mail_username and settings.mail_password:
             self.mail_config = ConnectionConfig(
@@ -33,8 +22,6 @@ class EmailService:
                 VALIDATE_CERTS=settings.validate_certs
             )
             self.fast_mail = FastMail(self.mail_config)
-        else:
-            logger.warning("[EMAIL] Email configuration not found. Email service will run in mock mode.")
     
     async def send_password_change_notification(
         self,
@@ -45,24 +32,9 @@ class EmailService:
         ip_address: Optional[str] = None,
         timestamp: Optional[datetime] = None
     ) -> bool:
-        """
-        Send password change notification email with security details.
-        
-        Args:
-            email: Recipient email address
-            user_name: User's full name
-            device_info: Device information dict (device_type, os_name, browser_name, etc.)
-            location_info: Location information dict (city, country, etc.)
-            ip_address: IP address from which password was changed
-            timestamp: When password was changed
-            
-        Returns:
-            bool: True if email sent successfully, False otherwise
-        """
         if not timestamp:
             timestamp = datetime.now()
         
-        # Format device information
         device_type = device_info.get("device_type") or "Unknown Device"
         os_name = device_info.get("os_name") or "Unknown OS"
         os_version = device_info.get("os_version") or ""
@@ -85,10 +57,8 @@ class EmailService:
         country = location_info.get("country") or "Unknown Country"
         location_description = f"{city}, {country}"
         
-        # Format timestamp
         formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
         
-        # Create email HTML body
         email_html = f"""
 <!DOCTYPE html>
 <html>
@@ -165,11 +135,8 @@ class EmailService:
         
         try:
             if not self.mail_config:
-                logger.info(f"[EMAIL] MOCK - Password change notification to {email}")
-                logger.info(f"[EMAIL] Device: {device_description}, Location: {location_description}")
                 return True
             
-            # Create email message
             message = MessageSchema(
                 subject="🔒 Password Changed - Security Notification",
                 recipients=[email],
@@ -177,13 +144,10 @@ class EmailService:
                 subtype="html"
             )
             
-            # Send email
             await self.fast_mail.send_message(message)
-            logger.info(f"[EMAIL] Password change notification sent successfully to {email}")
             return True
             
-        except Exception as e:
-            logger.error(f"[EMAIL] Error sending password change notification: {str(e)}", exc_info=True)
+        except Exception:
             return False
 
 
@@ -197,25 +161,9 @@ class EmailService:
         ip_address: Optional[str] = None,
         timestamp: Optional[datetime] = None
     ) -> bool:
-        """
-        Send failed login attempt notification email with security details.
-        
-        Args:
-            email: Recipient email address
-            user_name: User's full name
-            failed_attempts: Number of failed login attempts
-            device_info: Device information dict (device_type, os_name, browser_name, etc.)
-            location_info: Location information dict (city, country, etc.)
-            ip_address: IP address from which login attempts were made
-            timestamp: When the failed attempts occurred
-            
-        Returns:
-            bool: True if email sent successfully, False otherwise
-        """
         if not timestamp:
             timestamp = datetime.now()
         
-        # Format device information
         device_type = device_info.get("device_type") or "Unknown Device"
         os_name = device_info.get("os_name") or "Unknown OS"
         os_version = device_info.get("os_version") or ""
@@ -238,10 +186,8 @@ class EmailService:
         country = location_info.get("country") or "Unknown Country"
         location_description = f"{city}, {country}"
         
-        # Format timestamp
         formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
         
-        # Create email HTML body
         email_html = f"""
 <!DOCTYPE html>
 <html>
@@ -342,11 +288,8 @@ class EmailService:
         
         try:
             if not self.mail_config:
-                logger.info(f"[EMAIL] MOCK - Failed login notification to {email}")
-                logger.info(f"[EMAIL] {failed_attempts} failed attempts from Device: {device_description}, Location: {location_description}")
                 return True
             
-            # Create email message
             message = MessageSchema(
                 subject="⚠️ Suspicious Login Attempts Detected - Security Alert",
                 recipients=[email],
@@ -354,13 +297,10 @@ class EmailService:
                 subtype="html"
             )
             
-            # Send email
             await self.fast_mail.send_message(message)
-            logger.info(f"[EMAIL] Failed login notification sent successfully to {email} ({failed_attempts} attempts)")
             return True
             
-        except Exception as e:
-            logger.error(f"[EMAIL] Error sending failed login notification: {str(e)}", exc_info=True)
+        except Exception:
             return False
 
     async def send_kyc_link_email(
@@ -370,25 +310,11 @@ class EmailService:
         kyc_link: str,
         timestamp: Optional[datetime] = None
     ) -> bool:
-        """
-        Send KYC verification link email to the user.
-        
-        Args:
-            email: Recipient email address
-            user_name: User's full name
-            kyc_link: KYC verification link from Zynk Labs
-            timestamp: When the KYC link was generated
-            
-        Returns:
-            bool: True if email sent successfully, False otherwise
-        """
         if not timestamp:
             timestamp = datetime.now()
         
-        # Format timestamp
         formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
         
-        # Create email HTML body
         email_html = f"""
 <!DOCTYPE html>
 <html>
@@ -465,11 +391,8 @@ class EmailService:
         
         try:
             if not self.mail_config:
-                logger.info(f"[EMAIL] MOCK - KYC link email to {email}")
-                logger.info(f"[EMAIL] KYC Link: {kyc_link}")
                 return True
             
-            # Create email message
             message = MessageSchema(
                 subject="✅ Complete Your Identity Verification - RiverPe KYC",
                 recipients=[email],
@@ -477,13 +400,10 @@ class EmailService:
                 subtype="html"
             )
             
-            # Send email
             await self.fast_mail.send_message(message)
-            logger.info(f"[EMAIL] KYC link email sent successfully to {email}")
             return True
             
-        except Exception as e:
-            logger.error(f"[EMAIL] Error sending KYC link email: {str(e)}", exc_info=True)
+        except Exception:
             return False
 
     async def send_funding_account_created_notification(
@@ -496,31 +416,13 @@ class EmailService:
         currency: str = "USD",
         timestamp: Optional[datetime] = None
     ) -> bool:
-        """
-        Send funding account creation notification email with account details.
-        
-        Args:
-            email: Recipient email address
-            user_name: User's full name
-            bank_name: Bank name
-            bank_account_number: Full bank account number (will be masked in email)
-            bank_routing_number: Bank routing number
-            currency: Account currency (default: USD)
-            timestamp: When the funding account was created
-            
-        Returns:
-            bool: True if email sent successfully, False otherwise
-        """
         if not timestamp:
             timestamp = datetime.now()
         
-        # Format timestamp
         formatted_time = timestamp.strftime("%B %d, %Y at %I:%M %p UTC")
         
-        # Mask account number (show only last 4 digits)
         masked_account_number = f"****{bank_account_number[-4:]}" if len(bank_account_number) >= 4 else "****"
         
-        # Create email HTML body
         email_html = f"""
 <!DOCTYPE html>
 <html>
@@ -599,11 +501,8 @@ class EmailService:
         
         try:
             if not self.mail_config:
-                logger.info(f"[EMAIL] MOCK - Funding account created notification to {email}")
-                logger.info(f"[EMAIL] Bank: {bank_name}, Account: {masked_account_number}")
                 return True
             
-            # Create email message
             message = MessageSchema(
                 subject="✅ Funding Account Created - RiverPe",
                 recipients=[email],
@@ -611,16 +510,12 @@ class EmailService:
                 subtype="html"
             )
             
-            # Send email
             await self.fast_mail.send_message(message)
-            logger.info(f"[EMAIL] Funding account created notification sent successfully to {email}")
             return True
             
-        except Exception as e:
-            logger.error(f"[EMAIL] Error sending funding account created notification: {str(e)}", exc_info=True)
+        except Exception:
             return False
 
 
-# Global instance
 email_service = EmailService()
 

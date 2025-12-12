@@ -1,4 +1,3 @@
-# enums.py
 from enum import Enum
 
 class EntityStatusEnum(str, Enum):

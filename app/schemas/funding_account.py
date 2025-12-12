@@ -4,7 +4,6 @@ from typing import Optional, Dict, Any
 
 
 class FundingAccountData(BaseModel):
-    """Funding account data for the authenticated user"""
     id: str = Field(..., description="Funding account ID")
     entity_id: str = Field(..., description="Entity ID that owns this funding account")
     jurisdiction_id: str = Field(..., description="Jurisdiction identifier")
@@ -23,7 +22,6 @@ class FundingAccountData(BaseModel):
 
 
 class FundingAccountResponse(BaseModel):
-    """Standard API response for funding account endpoint"""
     success: bool
     data: Optional[FundingAccountData] = None
     error: Optional[Dict[str, Any]] = None

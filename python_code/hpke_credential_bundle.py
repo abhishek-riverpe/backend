@@ -1,70 +1,3 @@
-"""
-HPKE Credential Bundle Decryption - Python Implementation
-
-This module provides functions to decrypt credential bundles using Hybrid Public Key
-Encryption (HPKE) as specified in RFC 9180. It matches the exact logic of the
-JavaScript/React implementation for Turnkey credential bundles.
-
-Algorithm Details (HPKE Cipher Suite):
-- KEM (Key Encapsulation Mechanism): DHKEM-P256-HKDF-SHA256
-  - Uses P-256 elliptic curve (secp256r1)
-  - Key derivation with HKDF-SHA256
-- KDF (Key Derivation Function): HKDF-SHA256
-- AEAD (Authenticated Encryption): AES-256-GCM
-  - 256-bit AES encryption
-  - Galois/Counter Mode for authentication
-
-Bundle Format:
-- Encoding: bs58check (Base58 with 4-byte checksum from double SHA-256)
-- Structure: [EncappedPublicKey (33 bytes compressed) || Ciphertext (variable)]
-
-Key Format Requirements:
-- Ephemeral Private Key: 64-character hex string (32 bytes)
-- Public Key (compressed): 66-character hex string (33 bytes)
-- Public Key (uncompressed): 130-character hex string (65 bytes)
-- Encapped Key in Bundle: 33-byte compressed format
-- For HPKE operations: Keys are used in uncompressed format
-
-AAD (Associated Authenticated Data) Construction:
-- Format: EncappedPublicKey || ReceiverPublicKey
-- Both keys in uncompressed format (65 bytes each)
-- Total Length: 130 bytes
-
-Info Parameter:
-- Value: "turnkey_hpke" (UTF-8 encoded)
-- Purpose: Domain separation for key derivation
-
-Dependencies:
-- pyhpke: Python HPKE implementation (RFC 9180)
-- base58: Base58Check encoding/decoding
-- cryptography: Elliptic curve operations (pyca/cryptography)
-
-Installation:
-    pip install pyhpke base58 cryptography
-
-Usage Example:
-    from hpke_credential_bundle import (
-        generate_ephemeral_key_pair,
-        decrypt_credential_bundle
-    )
-    
-    # Generate ephemeral key pair (send publicKey to server)
-    ephemeral_keys = generate_ephemeral_key_pair()
-    print(f"Ephemeral Public Key: {ephemeral_keys['publicKey']}")
-    print(f"Ephemeral Private Key: {ephemeral_keys['privateKey']}")
-    
-    # Decrypt credential bundle received from server
-    decrypted = decrypt_credential_bundle(
-        bundle_str=credential_bundle_from_server,
-        ephemeral_private_key=ephemeral_keys['privateKey']
-    )
-    print(f"Decrypted Public Key: {decrypted['tempPublicKey']}")
-    print(f"Decrypted Private Key: {decrypted['tempPrivateKey']}")
-
-Author: Converted from JavaScript/React implementation
-License: MIT
-"""
-
 import os
 import base58
 from typing import Tuple, Dict
@@ -89,7 +22,6 @@ def bytes_to_hex(data: bytes) -> str:
 def is_hex_string(s: str) -> bool:
     """Check if a string is valid hexadecimal."""
     try:
-        # Must have even length and all hex characters
         if len(s) % 2 != 0:
             return False
         int(s, 16)
@@ -108,11 +40,9 @@ def decode_bundle(bundle_str: str) -> bytes:
     Returns:
         bytes: Decoded bundle bytes
     """
-    # Check if it's a hex string
     if is_hex_string(bundle_str):
         return bytes.fromhex(bundle_str)
     
-    # Otherwise, try bs58check
     return base58.b58decode_check(bundle_str)
 
 
@@ -129,10 +59,62 @@ def compress_public_key(uncompressed_key: bytes) -> bytes:
     x = uncompressed_key[1:33]
     y = uncompressed_key[33:65]
     
-    # Prefix is 0x02 if Y is even, 0x03 if Y is odd
     prefix = 0x02 if y[-1] % 2 == 0 else 0x03
     
     return bytes([prefix]) + x
+
+
+def _create_cipher_suite():
+    """Create HPKE cipher suite."""
+    return CipherSuite.new(
+        KEMId.DHKEM_P256_HKDF_SHA256,
+        KDFId.HKDF_SHA256,
+        AEADId.AES256_GCM
+    )
+
+
+def _derive_private_key_from_hex(private_key_hex: str):
+    """Derive pyca private key from hex string."""
+    private_key_bytes = bytes_from_hex(private_key_hex)
+    private_value = int.from_bytes(private_key_bytes, byteorder='big')
+    return ec.derive_private_key(private_value, ec.SECP256R1(), default_backend())
+
+
+def _parse_bundle_encapped_key(bundle_bytes: bytes, verbose: bool = False):
+    """
+    Parse encapped key and ciphertext from bundle bytes.
+    
+    Returns:
+        Tuple of (enc, ciphertext)
+    """
+    first_byte = bundle_bytes[0]
+    
+    if first_byte == 0x04:
+        if len(bundle_bytes) < 65:
+            raise ValueError(f"Bundle too small for uncompressed key: {len(bundle_bytes)} bytes")
+        enc = bundle_bytes[:65]
+        ciphertext = bundle_bytes[65:]
+        if verbose:
+            print(f"Encapped key format: uncompressed (65 bytes)")
+            print(f"Ciphertext length: {len(ciphertext)} bytes")
+    elif first_byte in (0x02, 0x03):
+        if len(bundle_bytes) < 33:
+            raise ValueError(f"Bundle too small for compressed key: {len(bundle_bytes)} bytes")
+        compressed_encapped_key = bundle_bytes[:33]
+        ciphertext = bundle_bytes[33:]
+        if verbose:
+            print(f"Encapped key format: compressed (33 bytes)")
+            print(f"Ciphertext length: {len(ciphertext)} bytes")
+        enc = uncompress_public_key(compressed_encapped_key)
+        if verbose:
+            print(f"Encapped key (uncompressed): {len(enc)} bytes")
+    else:
+        error_msg = f"Invalid encapped key prefix: {hex(first_byte)}"
+        if verbose:
+            error_msg += ". Expected 0x02, 0x03 (compressed) or 0x04 (uncompressed)"
+        raise ValueError(error_msg)
+    
+    return enc, ciphertext
 
 
 def uncompress_public_key(compressed_key: bytes) -> bytes:
@@ -150,16 +132,13 @@ def uncompress_public_key(compressed_key: bytes) -> bytes:
     if compressed_key[0] not in (0x02, 0x03):
         raise ValueError(f"Invalid compressed public key prefix: {hex(compressed_key[0])}")
     
-    # Use cryptography library to decode the compressed point
     from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
     
-    # Load the compressed public key
     public_key = EllipticCurvePublicKey.from_encoded_point(
-        ec.SECP256R1(),  # P-256 curve
+        ec.SECP256R1(),
         compressed_key
     )
     
-    # Get uncompressed representation (65 bytes with 0x04 prefix)
     uncompressed = public_key.public_bytes(
         encoding=serialization.Encoding.X962,
         format=serialization.PublicFormat.UncompressedPoint
@@ -184,22 +163,16 @@ def generate_ephemeral_key_pair(compressed: bool = False) -> Dict[str, str]:
             'privateKey': private key (64-char hex, 32 bytes)
         }
     """
-    # Generate P-256 key pair
     private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
     
-    # Get private key as raw bytes (32 bytes), zero-padded like JS: padStart(64, '0')
     private_key_bytes = private_key.private_numbers().private_value.to_bytes(32, byteorder='big')
     
-    # Get public key in requested format
     if compressed:
-        # Compressed format: 33 bytes (66 hex chars), prefix 02 or 03
         public_key_bytes = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.X962,
             format=serialization.PublicFormat.CompressedPoint
         )
     else:
-        # Uncompressed format: 65 bytes (130 hex chars), prefix 04
-        # This matches generate_keys_latest.js: keyPair.getPublic(false, 'hex')
         public_key_bytes = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.X962,
             format=serialization.PublicFormat.UncompressedPoint
@@ -223,11 +196,9 @@ def derive_public_key_from_private(private_key_hex: str) -> Tuple[bytes, bytes]:
     """
     private_key_bytes = bytes_from_hex(private_key_hex)
     
-    # Create private key object
     private_value = int.from_bytes(private_key_bytes, byteorder='big')
     private_key = ec.derive_private_key(private_value, ec.SECP256R1(), default_backend())
     
-    # Get public key in both formats
     public_key = private_key.public_key()
     
     compressed = public_key.public_bytes(
@@ -260,56 +231,18 @@ def decrypt_credential_bundle(bundle_str: str, ephemeral_private_key: str) -> Di
     Raises:
         ValueError: If bundle is invalid or decryption fails
     """
-    # 1. Decode bundle (auto-detect format: hex or bs58check)
     bundle_bytes = decode_bundle(bundle_str)
+    enc, ciphertext = _parse_bundle_encapped_key(bundle_bytes)
     
-    # 2. Detect encapped key format (compressed vs uncompressed)
-    first_byte = bundle_bytes[0]
-    
-    if first_byte == 0x04:
-        # Uncompressed format: first 65 bytes are the encapped key
-        if len(bundle_bytes) < 65:
-            raise ValueError(f"Bundle too small for uncompressed key: {len(bundle_bytes)} bytes")
-        enc = bundle_bytes[:65]  # Already uncompressed
-        ciphertext = bundle_bytes[65:]
-    elif first_byte in (0x02, 0x03):
-        # Compressed format: first 33 bytes are the encapped key
-        if len(bundle_bytes) < 33:
-            raise ValueError(f"Bundle too small for compressed key: {len(bundle_bytes)} bytes")
-        compressed_encapped_key = bundle_bytes[:33]
-        ciphertext = bundle_bytes[33:]
-        # Uncompress the encapped key
-        enc = uncompress_public_key(compressed_encapped_key)
-    else:
-        raise ValueError(f"Invalid encapped key prefix: {hex(first_byte)}")
-    
-    # Validate ciphertext
     if len(ciphertext) < 16:
         raise ValueError(f"Ciphertext too small: {len(ciphertext)} bytes")
     
-    # 4. Build HPKE cipher suite
-    # Note: AES256_GCM for AES-256-GCM as per the JS implementation
-    suite = CipherSuite.new(
-        KEMId.DHKEM_P256_HKDF_SHA256,
-        KDFId.HKDF_SHA256,
-        AEADId.AES256_GCM
-    )
-    
-    # 5. Derive receiver public key from ephemeral private key
+    suite = _create_cipher_suite()
     _, receiver_public_key = derive_public_key_from_private(ephemeral_private_key)
-    
-    # 6. Import recipient private key using pyca/cryptography
-    private_key_bytes = bytes_from_hex(ephemeral_private_key)
-    private_value = int.from_bytes(private_key_bytes, byteorder='big')
-    pyca_private_key = ec.derive_private_key(private_value, ec.SECP256R1(), default_backend())
-    
-    # Convert to pyhpke KEMKey
+    pyca_private_key = _derive_private_key_from_hex(ephemeral_private_key)
     recipient_key = KEMKey.from_pyca_cryptography_key(pyca_private_key)
     
-    # 7. Construct AAD: EncappedPublicKey || ReceiverPublicKey (both uncompressed, 130 bytes total)
     aad = enc + receiver_public_key
-    
-    # 8. Create recipient context with info parameter
     info = b"turnkey_hpke"
     
     recipient_ctx = suite.create_recipient_context(
@@ -318,20 +251,14 @@ def decrypt_credential_bundle(bundle_str: str, ephemeral_private_key: str) -> Di
         info=info
     )
     
-    # 9. Decrypt ciphertext
     plaintext = recipient_ctx.open(ciphertext, aad)
-    
-    # 10. Extract private key from plaintext
     private_key_hex = bytes_to_hex(plaintext)
     
-    # 11. Generate corresponding public key
     temp_compressed, _ = derive_public_key_from_private(private_key_hex)
-    temp_public_key = bytes_to_hex(temp_compressed)
-    temp_private_key = private_key_hex
     
     return {
-        'tempPublicKey': temp_public_key,
-        'tempPrivateKey': temp_private_key
+        'tempPublicKey': bytes_to_hex(temp_compressed),
+        'tempPrivateKey': private_key_hex
     }
 
 
@@ -351,26 +278,17 @@ def encrypt_credential_bundle(
     Returns:
         bs58check encoded bundle string
     """
-    # Build HPKE cipher suite
-    suite = CipherSuite.new(
-        KEMId.DHKEM_P256_HKDF_SHA256,
-        KDFId.HKDF_SHA256,
-        AEADId.AES256_GCM
-    )
+    suite = _create_cipher_suite()
     
-    # Import recipient public key (handle both compressed and uncompressed)
     recipient_key_bytes = bytes_from_hex(recipient_public_key_hex)
     
     if len(recipient_key_bytes) == 33:
-        # Compressed format - uncompress it
         uncompressed_recipient_key = uncompress_public_key(recipient_key_bytes)
     elif len(recipient_key_bytes) == 65 and recipient_key_bytes[0] == 0x04:
-        # Already uncompressed
         uncompressed_recipient_key = recipient_key_bytes
     else:
         raise ValueError(f"Invalid recipient public key format. Length: {len(recipient_key_bytes)}")
     
-    # Load recipient public key
     from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
     pyca_public_key = EllipticCurvePublicKey.from_encoded_point(
         ec.SECP256R1(),
@@ -379,32 +297,22 @@ def encrypt_credential_bundle(
     
     recipient_key = KEMKey.from_pyca_cryptography_key(pyca_public_key)
     
-    # Create sender context
     info = b"turnkey_hpke"
     enc, sender_ctx = suite.create_sender_context(recipient_key, info=info)
     
-    # Construct AAD: EncappedPublicKey || ReceiverPublicKey (both uncompressed)
     aad = enc + uncompressed_recipient_key
     
-    # Encrypt the private key
     plaintext = bytes_from_hex(private_key_to_encrypt)
     ciphertext = sender_ctx.seal(plaintext, aad)
     
-    # Compress the encapped key for the bundle
     compressed_enc = compress_public_key(enc)
     
-    # Construct bundle: compressed encapped key (33 bytes) || ciphertext
     bundle_bytes = compressed_enc + ciphertext
     
-    # Encode with bs58check
     bundle_str = base58.b58encode_check(bundle_bytes).decode('ascii')
     
     return bundle_str
 
-
-# ============================================================================
-# CLI Interface - Matches decrypt_bundle.js behavior
-# ============================================================================
 
 def decrypt_bundle_cli(bundle_str: str, ephemeral_private_key: str, verbose: bool = True) -> Dict[str, str]:
     """
@@ -421,81 +329,32 @@ def decrypt_bundle_cli(bundle_str: str, ephemeral_private_key: str, verbose: boo
             'tempPrivateKey': decrypted private key (64-char hex, zero-padded)
         }
     """
-    # 1. Decode bundle (auto-detect format: hex or bs58check)
     bundle_bytes = decode_bundle(bundle_str)
     
     if verbose:
         encoding = "hex" if is_hex_string(bundle_str) else "bs58check"
         print(f"Bundle encoding detected: {encoding}")
-    
-    if verbose:
         print(f"Bundle decoded, length: {len(bundle_bytes)} bytes")
     
-    # 2. Detect encapped key format (compressed vs uncompressed)
-    first_byte = bundle_bytes[0]
+    enc, ciphertext = _parse_bundle_encapped_key(bundle_bytes, verbose=verbose)
     
-    if first_byte == 0x04:
-        # Uncompressed format: first 65 bytes are the encapped key
-        if len(bundle_bytes) < 65:
-            raise ValueError(f"Bundle too small for uncompressed key: {len(bundle_bytes)} bytes")
-        
-        enc = bundle_bytes[:65]  # Already uncompressed
-        ciphertext = bundle_bytes[65:]
-        
-        if verbose:
-            print(f"Encapped key format: uncompressed (65 bytes)")
-            print(f"Ciphertext length: {len(ciphertext)} bytes")
-            
-    elif first_byte in (0x02, 0x03):
-        # Compressed format: first 33 bytes are the encapped key
-        if len(bundle_bytes) < 33:
-            raise ValueError(f"Bundle too small for compressed key: {len(bundle_bytes)} bytes")
-        
-        compressed_encapped_key = bundle_bytes[:33]
-        ciphertext = bundle_bytes[33:]
-        
-        if verbose:
-            print(f"Encapped key format: compressed (33 bytes)")
-            print(f"Ciphertext length: {len(ciphertext)} bytes")
-        
-        # Uncompress the encapped key
-        enc = uncompress_public_key(compressed_encapped_key)
-        
-        if verbose:
-            print(f"Encapped key (uncompressed): {len(enc)} bytes")
-    else:
-        raise ValueError(f"Invalid encapped key prefix: {hex(first_byte)}. Expected 0x02, 0x03 (compressed) or 0x04 (uncompressed)")
-    
-    # Validate ciphertext
     if len(ciphertext) < 16:
         raise ValueError(f"Ciphertext too small: {len(ciphertext)} bytes. Expected at least 16 bytes (GCM tag)")
     
-    # 3. Build HPKE cipher suite
-    suite = CipherSuite.new(
-        KEMId.DHKEM_P256_HKDF_SHA256,
-        KDFId.HKDF_SHA256,
-        AEADId.AES256_GCM
-    )
-    
-    # 4. Derive receiver public key from ephemeral private key
+    suite = _create_cipher_suite()
     _, receiver_public_key = derive_public_key_from_private(ephemeral_private_key)
     
     if verbose:
         print(f"Receiver public key (uncompressed): {len(receiver_public_key)} bytes")
     
-    # 5. Import recipient private key
-    private_key_bytes = bytes_from_hex(ephemeral_private_key)
-    private_value = int.from_bytes(private_key_bytes, byteorder='big')
-    pyca_private_key = ec.derive_private_key(private_value, ec.SECP256R1(), default_backend())
+    pyca_private_key = _derive_private_key_from_hex(ephemeral_private_key)
     recipient_key = KEMKey.from_pyca_cryptography_key(pyca_private_key)
     
-    # 6. Construct AAD: EncappedPublicKey || ReceiverPublicKey
     aad = enc + receiver_public_key
     
     if verbose:
         print(f"AAD length: {len(aad)} bytes")
     
-    # 7. Create recipient context
     info = b"turnkey_hpke"
     
     recipient_ctx = suite.create_recipient_context(
@@ -504,20 +363,14 @@ def decrypt_bundle_cli(bundle_str: str, ephemeral_private_key: str, verbose: boo
         info=info
     )
     
-    # 8. Decrypt ciphertext
     plaintext = recipient_ctx.open(ciphertext, aad)
+    private_key_hex = bytes_to_hex(plaintext).zfill(64)
     
-    # 9. Extract private key (with zero-padding to match JS behavior)
-    private_key_hex = bytes_to_hex(plaintext).zfill(64)  # padStart(64, '0')
-    
-    # 10. Generate corresponding public key
     temp_compressed, _ = derive_public_key_from_private(private_key_hex)
-    temp_public_key = bytes_to_hex(temp_compressed)
-    temp_private_key = private_key_hex
     
     return {
-        'tempPublicKey': temp_public_key,
-        'tempPrivateKey': temp_private_key
+        'tempPublicKey': bytes_to_hex(temp_compressed),
+        'tempPrivateKey': private_key_hex
     }
 
 
@@ -536,7 +389,6 @@ def main():
     """
     import sys
     
-    # Check command line arguments
     if len(sys.argv) < 2:
         print("HPKE Credential Bundle - Python Implementation")
         print("")
@@ -557,11 +409,9 @@ def main():
     
     arg = sys.argv[1]
     
-    # Key generation mode (matches generate_keys_latest.js)
     if arg == '--generate-keys' or arg == '-g':
-        keys = generate_ephemeral_key_pair(compressed=False)  # Uncompressed like JS
+        keys = generate_ephemeral_key_pair(compressed=False)
         
-        # Save to files (matches JS behavior)
         with open('ephemeral_private.hex', 'w') as f:
             f.write(keys['privateKey'])
         
@@ -579,30 +429,25 @@ def main():
         print(keys['publicKey'])
         return
     
-    # Test mode
     if arg == '--test' or arg == '-t':
         run_all_tests()
         return
     
-    # Decrypt mode
     bundle_str = arg
     
     try:
-        # Read ephemeral private key from file
         with open('ephemeral_private.hex', 'r') as f:
             ephemeral_private_key = f.read().strip()
         
         print(f"Loaded private key from: ephemeral_private.hex")
         print(f"Private key length: {len(ephemeral_private_key)} hex chars\n")
         
-        # Decrypt the bundle
         result = decrypt_bundle_cli(bundle_str, ephemeral_private_key, verbose=True)
         
         print("\n=== Decryption Successful ===")
         print(f"Session Public Key: {result['tempPublicKey']}")
         print(f"Session Private Key: {result['tempPrivateKey']}")
         
-        # Save results to files
         with open('session_private_key.hex', 'w') as f:
             f.write(result['tempPrivateKey'])
         
@@ -620,17 +465,12 @@ def main():
         sys.exit(1)
 
 
-# ============================================================================
-# Test functions
-# ============================================================================
-
 def test_key_generation():
     """Test ephemeral key pair generation."""
     print("=" * 60)
     print("Testing Key Generation")
     print("=" * 60)
     
-    # Test uncompressed (default, matches generate_keys_latest.js)
     keys = generate_ephemeral_key_pair(compressed=False)
     
     print(f"Public Key (uncompressed): {keys['publicKey']}")
@@ -639,16 +479,13 @@ def test_key_generation():
     print(f"Private Key: {keys['privateKey']}")
     print(f"Private Key length: {len(keys['privateKey'])} chars ({len(keys['privateKey'])//2} bytes)")
     
-    # Verify uncompressed format
     assert len(keys['publicKey']) == 130, "Uncompressed public key should be 130 hex chars"
     assert keys['publicKey'].startswith('04'), "Uncompressed public key should start with 04"
     assert len(keys['privateKey']) == 64, "Private key should be 64 hex chars"
     
-    # Verify we can derive public key from private
     compressed, uncompressed = derive_public_key_from_private(keys['privateKey'])
     assert bytes_to_hex(uncompressed) == keys['publicKey'], "Public key derivation mismatch"
     
-    # Test compressed format
     keys_compressed = generate_ephemeral_key_pair(compressed=True)
     assert len(keys_compressed['publicKey']) == 66, "Compressed public key should be 66 hex chars"
     assert keys_compressed['publicKey'][:2] in ('02', '03'), "Compressed public key should start with 02 or 03"
@@ -665,17 +502,14 @@ def test_key_compression():
     
     keys = generate_ephemeral_key_pair()
     
-    # Get compressed and uncompressed versions
     compressed, uncompressed = derive_public_key_from_private(keys['privateKey'])
     
     print(f"Compressed: {bytes_to_hex(compressed)} ({len(compressed)} bytes)")
     print(f"Uncompressed: {bytes_to_hex(uncompressed)} ({len(uncompressed)} bytes)")
     
-    # Test uncompress
     uncompressed_test = uncompress_public_key(compressed)
     assert uncompressed_test == uncompressed, "Uncompress failed"
     
-    # Test compress
     compressed_test = compress_public_key(uncompressed)
     assert compressed_test == compressed, "Compress failed"
     
@@ -771,8 +605,6 @@ def run_all_tests():
 if __name__ == "__main__":
     import sys
     
-    # If command line argument provided, run CLI mode
-    # Otherwise, run tests
     if len(sys.argv) > 1 and sys.argv[1] != '--test':
         main()
     else:

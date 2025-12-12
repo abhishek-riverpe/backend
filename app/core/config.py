@@ -1,5 +1,5 @@
 import secrets
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
 
 class Settings(BaseSettings):
     database_url: str

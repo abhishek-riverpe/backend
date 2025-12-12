@@ -5,7 +5,7 @@ from slowapi import Limiter
 from ..utils.validate_id import validate_user_id
 from slowapi.util import get_remote_address
 from prisma.errors import PrismaError
-from prisma.models import entities as Entities
+from prisma.models import entities as Entities # type: ignore
 from ..core.database import prisma
 from ..core import auth
 from ..core.config import settings
@@ -26,15 +26,10 @@ def _auth_header():
     }
 
 async def _call_zynk_create_entity(payload: dict) -> str:
-    import logging
-    logger = logging.getLogger(__name__)
-    
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/create"
     headers = {**_auth_header(), "Content-Type": "application/json", "Accept": "application/json"}
-    
-    logger.info(f"Sending payload to Zynk API: {payload}")
 
-    for attempt in range(2):  # 1 retry
+    for attempt in range(2):
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.post(url, json=payload, headers=headers)
@@ -47,31 +42,22 @@ async def _call_zynk_create_entity(payload: dict) -> str:
             body = resp.json()
         except ValueError:
             raise upstream_error(
-                log_message=f"[ZYNK] Invalid JSON while creating entity at {url}. Response preview: {resp.text[:200]}",
                 user_message="Verification service returned an invalid response. Please try again later.",
             )
 
         if not (200 <= resp.status_code < 300):
-            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Zynk API error response: {body}")
             raise upstream_error(
-                log_message=f"[ZYNK] Upstream error {resp.status_code} while creating entity at {url}: {error_detail}",
                 user_message="Verification service is currently unavailable. Please try again later.",
             )
 
         if not isinstance(body, dict) or body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Upstream returned unsuccessful response"))
             raise upstream_error(
-                log_message=f"[ZYNK] Upstream rejected request while creating entity at {url}: {error_detail}",
                 user_message="Verification service rejected the request. Please try again later.",
             )
 
         ext_id = body.get("data", {}).get("entityId")
         if not ext_id or not isinstance(ext_id, str):
             raise upstream_error(
-                log_message=f"[ZYNK] Invalid or missing entityId while creating entity at {url}. Response data: {body.get('data', {})}",
                 user_message="Verification service returned an invalid response. Please try again later.",
             )
 
@@ -120,8 +106,8 @@ async def create_external_entity(
 @limiter.limit("30/minute") 
 async def get_kyc_requirements(
     user_id: str,
-    current: Entities = Depends(get_current_entity),  
-    request: Request = None  
+    request: Request,
+    current: Entities = Depends(get_current_entity)
 ):
     if not validate_user_id(user_id):
         raise HTTPException(status_code=400, detail="Invalid user ID format")
@@ -132,7 +118,6 @@ async def get_kyc_requirements(
     if not user or not user.zynk_entity_id:
         raise HTTPException(status_code=404, detail="User not found or not registered with verification service")
     
-  
     endpoint = f"/api/v1/transformer/entity/kyc/requirements/{user.zynk_entity_id}"
     url = urljoin(settings.zynk_base_url, endpoint)
     
@@ -141,22 +126,20 @@ async def get_kyc_requirements(
     
     try:
         async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail="Upstream service error")
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Upstream service unavailable")
     except ValueError:
         raise upstream_error(
-            log_message=f"[ZYNK] Invalid JSON response from KYC requirements endpoint: {response.text[:200]}",
             user_message="Verification service returned an invalid response"
         )
     
     if not isinstance(data, dict):
         raise upstream_error(
-            log_message=f"[ZYNK] Unexpected response format from KYC requirements: {data}",
             user_message="Verification service returned an unexpected response"
         )
     
