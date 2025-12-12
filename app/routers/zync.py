@@ -46,13 +46,11 @@ async def _call_zynk_create_entity(payload: dict) -> str:
             )
 
         if not (200 <= resp.status_code < 300):
-            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             raise upstream_error(
                 user_message="Verification service is currently unavailable. Please try again later.",
             )
 
         if not isinstance(body, dict) or body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Upstream returned unsuccessful response"))
             raise upstream_error(
                 user_message="Verification service rejected the request. Please try again later.",
             )
@@ -108,6 +106,7 @@ async def create_external_entity(
 @limiter.limit("30/minute") 
 async def get_kyc_requirements(
     user_id: str,
+    request: Request,
     current: Entities = Depends(get_current_entity)
 ):
     if not validate_user_id(user_id):

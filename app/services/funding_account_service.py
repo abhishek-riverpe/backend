@@ -47,6 +47,6 @@ async def save_funding_account_to_db(
         if existing:
             return existing
         raise
-    except Exception as exc:
+    except Exception:
         raise
 

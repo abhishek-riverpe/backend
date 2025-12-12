@@ -1,6 +1,5 @@
 import random
 import string
-import httpx
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 from app.core.config import settings
@@ -420,7 +419,7 @@ class OTPService:
             data={"status": OtpStatusEnum.EXPIRED}
         )
 
-    async def _send_sms(self, phone_number: str, otp_code: str) -> bool:
+    async def _send_sms(self) -> bool:
         try:
             if self.sms_provider == "twilio":
                 return await self._send_via_twilio()

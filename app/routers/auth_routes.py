@@ -96,7 +96,7 @@ async def _create_session_for_user(user, access_token: str, request: Request):
     except Exception:
         pass
 
-def _extract_bearer_token(request: Request) -> str:
+def _extract_bearer_token(request: Request) -> str | None:
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
     if auth_header and auth_header.lower().startswith("bearer "):
         return auth_header.split(" ", 1)[1].strip()
@@ -217,7 +217,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             month, day, year = date_of_birth.split('/')
             zynk_date_of_birth = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
             prisma_date_of_birth = datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             raise internal_error(
                 user_message="Invalid date format. Please use MM/DD/YYYY format.",
                 status_code=400,
@@ -462,7 +462,6 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
         if attempts == CAPTCHA_REQUIRED_ATTEMPTS:
             try:
-                user_agent = request.headers.get("user-agent")
                 ip_address = getattr(request.client, "host", None)
                 device_info = parse_device_from_headers(request)
                 location_info = await get_location_from_client(request)
@@ -628,7 +627,7 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
         _set_auth_cookies(response, access_token, refresh_token)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise internal_error(
             user_message="Token refresh failed. Please log in again.",
             status_code=status.HTTP_401_UNAUTHORIZED,

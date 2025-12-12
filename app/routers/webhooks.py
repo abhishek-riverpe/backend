@@ -308,7 +308,7 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
                         US_FUNDING_JURISDICTION_ID
                     )
                     
-                    funding_account = await save_funding_account_to_db(str(entity.id), zynk_response_data)
+                    await save_funding_account_to_db(str(entity.id), zynk_response_data)
                     
                     try:
                         account_info = zynk_response_data.get("accountInfo", {})

@@ -68,7 +68,7 @@ def validate_password(p: str) -> None:
 
     if settings.hibp_enabled:
         if not hibp_circuit_breaker.should_allow_request():
-            pass
+            return 
         else:
             try:
                 sha1 = hashlib.sha1(p.encode("utf-8")).hexdigest().upper()

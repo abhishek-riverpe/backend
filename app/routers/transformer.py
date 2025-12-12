@@ -4,6 +4,7 @@ import uuid
 import io
 import os
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File, Request
+from starlette.requests import Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from prisma.models import entities as Entities # type: ignore
@@ -74,7 +75,7 @@ async def _upload_to_s3(file_content: bytes, file_name: str) -> str:
         url = f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{file_name}"
         
         return url
-    except Exception as e:
+    except Exception:
         raise internal_error(
             user_message="Failed to store uploaded file. Please try again later.",
         )
@@ -193,8 +194,9 @@ async def get_entity_by_id(
     return body
 
 @router.post("/entity/kyc/{entity_id}/{routing_id}", response_model=KycUploadResponse)
-@limiter.limit("30/minute")  # FIXED: HIGH-04 - Rate limit to prevent KYC resource exhaustion
+@limiter.limit("30/minute")
 async def upload_kyc_documents(
+    request: Request,
     entity_id: str,
     routing_id: str,
     file: UploadFile = File(...),
@@ -287,6 +289,7 @@ async def upload_kyc_documents(
 @router.get("/entity/kyc/{entity_id}", response_model=ZynkKycResponse)
 @limiter.limit("30/minute")
 async def get_entity_kyc_status(
+    request: Request,
     entity_id: str,
     current: Entities = Depends(auth.get_current_entity)
 ):
@@ -317,6 +320,7 @@ async def get_entity_kyc_status(
 @router.get("/entity/kyc/requirements/{entity_id}/{routing_id}", response_model=ZynkKycRequirementsResponse)
 @limiter.limit("30/minute")
 async def get_entity_kyc_requirements(
+    request: Request,
     entity_id: str,
     routing_id: str,
     current: Entities = Depends(auth.get_current_entity)
@@ -345,6 +349,7 @@ async def get_entity_kyc_requirements(
 @router.get("/entity/{entity_id}/kyc/documents", response_model=ZynkKycDocumentsResponse)
 @limiter.limit("30/minute")
 async def get_entity_kyc_documents(
+    request: Request,
     entity_id: str,
     current: Entities = Depends(auth.get_current_entity)
 ):

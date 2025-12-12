@@ -28,7 +28,7 @@ async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[s
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 response = await client.post(url, headers=headers, json={})
 
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -54,15 +54,12 @@ async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[s
                     "kycCompleted": True,
                     "message": "KYC for this entity has already been completed.",
                 }
-
-            error_msg = body.get("message") or body.get("error") or "Unknown error"
             
             raise upstream_error(
                 user_message="Verification service error. Please try again later.",
             )
 
         if not isinstance(body, dict) or not body.get("success"):
-            error_msg = body.get("message", "Request was not successful")
             raise upstream_error(
                 user_message="Verification service rejected the request. Please contact support if this continues.",
             )
@@ -92,7 +89,7 @@ async def create_funding_account_from_zynk(zynk_entity_id: str, jurisdiction_id:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 response = await client.post(url, headers=headers, json={})
               
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -107,13 +104,11 @@ async def create_funding_account_from_zynk(zynk_entity_id: str, jurisdiction_id:
             )
 
         if not (200 <= response.status_code < 300):
-            error_msg = body.get("message") or body.get("error") or "Unknown error"
             raise upstream_error(
                 user_message="Verification service error. Please try again later.",
             )
 
         if not isinstance(body, dict) or not body.get("success"):
-            error_msg = body.get("message", "Request was not successful")
             raise upstream_error(
                 user_message="Verification service rejected the request. Please contact support if this continues.",
             )

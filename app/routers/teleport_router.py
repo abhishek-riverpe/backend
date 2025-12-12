@@ -208,7 +208,7 @@ async def create_teleport(
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
                 resp = await client.post(url, headers=headers, json=request_body)
-        except httpx.RequestError as exc:
+        except httpx.RequestError:
             if attempt == 0:
                 continue
             raise upstream_error(
@@ -223,7 +223,6 @@ async def create_teleport(
             )
         
         if not (200 <= resp.status_code < 300):
-            error_detail = body.get("message", body.get("error", f"HTTP {resp.status_code}: Unknown upstream error"))
             raise upstream_error(
                 user_message="Verification service is currently unavailable. Please try again later.",
             )
@@ -234,14 +233,9 @@ async def create_teleport(
             )
         
         if body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Request was not successful"))
             raise upstream_error(
                 user_message="Verification service rejected the request. Please contact support if this continues.",
             )
-        
-        # Transform ZynkLabs response to unified format
-        # ZynkLabs response: {"success": true, "data": {"message": "...", "data": {"teleportId": "..."}}}
-        # Unified format: {"success": true, "message": "...", "data": {"teleportId": "..."}, "error": None, "meta": {}}
         
         zynk_data = body.get("data", {})
         zynk_inner_data = zynk_data.get("data", {})

@@ -22,7 +22,6 @@ class SessionService:
         device_info: Optional[Dict[str, Any]] = None,
         location_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        try:
             expires_at = datetime.now() + timedelta(days=self.SESSION_EXPIRY_DAYS)
             
             device_data = device_info or {}
@@ -75,9 +74,6 @@ class SessionService:
                 "expires_at": expires_at.isoformat(),
                 "is_suspicious": is_suspicious,
             }
-            
-        except Exception:
-            raise
 
     async def _enforce_concurrent_limit(self, entity_id: str) -> None:
         try:
