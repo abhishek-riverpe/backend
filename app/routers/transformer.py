@@ -111,7 +111,18 @@ async def _upload_to_s3(file_content: bytes, file_name: str) -> str:
             aws_secret_access_key=settings.aws_secret_access_key,
             region_name=settings.aws_region
         )
-        s3_client.put_object(Bucket=settings.aws_s3_bucket_name, Key=file_name, Body=file_content)
+        
+        put_object_params = {
+            "Bucket": settings.aws_s3_bucket_name,
+            "Key": file_name,
+            "Body": file_content
+        }
+        
+        # Add ExpectedBucketOwner parameter if configured to verify bucket ownership
+        if settings.aws_s3_bucket_owner:
+            put_object_params["ExpectedBucketOwner"] = settings.aws_s3_bucket_owner
+        
+        s3_client.put_object(**put_object_params)
         url = f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{file_name}"
         
         return url

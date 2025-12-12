@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     aws_secret_access_key: str | None = None
     aws_region: str | None = None
     aws_s3_bucket_name: str | None = None
+    aws_s3_bucket_owner: str | None = None
 
     # Max request size in megabytes (used by custom middleware)
     max_request_size_mb: int = 10
