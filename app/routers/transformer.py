@@ -4,6 +4,7 @@ import uuid
 import io
 import os
 import re
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File, Request
 from starlette.requests import Request
 from slowapi import Limiter
@@ -103,7 +104,8 @@ async def _upload_to_s3(file_content: bytes, file_name: str) -> str:
     if not settings.aws_access_key_id or not settings.aws_secret_access_key or not settings.aws_region or not settings.aws_s3_bucket_name:
         raise HTTPException(status_code=500, detail="AWS S3 configuration not set")
 
-    try:
+    def _sync_upload():
+        """Synchronous S3 upload function to run in executor."""
         import boto3
         s3_client = boto3.client(
             's3',
@@ -123,8 +125,11 @@ async def _upload_to_s3(file_content: bytes, file_name: str) -> str:
             put_object_params["ExpectedBucketOwner"] = settings.aws_s3_bucket_owner
         
         s3_client.put_object(**put_object_params)
-        url = f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{file_name}"
-        
+        return f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{file_name}"
+
+    try:
+        # Run blocking boto3 operation in thread executor to avoid blocking event loop
+        url = await asyncio.to_thread(_sync_upload)
         return url
     except Exception:
         raise internal_error(

@@ -35,7 +35,7 @@ class OTPService:
             )
             self.fast_mail = FastMail(self.mail_config)
 
-    async def generate_otp(self) -> str:
+    def generate_otp(self) -> str:
         return ''.join(random.choices(string.digits, k=self.OTP_LENGTH))
 
     async def send_otp(

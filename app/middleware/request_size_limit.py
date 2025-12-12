@@ -27,7 +27,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
                 raise HTTPException(status_code=413, detail="Request body too large")
             
             body_sent = False
-            async def receive():
+            def receive():
                 nonlocal body_sent
                 if not body_sent:
                     body_sent = True

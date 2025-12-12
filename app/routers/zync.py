@@ -65,7 +65,7 @@ async def _call_zynk_create_entity(payload: dict) -> str:
 
     raise HTTPException(status_code=502, detail="Failed to create entity upstream after retries")
 
-async def get_current_entity(entity=Depends(auth.get_current_entity)):
+def get_current_entity(entity=Depends(auth.get_current_entity)):
     return entity
 
 @router.post("/entity", status_code=status.HTTP_201_CREATED)
