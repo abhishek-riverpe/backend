@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status, Request
-from slowapi import Limiter # type: ignore
+from slowapi import Limiter
 from ..utils.validate_id import validate_user_id
-from slowapi.util import get_remote_address # type: ignore
+from slowapi.util import get_remote_address
 from prisma.errors import PrismaError
 from prisma.models import entities as Entities # type: ignore
 from ..core.database import prisma

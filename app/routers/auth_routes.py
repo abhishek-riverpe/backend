@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 import httpx
 import asyncio
 import random
-from slowapi import Limiter # type: ignore
-from slowapi.util import get_remote_address # type: ignore
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from ..core import auth
 from ..core.database import prisma
 from ..core.config import settings

@@ -1,8 +1,7 @@
-import json
 import httpx
 from fastapi import APIRouter, HTTPException, status, Depends, Request
-from slowapi import Limiter # type: ignore
-from slowapi.util import get_remote_address # type: ignore
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from app.core.config import settings
 from app.core.auth import get_current_entity
 from app.core.database import prisma
@@ -43,7 +42,7 @@ def _zynk_auth_header():
     }
 
 
-async def _initiate_otp_internal(entity_id: str, user_email: str) -> dict:
+async def _initiate_otp_internal(entity_id: str) -> dict:
     url = f"{settings.zynk_base_url}/api/v1/wallets/{entity_id}/initiate-otp"
     
     headers = _zynk_auth_header()

@@ -4,8 +4,8 @@ import uuid
 import io
 import os
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File, Request
-from slowapi import Limiter # type: ignore
-from slowapi.util import get_remote_address # type: ignore
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from prisma.models import entities as Entities # type: ignore
 from ..core.database import prisma
 from ..core import auth

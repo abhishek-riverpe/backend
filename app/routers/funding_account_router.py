@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from slowapi import Limiter # type: ignore
-from slowapi.util import get_remote_address # type: ignore
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from prisma.errors import DataError
 from prisma.models import entities as Entities # type: ignore
 from prisma.enums import KycStatusEnum # type: ignore

@@ -1,14 +1,10 @@
-import logging
 from typing import Any, Dict
 import httpx
 from fastapi import HTTPException, status
 from ..core.config import settings
 from ..utils.errors import upstream_error
 
-logger = logging.getLogger(__name__)
 
-
-# Generate Auth Header
 def _auth_header() -> Dict[str, str]:
     if not settings.zynk_api_key:
         raise HTTPException(
@@ -27,7 +23,6 @@ async def get_kyc_link_from_zynk(zynk_entity_id: str, routing_id: str) -> Dict[s
         "Accept": "application/json",
     }
 
-    # Simple retry for transient network errors
     for attempt in range(2):
         try:
             async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
