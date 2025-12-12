@@ -1,4 +1,4 @@
-import random
+import secrets
 import string
 import uuid
 import base64
@@ -22,7 +22,7 @@ class CaptchaService:
         chars = (string.ascii_uppercase.replace('O', '').replace('I', '') +
                 string.ascii_lowercase.replace('o', '').replace('i', '').replace('l', '') +
                 string.digits.replace('0', '').replace('1', ''))
-        return ''.join(random.choice(chars) for _ in range(self.CAPTCHA_LENGTH))
+        return ''.join(secrets.choice(chars) for _ in range(self.CAPTCHA_LENGTH))
     
     def _generate_captcha_image(self, code: str) -> str:
         width, height = 200, 80
@@ -62,30 +62,30 @@ class CaptchaService:
         
         char_width = text_width // len(code)
         for i, char in enumerate(code):
-            offset_x = random.randint(-3, 3)
-            offset_y = random.randint(-2, 2)
+            offset_x = secrets.randbelow(7) - 3
+            offset_y = secrets.randbelow(5) - 2
             char_x = x + (i * char_width) + offset_x
             char_y = y + offset_y
             
             draw.text((char_x, char_y), char, fill=text_color, font=font)
         
-        noise_count = random.randint(800, 1200)
+        noise_count = secrets.randbelow(401) + 800
         for _ in range(noise_count):
-            x_noise = random.randint(0, width - 1)
-            y_noise = random.randint(0, height - 1)
-            noise_color = random.choice([
-                (random.randint(0, 100), random.randint(0, 100), random.randint(0, 100)),
-                (random.randint(200, 255), random.randint(200, 255), random.randint(200, 255))
+            x_noise = secrets.randbelow(width)
+            y_noise = secrets.randbelow(height)
+            noise_color = secrets.choice([
+                (secrets.randbelow(101), secrets.randbelow(101), secrets.randbelow(101)),
+                (secrets.randbelow(56) + 200, secrets.randbelow(56) + 200, secrets.randbelow(56) + 200)
             ])
             draw.point((x_noise, y_noise), fill=noise_color)
         
-        line_count = random.randint(3, 6)
+        line_count = secrets.randbelow(4) + 3
         for _ in range(line_count):
-            x1 = random.randint(0, width)
-            y1 = random.randint(0, height)
-            x2 = random.randint(0, width)
-            y2 = random.randint(0, height)
-            line_color = (random.randint(100, 200), random.randint(100, 200), random.randint(100, 200))
+            x1 = secrets.randbelow(width + 1)
+            y1 = secrets.randbelow(height + 1)
+            x2 = secrets.randbelow(width + 1)
+            y2 = secrets.randbelow(height + 1)
+            line_color = (secrets.randbelow(101) + 100, secrets.randbelow(101) + 100, secrets.randbelow(101) + 100)
             draw.line([(x1, y1), (x2, y2)], fill=line_color, width=1)
         
         img = img.filter(ImageFilter.SMOOTH_MORE)
