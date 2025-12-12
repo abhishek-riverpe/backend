@@ -120,6 +120,86 @@ async def _upload_to_s3(file_content: bytes, file_name: str) -> str:
             user_message="Failed to store uploaded file. Please try again later.",
         )
 
+async def _execute_http_request(
+    method: str,
+    url: str,
+    headers: dict,
+    json: dict = None
+) -> httpx.Response:
+    """Execute HTTP request with retry logic."""
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
+                if method.upper() == "POST":
+                    return await client.post(url, headers=headers, json=json)
+                return await client.get(url, headers=headers)
+        except httpx.RequestError:
+            if attempt == 0:
+                continue
+            raise upstream_error(
+                user_message="Verification service is currently unreachable. Please try again later.",
+            )
+    
+    raise upstream_error(
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
+
+
+def _parse_response_body(resp: httpx.Response) -> dict:
+    """Parse JSON response body."""
+    try:
+        body = resp.json()
+    except ValueError:
+        raise upstream_error(
+            user_message="Verification service returned an invalid response. Please try again later.",
+        )
+    
+    if not isinstance(body, dict):
+        raise upstream_error(
+            user_message="Verification service returned an unexpected response. Please try again later.",
+        )
+    
+    return body
+
+
+def _validate_response_status(
+    resp: httpx.Response,
+    allow_404: bool,
+    custom_404_message: str = None
+) -> None:
+    """Validate HTTP response status code."""
+    if 200 <= resp.status_code < 300:
+        return
+    
+    if allow_404 and resp.status_code == 404:
+        message = custom_404_message or "Resource not found in external service."
+        raise HTTPException(status_code=404, detail=message)
+    
+    raise upstream_error(
+        user_message="Verification service is currently unavailable. Please try again later.",
+    )
+
+
+def _validate_response_success(
+    body: dict,
+    allow_404: bool,
+    custom_404_message: str = None,
+    reject_message: str = "Verification service rejected the request. Please contact support if this continues."
+) -> None:
+    """Validate response body indicates success."""
+    if body.get("success") is True:
+        return
+    
+    error_detail = body.get("message", body.get("error", "Request was not successful"))
+    if allow_404 and "not found" in error_detail.lower():
+        message = custom_404_message or "Resource not found in external service."
+        raise HTTPException(status_code=404, detail=message)
+    
+    raise upstream_error(
+        user_message=reject_message,
+    )
+
+
 async def _make_zynk_request(
     method: str,
     url: str,
@@ -129,54 +209,11 @@ async def _make_zynk_request(
     custom_404_message: str = None,
     reject_message: str = "Verification service rejected the request. Please contact support if this continues."
 ) -> dict:
-    for attempt in range(2):
-        try:
-            async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-                if method.upper() == "POST":
-                    resp = await client.post(url, headers=headers, json=json)
-                else:
-                    resp = await client.get(url, headers=headers)
-        except httpx.RequestError:
-            if attempt == 0:
-                continue
-            raise upstream_error(
-                user_message="Verification service is currently unreachable. Please try again later.",
-            )
-
-        try:
-            body = resp.json()
-        except ValueError:
-            raise upstream_error(
-                user_message="Verification service returned an invalid response. Please try again later.",
-            )
-
-        if not (200 <= resp.status_code < 300):
-            if allow_404 and resp.status_code == 404:
-                message = custom_404_message or "Resource not found in external service."
-                raise HTTPException(status_code=404, detail=message)
-            raise upstream_error(
-                user_message="Verification service is currently unavailable. Please try again later.",
-            )
-
-        if not isinstance(body, dict):
-            raise upstream_error(
-                user_message="Verification service returned an unexpected response. Please try again later.",
-            )
-
-        if body.get("success") is not True:
-            error_detail = body.get("message", body.get("error", "Request was not successful"))
-            if allow_404 and "not found" in error_detail.lower():
-                message = custom_404_message or "Resource not found in external service."
-                raise HTTPException(status_code=404, detail=message)
-            raise upstream_error(
-                user_message=reject_message,
-            )
-
-        return body
-
-    raise upstream_error(
-        user_message="Verification service is currently unavailable. Please try again later.",
-    )
+    resp = await _execute_http_request(method, url, headers, json)
+    _validate_response_status(resp, allow_404, custom_404_message)
+    body = _parse_response_body(resp)
+    _validate_response_success(body, allow_404, custom_404_message, reject_message)
+    return body
 
 async def _create_entity_in_zynk(payload: dict) -> dict:
     url = f"{settings.zynk_base_url}/api/v1/transformer/entity/create"
