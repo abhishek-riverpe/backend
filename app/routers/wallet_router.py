@@ -2,11 +2,11 @@ import httpx
 from fastapi import APIRouter, HTTPException, status, Depends, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from app.core.config import settings
-from app.core.auth import get_current_entity
-from app.core.database import prisma
+from ..core.config import settings
+from ..core.auth import get_current_entity
+from ..core.database import prisma
 from prisma.models import entities as Entities # type: ignore
-from app.utils.wallet_crypto import (
+from ..utils.wallet_crypto import (
     generate_keypair as generate_keypair_crypto,
     decrypt_credential_bundle,
     sign_payload_with_api_key
@@ -557,6 +557,7 @@ async def get_wallet_transactions(
 @limiter.limit("30/minute")
 async def sign_payload(
     data: dict,
+    request: Request,
 ):
     payload_to_sign = data.get("payload")
     session_private_key = data.get("sessionPrivateKey")

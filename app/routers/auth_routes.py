@@ -10,24 +10,24 @@ from ..core.database import prisma
 from ..core.config import settings
 from .. import schemas
 from prisma.errors import UniqueViolationError, PrismaError, DataError
-from utils.enums import LoginMethodEnum
-from services.zynk_client import _auth_header
+from ..utils.enums import LoginMethodEnum
+from ..services.zynk_client import _auth_header
 from passlib.context import CryptContext # type: ignore
-from app.services.otp_service import OTPService
-from app.services.session_service import SessionService
-from app.services.captcha_service import captcha_service
-from app.services.email_service import email_service
-from app.utils.device_parser import parse_device_from_headers
-from app.utils.location_service import get_location_from_client
-from app.utils.errors import internal_error, upstream_error
+from ..services.otp_service import OTPService
+from ..services.session_service import SessionService
+from ..services.captcha_service import captcha_service
+from ..services.email_service import email_service
+from ..utils.device_parser import parse_device_from_headers
+from ..utils.location_service import get_location_from_client
+from ..utils.errors import internal_error, upstream_error
 
 from .security import (
     normalize_email,
     validate_password,
     hash_password,
 )
-from app.routers.transformer import _create_entity_in_zynk
-from app.core.auth import get_current_entity
+from .transformer import _create_entity_in_zynk
+from ..core.auth import get_current_entity
 
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
