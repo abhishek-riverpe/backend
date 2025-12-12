@@ -64,6 +64,59 @@ def compress_public_key(uncompressed_key: bytes) -> bytes:
     return bytes([prefix]) + x
 
 
+def _create_cipher_suite():
+    """Create HPKE cipher suite."""
+    return CipherSuite.new(
+        KEMId.DHKEM_P256_HKDF_SHA256,
+        KDFId.HKDF_SHA256,
+        AEADId.AES256_GCM
+    )
+
+
+def _derive_private_key_from_hex(private_key_hex: str):
+    """Derive pyca private key from hex string."""
+    private_key_bytes = bytes_from_hex(private_key_hex)
+    private_value = int.from_bytes(private_key_bytes, byteorder='big')
+    return ec.derive_private_key(private_value, ec.SECP256R1(), default_backend())
+
+
+def _parse_bundle_encapped_key(bundle_bytes: bytes, verbose: bool = False):
+    """
+    Parse encapped key and ciphertext from bundle bytes.
+    
+    Returns:
+        Tuple of (enc, ciphertext)
+    """
+    first_byte = bundle_bytes[0]
+    
+    if first_byte == 0x04:
+        if len(bundle_bytes) < 65:
+            raise ValueError(f"Bundle too small for uncompressed key: {len(bundle_bytes)} bytes")
+        enc = bundle_bytes[:65]
+        ciphertext = bundle_bytes[65:]
+        if verbose:
+            print(f"Encapped key format: uncompressed (65 bytes)")
+            print(f"Ciphertext length: {len(ciphertext)} bytes")
+    elif first_byte in (0x02, 0x03):
+        if len(bundle_bytes) < 33:
+            raise ValueError(f"Bundle too small for compressed key: {len(bundle_bytes)} bytes")
+        compressed_encapped_key = bundle_bytes[:33]
+        ciphertext = bundle_bytes[33:]
+        if verbose:
+            print(f"Encapped key format: compressed (33 bytes)")
+            print(f"Ciphertext length: {len(ciphertext)} bytes")
+        enc = uncompress_public_key(compressed_encapped_key)
+        if verbose:
+            print(f"Encapped key (uncompressed): {len(enc)} bytes")
+    else:
+        error_msg = f"Invalid encapped key prefix: {hex(first_byte)}"
+        if verbose:
+            error_msg += ". Expected 0x02, 0x03 (compressed) or 0x04 (uncompressed)"
+        raise ValueError(error_msg)
+    
+    return enc, ciphertext
+
+
 def uncompress_public_key(compressed_key: bytes) -> bytes:
     """
     Uncompress a compressed P-256 public key (33 bytes) to uncompressed format (65 bytes).
@@ -179,42 +232,17 @@ def decrypt_credential_bundle(bundle_str: str, ephemeral_private_key: str) -> Di
         ValueError: If bundle is invalid or decryption fails
     """
     bundle_bytes = decode_bundle(bundle_str)
-    
-    first_byte = bundle_bytes[0]
-    
-    if first_byte == 0x04:
-        if len(bundle_bytes) < 65:
-            raise ValueError(f"Bundle too small for uncompressed key: {len(bundle_bytes)} bytes")
-        enc = bundle_bytes[:65]
-        ciphertext = bundle_bytes[65:]
-    elif first_byte in (0x02, 0x03):
-        if len(bundle_bytes) < 33:
-            raise ValueError(f"Bundle too small for compressed key: {len(bundle_bytes)} bytes")
-        compressed_encapped_key = bundle_bytes[:33]
-        ciphertext = bundle_bytes[33:]
-        enc = uncompress_public_key(compressed_encapped_key)
-    else:
-        raise ValueError(f"Invalid encapped key prefix: {hex(first_byte)}")
+    enc, ciphertext = _parse_bundle_encapped_key(bundle_bytes)
     
     if len(ciphertext) < 16:
         raise ValueError(f"Ciphertext too small: {len(ciphertext)} bytes")
     
-    suite = CipherSuite.new(
-        KEMId.DHKEM_P256_HKDF_SHA256,
-        KDFId.HKDF_SHA256,
-        AEADId.AES256_GCM
-    )
-    
+    suite = _create_cipher_suite()
     _, receiver_public_key = derive_public_key_from_private(ephemeral_private_key)
-    
-    private_key_bytes = bytes_from_hex(ephemeral_private_key)
-    private_value = int.from_bytes(private_key_bytes, byteorder='big')
-    pyca_private_key = ec.derive_private_key(private_value, ec.SECP256R1(), default_backend())
-    
+    pyca_private_key = _derive_private_key_from_hex(ephemeral_private_key)
     recipient_key = KEMKey.from_pyca_cryptography_key(pyca_private_key)
     
     aad = enc + receiver_public_key
-    
     info = b"turnkey_hpke"
     
     recipient_ctx = suite.create_recipient_context(
@@ -224,16 +252,13 @@ def decrypt_credential_bundle(bundle_str: str, ephemeral_private_key: str) -> Di
     )
     
     plaintext = recipient_ctx.open(ciphertext, aad)
-    
     private_key_hex = bytes_to_hex(plaintext)
     
     temp_compressed, _ = derive_public_key_from_private(private_key_hex)
-    temp_public_key = bytes_to_hex(temp_compressed)
-    temp_private_key = private_key_hex
     
     return {
-        'tempPublicKey': temp_public_key,
-        'tempPrivateKey': temp_private_key
+        'tempPublicKey': bytes_to_hex(temp_compressed),
+        'tempPrivateKey': private_key_hex
     }
 
 
@@ -253,11 +278,7 @@ def encrypt_credential_bundle(
     Returns:
         bs58check encoded bundle string
     """
-    suite = CipherSuite.new(
-        KEMId.DHKEM_P256_HKDF_SHA256,
-        KDFId.HKDF_SHA256,
-        AEADId.AES256_GCM
-    )
+    suite = _create_cipher_suite()
     
     recipient_key_bytes = bytes_from_hex(recipient_public_key_hex)
     
@@ -313,58 +334,20 @@ def decrypt_bundle_cli(bundle_str: str, ephemeral_private_key: str, verbose: boo
     if verbose:
         encoding = "hex" if is_hex_string(bundle_str) else "bs58check"
         print(f"Bundle encoding detected: {encoding}")
-    
-    if verbose:
         print(f"Bundle decoded, length: {len(bundle_bytes)} bytes")
     
-    first_byte = bundle_bytes[0]
-    
-    if first_byte == 0x04:
-        if len(bundle_bytes) < 65:
-            raise ValueError(f"Bundle too small for uncompressed key: {len(bundle_bytes)} bytes")
-        
-        enc = bundle_bytes[:65]
-        ciphertext = bundle_bytes[65:]
-        
-        if verbose:
-            print(f"Encapped key format: uncompressed (65 bytes)")
-            print(f"Ciphertext length: {len(ciphertext)} bytes")
-            
-    elif first_byte in (0x02, 0x03):
-        if len(bundle_bytes) < 33:
-            raise ValueError(f"Bundle too small for compressed key: {len(bundle_bytes)} bytes")
-        
-        compressed_encapped_key = bundle_bytes[:33]
-        ciphertext = bundle_bytes[33:]
-        
-        if verbose:
-            print(f"Encapped key format: compressed (33 bytes)")
-            print(f"Ciphertext length: {len(ciphertext)} bytes")
-        
-        enc = uncompress_public_key(compressed_encapped_key)
-        
-        if verbose:
-            print(f"Encapped key (uncompressed): {len(enc)} bytes")
-    else:
-        raise ValueError(f"Invalid encapped key prefix: {hex(first_byte)}. Expected 0x02, 0x03 (compressed) or 0x04 (uncompressed)")
+    enc, ciphertext = _parse_bundle_encapped_key(bundle_bytes, verbose=verbose)
     
     if len(ciphertext) < 16:
         raise ValueError(f"Ciphertext too small: {len(ciphertext)} bytes. Expected at least 16 bytes (GCM tag)")
     
-    suite = CipherSuite.new(
-        KEMId.DHKEM_P256_HKDF_SHA256,
-        KDFId.HKDF_SHA256,
-        AEADId.AES256_GCM
-    )
-    
+    suite = _create_cipher_suite()
     _, receiver_public_key = derive_public_key_from_private(ephemeral_private_key)
     
     if verbose:
         print(f"Receiver public key (uncompressed): {len(receiver_public_key)} bytes")
     
-    private_key_bytes = bytes_from_hex(ephemeral_private_key)
-    private_value = int.from_bytes(private_key_bytes, byteorder='big')
-    pyca_private_key = ec.derive_private_key(private_value, ec.SECP256R1(), default_backend())
+    pyca_private_key = _derive_private_key_from_hex(ephemeral_private_key)
     recipient_key = KEMKey.from_pyca_cryptography_key(pyca_private_key)
     
     aad = enc + receiver_public_key
@@ -381,16 +364,13 @@ def decrypt_bundle_cli(bundle_str: str, ephemeral_private_key: str, verbose: boo
     )
     
     plaintext = recipient_ctx.open(ciphertext, aad)
-    
     private_key_hex = bytes_to_hex(plaintext).zfill(64)
     
     temp_compressed, _ = derive_public_key_from_private(private_key_hex)
-    temp_public_key = bytes_to_hex(temp_compressed)
-    temp_private_key = private_key_hex
     
     return {
-        'tempPublicKey': temp_public_key,
-        'tempPrivateKey': temp_private_key
+        'tempPublicKey': bytes_to_hex(temp_compressed),
+        'tempPrivateKey': private_key_hex
     }
 
 

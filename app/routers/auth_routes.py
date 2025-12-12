@@ -41,6 +41,67 @@ router = APIRouter(
 
 limiter = Limiter(key_func=get_remote_address)
 
+def _set_auth_cookies(response: Response, access_token: str, refresh_token: str):
+    is_production = not settings.frontend_url.startswith("http://localhost")
+    
+    response.set_cookie(
+        key="rp_access",
+        value=access_token,
+        httponly=True,
+        samesite="lax" if not is_production else "strict",
+        secure=is_production,
+        max_age=15 * 60,
+        path="/",
+    )
+    
+    response.set_cookie(
+        key="rp_refresh",
+        value=refresh_token,
+        httponly=True,
+        samesite="lax" if not is_production else "strict",
+        secure=is_production,
+        max_age=24 * 60 * 60,
+        path="/",
+    )
+
+def _create_safe_user_dict(user) -> dict:
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "email_verified": user.email_verified,
+        "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
+        "entity_type": str(user.entity_type) if user.entity_type else None,
+        "status": str(user.status) if user.status else None,
+    }
+
+async def _create_session_for_user(user, access_token: str, request: Request):
+    try:
+        user_agent = request.headers.get("user-agent")
+        ip_address = getattr(request.client, "host", None)
+        device_info = parse_device_from_headers(request)
+        location_info = await get_location_from_client(request)
+        
+        session_service = SessionService(prisma)
+        await session_service.create_session(
+            entity_id=str(user.id),
+            session_token=access_token,
+            login_method=LoginMethodEnum.EMAIL_PASSWORD,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            device_info=device_info,
+            location_info=location_info,
+        )
+    except Exception:
+        pass
+
+def _extract_bearer_token(request: Request) -> str:
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        return auth_header.split(" ", 1)[1].strip()
+    return None
+
 async def _email_exists_in_zynk(email: str) -> bool:
     if not settings.zynk_base_url or not settings.zynk_api_key:
         existing = await prisma.entities.find_first(where={"email": email})
@@ -265,40 +326,9 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
     access_token = auth.create_access_token(data={"sub": str(entity.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(entity.id), "type": "refresh"})
 
-    is_production = not settings.frontend_url.startswith("http://localhost")
-    
-    response.set_cookie(
-        key="rp_access",
-        value=access_token,
-        httponly=True,               
-        samesite="lax" if not is_production else "strict", 
-        secure=is_production,       
-        max_age=15 * 60,     
-        path="/",
-    )
-    
-    response.set_cookie(
-        key="rp_refresh",
-        value=refresh_token,
-        httponly=True,              
-        samesite="lax" if not is_production else "strict",  
-        secure=is_production,       
-        max_age=24 * 60 * 60,        
-        path="/",
-    )
-
+    _set_auth_cookies(response, access_token, refresh_token)
     response.headers["Location"] = f"/api/v1/entities/{entity.id}"
-
-    safe_user = {
-        "id": str(entity.id),
-        "email": entity.email,
-        "first_name": entity.first_name,
-        "last_name": entity.last_name,
-        "email_verified": entity.email_verified,
-        "external_entity_id": getattr(entity, "zynk_entity_id", None) or getattr(entity, "external_entity_id", None),
-        "entity_type": str(entity.entity_type) if entity.entity_type else None,
-        "status": str(entity.status) if entity.status else None,
-    }
+    safe_user = _create_safe_user_dict(entity)
 
     return {
         "success": True,
@@ -475,58 +505,10 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
     access_token = auth.create_access_token(data={"sub": str(user.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(user.id), "type": "refresh"})
-    is_production = not settings.frontend_url.startswith("http://localhost")
     
-    response.set_cookie(
-        key="rp_access",
-        value=access_token,
-        httponly=True,              
-        samesite="lax" if not is_production else "strict",  
-        secure=is_production,       
-        max_age=15 * 60,             
-        path="/",
-    )
-    
-    response.set_cookie(
-        key="rp_refresh",
-        value=refresh_token,
-        httponly=True,              
-        samesite="lax" if not is_production else "strict",  
-        secure=is_production,        
-        max_age=24 * 60 * 60,        
-        path="/",
-    )
-
-    try:
-        user_agent = request.headers.get("user-agent")
-        ip_address = getattr(request.client, "host", None)
-        device_info = parse_device_from_headers(request)
-        
-        location_info = await get_location_from_client(request)
-        
-        session_service = SessionService(prisma)
-        await session_service.create_session(
-            entity_id=str(user.id),
-            session_token=access_token,
-            login_method=LoginMethodEnum.EMAIL_PASSWORD,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            device_info=device_info,
-            location_info=location_info,
-        )
-    except Exception:
-        pass
-
-    safe_user = {
-        "id": str(user.id),
-        "email": user.email,
-        "first_name": user.first_name,
-        "last_name": user.last_name,
-        "email_verified": user.email_verified,
-        "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
-        "entity_type": str(user.entity_type) if user.entity_type else None,
-        "status": str(user.status) if user.status else None,
-    }
+    _set_auth_cookies(response, access_token, refresh_token)
+    await _create_session_for_user(user, access_token, request)
+    safe_user = _create_safe_user_dict(user)
    
     return {
         "success": True,
@@ -643,27 +625,7 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
         access_token = auth.create_access_token({"sub": str(user.id), "type": "access"})
         refresh_token = auth.create_refresh_token({"sub": str(user.id), "type": "refresh"})
 
-        is_production = not settings.frontend_url.startswith("http://localhost")
-        
-        response.set_cookie(
-            key="rp_access",
-            value=access_token,
-            httponly=True,            
-            samesite="lax" if not is_production else "strict",  
-            secure=is_production,       
-            max_age=15 * 60,             
-            path="/",
-        )
-        
-        response.set_cookie(
-            key="rp_refresh",
-            value=refresh_token,
-            httponly=True,              
-            samesite="lax" if not is_production else "strict",  
-            secure=is_production,       
-            max_age=24 * 60 * 60,       
-            path="/",
-        )
+        _set_auth_cookies(response, access_token, refresh_token)
     except HTTPException:
         raise
     except Exception as e:
@@ -672,37 +634,8 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    try:
-        user_agent = request.headers.get("user-agent")
-        ip_address = getattr(request.client, "host", None)
-        
-        device_info = parse_device_from_headers(request)
-        
-        location_info = await get_location_from_client(request)
-        
-        session_service = SessionService(prisma)
-        await session_service.create_session(
-            entity_id=str(user.id),
-            session_token=access_token,
-            login_method=LoginMethodEnum.EMAIL_PASSWORD,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            device_info=device_info,
-            location_info=location_info,
-        )
-    except Exception:
-        pass
-
-    safe_user = {
-        "id": str(user.id),
-        "email": user.email,
-        "first_name": user.first_name,
-        "last_name": user.last_name,
-        "email_verified": user.email_verified,
-        "zynk_entity_id": getattr(user, "zynk_entity_id", None) or getattr(user, "external_entity_id", None),
-        "entity_type": str(user.entity_type) if user.entity_type else None,
-        "status": str(user.status) if user.status else None,
-    }
+    await _create_session_for_user(user, access_token, request)
+    safe_user = _create_safe_user_dict(user)
 
     return {
         "success": True,
@@ -719,13 +652,9 @@ async def refresh_token(request: Request, response: Response, body: dict = None)
 
 @router.post("/logout", response_model=schemas.ApiResponse)
 async def logout(request: Request, response: Response):
-
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    session_token = None
+    session_token = _extract_bearer_token(request)
     
-    if auth_header and auth_header.lower().startswith("bearer "):
-        session_token = auth_header.split(" ", 1)[1].strip()
-        
+    if session_token:
         try:
             session_service = SessionService(prisma)
             await session_service.logout_session(session_token=session_token)
@@ -791,12 +720,7 @@ async def change_password(
         )
 
     try:
-        auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-        current_session_token = None
-
-        if auth_header and auth_header.lower().startswith("bearer "):
-            current_session_token = auth_header.split(" ", 1)[1].strip()
-
+        current_session_token = _extract_bearer_token(request)
         session_service = SessionService(prisma)
         await session_service.revoke_all_sessions(
             entity_id=str(current_user.id),
@@ -842,10 +766,9 @@ async def change_password(
 
 @router.get("/ping")
 async def auth_ping(request: Request):
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    if not auth_header or not auth_header.lower().startswith("bearer "):
+    token = _extract_bearer_token(request)
+    if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-    token = auth_header.split(" ", 1)[1].strip()
     auth.verify_token_type(token, "access")
     return {"success": True, "message": "pong", "data": {"time": datetime.now(timezone.utc).isoformat()}}
 
