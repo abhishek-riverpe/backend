@@ -343,14 +343,7 @@ async def prepare_wallet(
                 detail="Zynk API did not return complete challenge data"
             )
 
-        return {
-            "success": True,
-            "data": {
-                "payloadId": payload_id,
-                "payloadToSign": payload_to_sign,
-                "rpId": rp_id
-            }
-        }
+        return _create_prepare_response(payload_id, payload_to_sign, rp_id)
 
 
 @router.get("/user")
@@ -445,6 +438,71 @@ async def _get_validated_user_wallet(current_user):
     return user, wallet
 
 
+async def _validate_wallet_ownership(wallet_id: str, current_user: Entities, include_accounts: bool = False):
+    """Validate wallet belongs to current user and return wallet."""
+    where_clause = {
+        "zynk_wallet_id": wallet_id,
+        "entity_id": str(current_user.id),
+        "deleted_at": None
+    }
+    
+    if include_accounts:
+        wallet = await prisma.wallets.find_first(
+            where=where_clause,
+            include={
+                "wallet_accounts": {
+                    "where": {
+                        "deleted_at": None
+                    }
+                }
+            }
+        )
+    else:
+        wallet = await prisma.wallets.find_first(where=where_clause)
+    
+    if not wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Wallet not found or unauthorized"
+        )
+    
+    return wallet
+
+
+def _create_wallet_account_data(account_details: dict, address: str) -> dict:
+    """Create wallet account data structure from account details."""
+    return {
+        "curve": account_details.get("curve", ""),
+        "path_format": account_details.get("pathFormat", ""),
+        "path": account_details.get("path", ""),
+        "address_format": account_details.get("addressFormat", ""),
+        "address": address
+    }
+
+
+def _create_account_response_data(account_details: dict, address: str) -> dict:
+    """Create account response data structure."""
+    return {
+        "address": address,
+        "curve": account_details.get("curve"),
+        "path": account_details.get("path"),
+        "pathFormat": account_details.get("pathFormat"),
+        "addressFormat": account_details.get("addressFormat")
+    }
+
+
+def _create_prepare_response(payload_id: str, payload_to_sign: str, rp_id: str = None) -> dict:
+    """Create standardized prepare response structure."""
+    return {
+        "success": True,
+        "data": {
+            "payloadId": payload_id,
+            "payloadToSign": payload_to_sign,
+            "rpId": rp_id
+        }
+    }
+
+
 async def _make_zynk_get_request(url: str, error_message: str) -> dict:
     """Make a GET request to Zynk API and return JSON response."""
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
@@ -497,26 +555,7 @@ async def get_wallet_transactions(
     validated_address = _validate_safe_path_component(address, "address")
 
     # Verify wallet belongs to current user
-    wallet = await prisma.wallets.find_first(
-        where={
-            "zynk_wallet_id": wallet_id,
-            "entity_id": str(current_user.id),
-            "deleted_at": None
-        },
-        include={
-            "wallet_accounts": {
-                "where": {
-                    "deleted_at": None
-                }
-            }
-        }
-    )
-    
-    if not wallet:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Wallet not found or unauthorized"
-        )
+    wallet = await _validate_wallet_ownership(wallet_id, current_user, include_accounts=True)
     
     # Verify the address belongs to this wallet
     wallet_addresses = [acc.address for acc in wallet.wallet_accounts] if wallet.wallet_accounts else []
@@ -684,23 +723,11 @@ async def submit_wallet(
                                         
                                         try:
                                             if wallet:
+                                                account_data_dict = _create_wallet_account_data(account_details, account_address)
                                                 await prisma.wallet_accounts.create(
-                                                    data={
-                                                        "wallet_id": wallet.id,
-                                                    "curve": account_details.get("curve", ""),
-                                                    "path_format": account_details.get("pathFormat", ""),
-                                                    "path": account_details.get("path", ""),
-                                                    "address_format": account_details.get("addressFormat", ""),
-                                                    "address": account_address
-                                                }
+                                                    data={"wallet_id": wallet.id, **account_data_dict}
                                                 )
-                                                account_created = {
-                                                "address": account_address,
-                                                "curve": account_details.get("curve"),
-                                                "path": account_details.get("path"),
-                                                "pathFormat": account_details.get("pathFormat"),
-                                                "addressFormat": account_details.get("addressFormat")
-                                            }
+                                                account_created = _create_account_response_data(account_details, account_address)
                                         except Exception:
                                             # Account creation failed, continue without account record
                                             pass
@@ -746,19 +773,7 @@ async def prepare_account(
     chain = data.get("chain", "SOLANA")
     
     # Verify wallet belongs to current user
-    wallet = await prisma.wallets.find_first(
-        where={
-            "zynk_wallet_id": wallet_id,
-            "entity_id": str(current_user.id),
-            "deleted_at": None
-        }
-    )
-    
-    if not wallet:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Wallet not found or unauthorized"
-        )
+    wallet = await _validate_wallet_ownership(wallet_id, current_user)
     
     # Use validated wallet_id from database instead of path parameter
     validated_wallet_id = _validate_safe_path_component(wallet.zynk_wallet_id, "wallet_id")
@@ -844,29 +859,11 @@ async def submit_account(
         account = account_data.get("account", {})
         address = account_data.get("address") or account.get("address")
         try:
-            wallet = await prisma.wallets.find_first(
-                where={
-                    "zynk_wallet_id": wallet_id,
-                    "entity_id": str(current_user.id),
-                    "deleted_at": None
-                }
-            )
+            wallet = await _validate_wallet_ownership(wallet_id, current_user)
             
-            if not wallet:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Wallet not found in database"
-                )
-            
+            account_data_dict = _create_wallet_account_data(account, address)
             await prisma.wallet_accounts.create(
-                data={
-                    "wallet_id": wallet.id,
-                    "curve": account.get("curve", ""),
-                    "path_format": account.get("pathFormat", ""),
-                    "path": account.get("path", ""),
-                    "address_format": account.get("addressFormat", ""),
-                    "address": address
-                }
+                data={"wallet_id": wallet.id, **account_data_dict}
             )
             
         except Exception:
