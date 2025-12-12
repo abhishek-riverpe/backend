@@ -31,6 +31,26 @@ def _clean_entity_id(entity_id) -> str:
 
     return entity_id
 
+def _validate_safe_path_component(value: str, param_name: str, max_length: int = 200) -> str:
+    """Validate path components to prevent path traversal SSRF attacks."""
+    if not value or not isinstance(value, str):
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: must be a non-empty string")
+    
+    value = value.strip()
+    if not value:
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: cannot be empty")
+    
+    if len(value) > max_length:
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: exceeds maximum length of {max_length}")
+    
+    if '..' in value or '/' in value or '\\' in value:
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: path traversal characters are not allowed")
+    
+    if not all(c.isalnum() or c in ('-', '_') for c in value):
+        raise HTTPException(status_code=400, detail=f"Invalid {param_name}: contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed")
+    
+    return value
+
 
 def _zynk_auth_header():
     if not settings.zynk_api_key:
@@ -521,12 +541,23 @@ async def get_wallet_transactions(
     limit: int = 10,
     offset: int = 0
 ):
+    # Validate path parameters to prevent path traversal SSRF
+    _validate_safe_path_component(wallet_id, "wallet_id")
+    validated_address = _validate_safe_path_component(address, "address")
 
+    # Verify wallet belongs to current user
     wallet = await prisma.wallets.find_first(
         where={
             "zynk_wallet_id": wallet_id,
             "entity_id": str(current_user.id),
             "deleted_at": None
+        },
+        include={
+            "wallet_accounts": {
+                "where": {
+                    "deleted_at": None
+                }
+            }
         }
     )
     
@@ -536,7 +567,19 @@ async def get_wallet_transactions(
             detail="Wallet not found or unauthorized"
         )
     
-    url = f"{settings.zynk_base_url}/api/v1/wallets/{wallet_id}/{address}/transactions"
+    # Verify the address belongs to this wallet
+    wallet_addresses = [acc.address for acc in wallet.wallet_accounts] if wallet.wallet_accounts else []
+    if validated_address not in wallet_addresses:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Address not found in wallet"
+        )
+    
+    # Use validated wallet_id from database instead of path parameter
+    validated_wallet_id = _validate_safe_path_component(wallet.zynk_wallet_id, "wallet_id")
+    
+    # Call Zynk API with validated values
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{validated_wallet_id}/{validated_address}/transactions"
     params = {"limit": limit, "offset": offset}
     
     async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
@@ -759,9 +802,12 @@ async def prepare_account(
     request: Request,
     current_user: Entities = Depends(get_current_entity)
 ):
+    # Validate path parameter to prevent path traversal SSRF
+    _validate_safe_path_component(wallet_id, "wallet_id")
 
     chain = data.get("chain", "SOLANA")
     
+    # Verify wallet belongs to current user
     wallet = await prisma.wallets.find_first(
         where={
             "zynk_wallet_id": wallet_id,
@@ -776,7 +822,9 @@ async def prepare_account(
             detail="Wallet not found or unauthorized"
         )
     
-    url = f"{settings.zynk_base_url}/api/v1/wallets/{wallet_id}/accounts/prepare"
+    # Use validated wallet_id from database instead of path parameter
+    validated_wallet_id = _validate_safe_path_component(wallet.zynk_wallet_id, "wallet_id")
+    url = f"{settings.zynk_base_url}/api/v1/wallets/{validated_wallet_id}/accounts/prepare"
     payload = {
         "chain": chain
     }
