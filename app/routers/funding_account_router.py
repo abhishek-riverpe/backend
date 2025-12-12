@@ -87,7 +87,7 @@ async def _create_and_save_funding_account(
     try:
         account_info = zynk_response_data.get("accountInfo", {})
         user_name = f"{entity.first_name or ''} {entity.last_name or ''}".strip() or "User"
-        email_sent = await email_service.send_funding_account_created_notification(
+        await email_service.send_funding_account_created_notification(
             email=entity.email,
             user_name=user_name,
             bank_name=account_info.get("bank_name", ""),

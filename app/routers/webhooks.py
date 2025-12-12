@@ -298,9 +298,7 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
                     where={"entity_id": str(entity.id), "deleted_at": None}
                 )
                 
-                if existing_funding_account:
-                    pass
-                elif entity.zynk_entity_id:
+                if not existing_funding_account and entity.zynk_entity_id:
                     from ..services.zynk_client import create_funding_account_from_zynk
                     from ..services.funding_account_service import save_funding_account_to_db, US_FUNDING_JURISDICTION_ID
                     from ..services.email_service import email_service
@@ -410,15 +408,7 @@ async def _save_webhook_event(
             event_payload_json,
         )
         
-        if result and len(result) > 0:
-            row = result[0]
-            if isinstance(row, dict):
-                webhook_event_id = row.get('id')
-            elif isinstance(row, (list, tuple)):
-                webhook_event_id = row[0]
-            else:
-                webhook_event_id = str(row)
-        else:
+        if not result or len(result) == 0:
             raise Exception("Failed to create webhook event - no ID returned")
         
     except Exception:

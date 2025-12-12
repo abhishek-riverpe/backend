@@ -330,8 +330,7 @@ async def upload_kyc_documents(
     base64Signature: str = Form(None),
     full_name: str = Form(None),
     date_of_birth: str = Form(None),
-    current: Entities = Depends(auth.get_current_entity),
-    request: Request = None
+    current: Entities = Depends(auth.get_current_entity)
 ):
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
@@ -417,8 +416,7 @@ async def upload_kyc_documents(
 @limiter.limit("30/minute")
 async def get_entity_kyc_status(
     entity_id: str,
-    current: Entities = Depends(auth.get_current_entity),
-    request: Request = None
+    current: Entities = Depends(auth.get_current_entity)
 ):
     zynk_entity_id = getattr(current, "zynk_entity_id", None) or getattr(current, "external_entity_id", None)
     if not zynk_entity_id:
@@ -496,8 +494,7 @@ async def get_entity_kyc_status(
 async def get_entity_kyc_requirements(
     entity_id: str,
     routing_id: str,
-    current: Entities = Depends(auth.get_current_entity),
-    request: Request = None
+    current: Entities = Depends(auth.get_current_entity)
 ):
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")
@@ -571,8 +568,7 @@ async def get_entity_kyc_requirements(
 @limiter.limit("30/minute")
 async def get_entity_kyc_documents(
     entity_id: str,
-    current: Entities = Depends(auth.get_current_entity),
-    request: Request = None
+    current: Entities = Depends(auth.get_current_entity)
 ):
     if not current.zynk_entity_id:
         raise HTTPException(status_code=404, detail="Entity not linked to external service. Please complete the entity creation process.")

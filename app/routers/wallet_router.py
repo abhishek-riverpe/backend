@@ -72,9 +72,8 @@ async def _initiate_otp_internal(entity_id: str) -> dict:
             )
         
         data = body.get("data", {})
-        otp_id = data.get("otpId")
         
-        if not otp_id:
+        if not data.get("otpId"):
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Zynk API did not return otpId"
@@ -694,7 +693,6 @@ async def submit_wallet(
                                     submit_body = submit_response.json()
                                     if submit_body.get("success"):
                                         account_data = submit_body.get("data", {})
-                                        account_wallet_id = account_data.get("walletId")
                                         account_details = account_data.get("account", {})
                                         account_address = account_data.get("address") or account_details.get("address")
                                         

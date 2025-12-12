@@ -112,8 +112,7 @@ async def create_external_entity(
 @limiter.limit("30/minute") 
 async def get_kyc_requirements(
     user_id: str,
-    current: Entities = Depends(get_current_entity),  
-    request: Request = None  
+    current: Entities = Depends(get_current_entity)
 ):
     if not validate_user_id(user_id):
         raise HTTPException(status_code=400, detail="Invalid user ID format")
@@ -132,16 +131,16 @@ async def get_kyc_requirements(
     
     try:
         async with httpx.AsyncClient(timeout=settings.zynk_timeout_s) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail="Upstream service error")
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Upstream service unavailable")
     except ValueError:
         raise upstream_error(
-            log_message=f"[ZYNK] Invalid JSON response from KYC requirements endpoint: {response.text[:200]}",
+            log_message=f"[ZYNK] Invalid JSON response from KYC requirements endpoint",
             user_message="Verification service returned an invalid response"
         )
     
