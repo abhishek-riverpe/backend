@@ -44,8 +44,6 @@ class OTPService:
         country_code: str
     ) -> Tuple[bool, str, Optional[dict]]:
         try:
-            full_phone = f"{country_code}{phone_number}"
-
             recent_otp = await self._check_rate_limit(phone_number, country_code)
             if recent_otp:
                 seconds_remaining = (
@@ -428,7 +426,7 @@ class OTPService:
         except Exception:
             return False
 
-    async def _send_via_twilio(self) -> bool:
+    def _send_via_twilio(self) -> bool:
         try:
             return True
 
