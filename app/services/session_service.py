@@ -76,7 +76,7 @@ class SessionService:
                 "is_suspicious": is_suspicious,
             }
             
-        except Exception as e:
+        except Exception:
             raise
 
     async def _enforce_concurrent_limit(self, entity_id: str) -> None:
@@ -101,7 +101,7 @@ class SessionService:
                     where={"id": {"in": old_ids}},
                     data={"status": SessionStatusEnum.REVOKED},
                 )
-        except Exception as e:
+        except Exception:
             pass
 
     async def update_activity(self, session_token: str) -> Optional[bool]:
@@ -129,7 +129,7 @@ class SessionService:
                 data={"last_activity_at": now}
             )
             return True
-        except Exception as e:
+        except Exception:
             return None
 
     async def enforce_and_update_activity(self, session_token: str) -> Optional[bool]:
@@ -145,7 +145,7 @@ class SessionService:
                 }
             )
             return True
-        except Exception as e:
+        except Exception:
             return False
 
     async def revoke_session(self, session_id: str) -> bool:
@@ -158,7 +158,7 @@ class SessionService:
                 }
             )
             return True
-        except Exception as e:
+        except Exception:
             return False
 
     async def get_active_sessions(self, entity_id: str) -> List[Dict[str, Any]]:
@@ -188,7 +188,7 @@ class SessionService:
                 }
                 for s in sessions
             ]
-        except Exception as e:
+        except Exception:
             return []
 
     async def get_session_history(
@@ -217,7 +217,7 @@ class SessionService:
                 }
                 for s in sessions
             ]
-        except Exception as e:
+        except Exception:
             return []
 
     async def cleanup_expired_sessions(self) -> int:
@@ -231,7 +231,7 @@ class SessionService:
             )
             
             return result
-        except Exception as e:
+        except Exception:
             return 0
 
     async def revoke_all_sessions(self, entity_id: str, except_token: Optional[str] = None) -> int:
@@ -253,7 +253,7 @@ class SessionService:
             )
             
             return result
-        except Exception as e:
+        except Exception:
             return 0
 
     async def _check_suspicious_login(
@@ -289,6 +289,6 @@ class SessionService:
             
             return False
             
-        except Exception as e:
+        except Exception:
             return False
 

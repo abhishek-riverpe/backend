@@ -345,7 +345,7 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
         
     try:
         user = await prisma.entities.find_unique(where={"email": email})
-    except DataError as e:
+    except DataError:
 
         try:
             result = await prisma.query_raw(

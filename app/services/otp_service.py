@@ -87,7 +87,7 @@ class OTPService:
                 "can_resend": False,
             }
 
-        except Exception as e:
+        except Exception:
             return False, "An error occurred while sending OTP", None
 
     async def verify_otp(
@@ -157,7 +157,7 @@ class OTPService:
                 "country_code": country_code,
             }
 
-        except Exception as e:
+        except Exception:
             return False, "An error occurred while verifying OTP", None
 
     async def send_email_otp(self, email: str) -> Tuple[bool, str, Optional[dict]]:
@@ -200,7 +200,7 @@ class OTPService:
                 "can_resend": False,
             }
 
-        except Exception as e:
+        except Exception:
             return False, "An error occurred while sending OTP", None
 
     async def verify_email_otp(self, email: str, otp_code: str) -> Tuple[bool, str, Optional[dict]]:
@@ -262,7 +262,7 @@ class OTPService:
                 "email": email,
             }
 
-        except Exception as e:
+        except Exception:
             return False, "An error occurred while verifying OTP", None
 
     async def _send_email(self, email: str, otp_code: str) -> bool:
@@ -292,7 +292,7 @@ class OTPService:
             await self.fast_mail.send_message(message)
             return True
 
-        except Exception as e:
+        except Exception:
             return False
 
     async def _check_email_rate_limit(self, email: str) -> Optional[any]:
@@ -347,7 +347,7 @@ class OTPService:
                 "attempts_remaining": self.MAX_ATTEMPTS,
             }
 
-        except Exception as e:
+        except Exception:
             return False, "An error occurred while sending reset code", None
 
     async def verify_password_reset_otp(self, email: str, otp_code: str) -> Tuple[bool, str, Optional[dict]]:
@@ -409,7 +409,7 @@ class OTPService:
                 "email": email,
             }
 
-        except Exception as e:
+        except Exception:
             return False, "An error occurred while verifying reset code", None
 
     async def _invalidate_existing_email_otps(self, email: str, otp_type: OtpTypeEnum) -> None:
@@ -428,14 +428,14 @@ class OTPService:
                 return await self._send_via_twilio(phone_number, otp_code)
             else:
                 return True
-        except Exception as e:
+        except Exception:
             return False
 
     async def _send_via_twilio(self, phone_number: str, otp_code: str) -> bool:
         try:
             return True
 
-        except Exception as e:
+        except Exception:
             return False
 
     async def _check_rate_limit(
@@ -481,6 +481,6 @@ class OTPService:
             )
             
             return result
-        except Exception as e:
+        except Exception:
             return 0
 

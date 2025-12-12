@@ -429,7 +429,7 @@ async def get_user_wallet(
                 "createdAt": wallet.created_at.isoformat() if wallet.created_at else None
             }
         }
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch wallet"

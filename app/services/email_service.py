@@ -147,7 +147,7 @@ class EmailService:
             await self.fast_mail.send_message(message)
             return True
             
-        except Exception as e:
+        except Exception:
             return False
 
 
@@ -300,7 +300,7 @@ class EmailService:
             await self.fast_mail.send_message(message)
             return True
             
-        except Exception as e:
+        except Exception:
             return False
 
     async def send_kyc_link_email(
@@ -403,7 +403,7 @@ class EmailService:
             await self.fast_mail.send_message(message)
             return True
             
-        except Exception as e:
+        except Exception:
             return False
 
     async def send_funding_account_created_notification(
@@ -513,7 +513,7 @@ class EmailService:
             await self.fast_mail.send_message(message)
             return True
             
-        except Exception as e:
+        except Exception:
             return False
 
 
