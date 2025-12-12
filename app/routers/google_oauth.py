@@ -1,10 +1,7 @@
 import secrets
-import random
-import logging
 from fastapi import APIRouter, HTTPException, Request, Response, status
-from urllib.parse import urlencode
 from starlette.responses import RedirectResponse
-from authlib.integrations.starlette_client import OAuth, OAuthError
+from authlib.integrations.starlette_client import OAuth, OAuthError # type: ignore
 
 from ..core.config import settings
 from ..core.database import prisma
@@ -12,10 +9,7 @@ from ..core import auth
 from ..utils.oauth_cache import generate_oauth_code, exchange_oauth_code
 from ..utils.errors import internal_error
 
-logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/auth", tags=["auth"]) 
-# Configure Authlib OAuth client for Google
 oauth = OAuth()
 oauth.register(
     name="google",
@@ -30,7 +24,6 @@ oauth.register(
 async def google_login(request: Request):
     if not settings.google_client_id or not settings.google_client_secret:
         raise HTTPException(status_code=500, detail="Google OAuth is not configured")
-    # Build redirect URI; allow override via BACKEND_URL for consistency with Google Console config
     if settings.backend_url:
         redirect_uri = f"{settings.backend_url.rstrip('/')}/auth/google/callback"
     else:
@@ -60,10 +53,8 @@ async def google_callback(request: Request):
     first_name = userinfo.get("given_name") or ""
     last_name = userinfo.get("family_name") or ""
 
-    # Find or create user
     user = await prisma.entities.find_unique(where={"email": email})
     if not user:
-        # Create a random password since login is via Google
         random_password = secrets.token_urlsafe(16)
         hashed = auth.get_password_hash(random_password)
         user = await prisma.entities.create(
@@ -75,12 +66,9 @@ async def google_callback(request: Request):
             }
         )
 
-    # Issue JWTs using new helpers (sub = user id)
     access_token = auth.create_access_token(data={"sub": user.id, "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": user.id, "type": "refresh"})
 
-    # ✅ SECURITY: Generate temporary code instead of passing token in URL
-    # Store tokens securely for exchange
     oauth_data = {
         "user_id": user.id,
         "email": user.email,
@@ -91,23 +79,12 @@ async def google_callback(request: Request):
     }
     temp_code = generate_oauth_code(oauth_data)
 
-    # Redirect back to React app with temporary code (NOT token)
     redirect_to = f"{settings.frontend_url}/oauth/callback?code={temp_code}"
     return RedirectResponse(url=redirect_to, status_code=302)
 
 
 @router.post("/google/exchange")
 async def exchange_oauth_code_endpoint(code_data: dict, request: Request, response: Response):
-    """
-    Exchange temporary OAuth code for HttpOnly session cookies.
-    
-    ✅ SECURITY FIX: Tokens are set as HttpOnly cookies, NOT returned in response.
-    This prevents XSS token theft and ensures tokens never appear in:
-    - Browser history
-    - Server logs
-    - Referer headers
-    - URL parameters
-    """
     code = code_data.get("code")
     if not code:
         raise HTTPException(
@@ -115,7 +92,6 @@ async def exchange_oauth_code_endpoint(code_data: dict, request: Request, respon
             detail="Code is required"
         )
     
-    # Exchange code for stored data (one-time use)
     oauth_data = exchange_oauth_code(code)
     if not oauth_data:
         raise HTTPException(
@@ -123,35 +99,28 @@ async def exchange_oauth_code_endpoint(code_data: dict, request: Request, respon
             detail="Invalid or expired code"
         )
     
-    # ✅ SECURITY FIX: Set tokens as HttpOnly cookies (prevents XSS token theft)
-    # Use secure=True only in production (HTTPS), False for localhost development
-    # Use samesite="lax" in development for cross-port cookies, "strict" in production
     is_production = not settings.frontend_url.startswith("http://localhost")
     
-    # Set access token as HttpOnly cookie (15 minutes expiry)
     response.set_cookie(
         key="rp_access",
         value=oauth_data["access_token"],
-        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
-        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-        secure=is_production,        # True in production (HTTPS), False in development
-        max_age=15 * 60,             # 15 minutes (900 seconds) to match access token expiry
+        httponly=True,
+        samesite="lax" if not is_production else "strict",
+        secure=is_production,
+        max_age=15 * 60,
         path="/",
     )
     
-    # Set refresh token as HttpOnly cookie (24 hours expiry)
     response.set_cookie(
         key="rp_refresh",
         value=oauth_data["refresh_token"],
-        httponly=True,               # ✅ HttpOnly - not accessible to JavaScript
-        samesite="lax" if not is_production else "strict",  # Lax for dev, strict for prod
-        secure=is_production,        # True in production (HTTPS), False in development
-        max_age=24 * 60 * 60,        # 24 hours (86400 seconds) to match refresh token expiry
+        httponly=True,
+        samesite="lax" if not is_production else "strict",
+        secure=is_production,
+        max_age=24 * 60 * 60,
         path="/",
     )
     
-    # ✅ SECURITY FIX: Return ONLY user info, NO tokens
-    # Tokens are in HttpOnly cookies and automatically sent with subsequent requests
     return {
         "success": True,
         "message": "Authentication successful",

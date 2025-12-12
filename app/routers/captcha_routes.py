@@ -1,16 +1,7 @@
-"""
-CAPTCHA Routes
-
-Endpoints for generating and validating CAPTCHA codes.
-"""
-
 from fastapi import APIRouter, HTTPException, status
 from starlette.requests import Request
 from .. import schemas
 from ..services.captcha_service import captcha_service
-import logging
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/captcha",
@@ -20,12 +11,7 @@ router = APIRouter(
 
 @router.post("/generate", response_model=schemas.ApiResponse)
 async def generate_captcha(request: Request):
-    """
-    Generate a new CAPTCHA code.
-    Returns CAPTCHA ID and code for display.
-    """
     try:
-        # Use request client IP or session as identifier
         session_id = getattr(request.client, "host", None) or "anonymous"
         
         captcha_id, captcha_code, captcha_image = captcha_service.generate_captcha(session_id=session_id)
@@ -35,15 +21,14 @@ async def generate_captcha(request: Request):
             "message": "CAPTCHA generated successfully",
             "data": {
                 "captcha_id": captcha_id,
-                "captcha_code": captcha_code,  # Keep for debug/fallback
-                "captcha_image": f"data:image/png;base64,{captcha_image}",  # Base64 image
+                "captcha_code": captcha_code,
+                "captcha_image": f"data:image/png;base64,{captcha_image}",
                 "expires_in_seconds": captcha_service.CAPTCHA_EXPIRY_MINUTES * 60,
             },
             "error": None,
             "meta": {},
         }
-    except Exception as e:
-        logger.error(f"[CAPTCHA] Error generating CAPTCHA: {str(e)}", exc_info=True)
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to generate CAPTCHA. Please try again.",
@@ -52,10 +37,6 @@ async def generate_captcha(request: Request):
 
 @router.post("/validate", response_model=schemas.ApiResponse)
 async def validate_captcha(payload: schemas.CaptchaValidateRequest):
-    """
-    Validate a CAPTCHA code.
-    Used by frontend for real-time validation feedback.
-    """
     try:
         is_valid, error_message = captcha_service.validate_captcha(
             captcha_id=payload.captcha_id,
@@ -78,8 +59,7 @@ async def validate_captcha(payload: schemas.CaptchaValidateRequest):
                 "error": {"code": "INVALID_CAPTCHA", "message": error_message},
                 "meta": {},
             }
-    except Exception as e:
-        logger.error(f"[CAPTCHA] Error validating CAPTCHA: {str(e)}", exc_info=True)
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to validate CAPTCHA. Please try again.",
