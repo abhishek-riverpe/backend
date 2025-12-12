@@ -688,6 +688,7 @@ async def submit_wallet(
                 }
             )
         except Exception:
+            # Wallet creation failed, continue without wallet record
             pass
     
         account_prepare_data = None
@@ -759,18 +760,13 @@ async def submit_wallet(
                                                 "addressFormat": account_details.get("addressFormat")
                                             }
                                         except Exception:
+                                            # Account creation failed, continue without account record
                                             pass
-                                    else:
-                                        pass
-                                else:
-                                    pass
                             except Exception:
+                                # Account signing/submission failed, continue without account
                                 pass
-                    else:
-                        pass
-                else:
-                    pass
         except Exception:
+            # Account preparation failed, continue without account data
             pass
 
         response_data = {
