@@ -226,7 +226,7 @@ class TestZynkWebhook:
                 
                 mock_prisma.funding_accounts.find_first = AsyncMock(return_value=None)
                 
-                with patch('app.routers.webhooks.create_funding_account_from_zynk', new_callable=AsyncMock) as mock_create:
+                with patch('app.services.zynk_client.create_funding_account_from_zynk', new_callable=AsyncMock) as mock_create:
                     mock_create.return_value = {
                         "accountInfo": {
                             "bank_name": "Test Bank",
@@ -236,10 +236,10 @@ class TestZynkWebhook:
                         }
                     }
                     
-                    with patch('app.routers.webhooks.save_funding_account_to_db', new_callable=AsyncMock) as mock_save:
+                    with patch('app.services.funding_account_service.save_funding_account_to_db', new_callable=AsyncMock) as mock_save:
                         mock_save.return_value = MagicMock()
                         
-                        with patch('app.routers.webhooks.email_service') as mock_email:
+                        with patch('app.services.email_service.email_service') as mock_email:
                             mock_email.send_funding_account_created_notification = AsyncMock()
                             
                             response = client.post(

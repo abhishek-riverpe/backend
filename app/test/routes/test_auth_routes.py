@@ -187,44 +187,45 @@ class TestSignup:
             "captcha_code": "ABC12"
         }
         
-        with patch('app.routers.auth_routes._email_exists_in_zynk', new_callable=AsyncMock) as mock_exists:
-            mock_exists.return_value = False
-            
-            with patch('app.routers.auth_routes.prisma') as mock_prisma:
-                mock_tx_ctx = MagicMock()
-                mock_tx = MagicMock()
-                mock_tx.__aenter__ = AsyncMock(return_value=mock_tx_ctx)
-                mock_tx.__aexit__ = AsyncMock(return_value=None)
-                mock_prisma.tx = MagicMock(return_value=mock_tx)
+        with patch('app.routers.security.settings.hibp_enabled', False):
+            with patch('app.routers.auth_routes._email_exists_in_zynk', new_callable=AsyncMock) as mock_exists:
+                mock_exists.return_value = False
                 
-                mock_entity = MagicMock()
-                mock_entity.id = "new-user-id"
-                mock_entity.email = "newuser@example.com"
-                mock_entity.first_name = "John"
-                mock_entity.last_name = "Doe"
-                mock_entity.email_verified = False
-                mock_entity.status = "PENDING"
-                mock_entity.zynk_entity_id = "zynk-entity-123"
-                mock_tx_ctx.entities.create = AsyncMock(return_value=mock_entity)
-                mock_tx_ctx.entities.update = AsyncMock(return_value=mock_entity)
-                
-                mock_prisma.kyc_sessions.create = AsyncMock()
-                
-                response = client.post(
-                    "/api/v1/auth/signup",
-                    json=signup_data
-                )
-                
-                if response.status_code != status.HTTP_201_CREATED:
-                    print(f"Response status: {response.status_code}")
-                    print(f"Response body: {response.json()}")
-                
-                assert response.status_code == status.HTTP_201_CREATED
-                data = response.json()
-                assert data["success"] is True
-                assert "access_token" in data["data"]
-                assert "refresh_token" in data["data"]
-                assert data["data"]["user"]["email"] == "newuser@example.com"
+                with patch('app.routers.auth_routes.prisma') as mock_prisma:
+                    mock_tx_ctx = MagicMock()
+                    mock_tx = MagicMock()
+                    mock_tx.__aenter__ = AsyncMock(return_value=mock_tx_ctx)
+                    mock_tx.__aexit__ = AsyncMock(return_value=None)
+                    mock_prisma.tx = MagicMock(return_value=mock_tx)
+                    
+                    mock_entity = MagicMock()
+                    mock_entity.id = "new-user-id"
+                    mock_entity.email = "newuser@example.com"
+                    mock_entity.first_name = "John"
+                    mock_entity.last_name = "Doe"
+                    mock_entity.email_verified = False
+                    mock_entity.status = "PENDING"
+                    mock_entity.zynk_entity_id = "zynk-entity-123"
+                    mock_tx_ctx.entities.create = AsyncMock(return_value=mock_entity)
+                    mock_tx_ctx.entities.update = AsyncMock(return_value=mock_entity)
+                    
+                    mock_prisma.kyc_sessions.create = AsyncMock()
+                    
+                    response = client.post(
+                        "/api/v1/auth/signup",
+                        json=signup_data
+                    )
+                    
+                    if response.status_code != status.HTTP_201_CREATED:
+                        print(f"Response status: {response.status_code}")
+                        print(f"Response body: {response.json()}")
+                    
+                    assert response.status_code == status.HTTP_201_CREATED
+                    data = response.json()
+                    assert data["success"] is True
+                    assert "access_token" in data["data"]
+                    assert "refresh_token" in data["data"]
+                    assert data["data"]["user"]["email"] == "newuser@example.com"
     
     @pytest.mark.asyncio
     async def test_signup_email_already_exists(self, client, mock_captcha):
@@ -241,16 +242,17 @@ class TestSignup:
             "captcha_code": "ABC12"
         }
         
-        with patch('app.routers.auth_routes._email_exists_in_zynk', new_callable=AsyncMock) as mock_exists:
-            mock_exists.return_value = True
-            
-            response = client.post(
-                "/api/v1/auth/signup",
-                json=signup_data
-            )
-            
-            assert response.status_code == status.HTTP_409_CONFLICT
-            assert "already registered" in response.json()["detail"].lower()
+        with patch('app.routers.security.settings.hibp_enabled', False):
+            with patch('app.routers.auth_routes._email_exists_in_zynk', new_callable=AsyncMock) as mock_exists:
+                mock_exists.return_value = True
+                
+                response = client.post(
+                    "/api/v1/auth/signup",
+                    json=signup_data
+                )
+                
+                assert response.status_code == status.HTTP_409_CONFLICT
+                assert "already registered" in response.json()["detail"].lower()
     
     @pytest.mark.asyncio
     async def test_signup_invalid_captcha(self, client):
@@ -304,7 +306,7 @@ class TestSignup:
                 json=signup_data
             )
             
-            assert response.status_code == status.HTTP_400_BAD_REQUEST
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
 class TestSignin:
@@ -416,27 +418,28 @@ class TestForgotPassword:
     
     @pytest.mark.asyncio
     async def test_forgot_password_confirm_success(self, client, mock_user):
-        with patch('app.routers.auth_routes.OTPService') as mock_otp_service:
-            mock_instance = MagicMock()
-            mock_instance.verify_password_reset_otp = AsyncMock(return_value=(True, "Verified", {}))
-            mock_otp_service.return_value = mock_instance
-            
-            with patch('app.routers.auth_routes.prisma') as mock_prisma:
-                mock_prisma.entities.update = AsyncMock()
+        with patch('app.routers.security.settings.hibp_enabled', False):
+            with patch('app.routers.auth_routes.OTPService') as mock_otp_service:
+                mock_instance = MagicMock()
+                mock_instance.verify_password_reset_otp = AsyncMock(return_value=(True, "Verified", {}))
+                mock_otp_service.return_value = mock_instance
                 
-                response = client.post(
-                    "/api/v1/auth/forgot-password/confirm",
-                    json={
-                        "email": "test@example.com",
-                        "otp_code": "123456",
-                        "new_password": "NewSecurePass123!"
-                    }
-                )
-                
-                assert response.status_code == status.HTTP_200_OK
-                data = response.json()
-                assert data["success"] is True
-                assert "reset successfully" in data["message"].lower()
+                with patch('app.routers.auth_routes.prisma') as mock_prisma:
+                    mock_prisma.entities.update = AsyncMock()
+                    
+                    response = client.post(
+                        "/api/v1/auth/forgot-password/confirm",
+                        json={
+                            "email": "test@example.com",
+                            "otp_code": "123456",
+                            "new_password": "NewSecurePass123!"
+                        }
+                    )
+                    
+                    assert response.status_code == status.HTTP_200_OK
+                    data = response.json()
+                    assert data["success"] is True
+                    assert "reset successfully" in data["message"].lower()
     
     @pytest.mark.asyncio
     async def test_forgot_password_confirm_invalid_otp(self, client):
@@ -528,30 +531,31 @@ class TestChangePassword:
         from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
-        with patch('app.routers.auth_routes.pwd_context.verify', return_value=True):
-            with patch('app.routers.auth_routes.prisma') as mock_prisma:
-                mock_prisma.entities.update = AsyncMock()
-                
-                with patch('app.routers.auth_routes.SessionService') as mock_session_service:
-                    mock_instance = MagicMock()
-                    mock_instance.revoke_all_sessions = AsyncMock()
-                    mock_session_service.return_value = mock_instance
+        with patch('app.routers.security.settings.hibp_enabled', False):
+            with patch('app.routers.auth_routes.pwd_context.verify', return_value=True):
+                with patch('app.routers.auth_routes.prisma') as mock_prisma:
+                    mock_prisma.entities.update = AsyncMock()
                     
-                    with patch('app.routers.auth_routes.email_service') as mock_email:
-                        mock_email.send_password_change_notification = AsyncMock()
+                    with patch('app.routers.auth_routes.SessionService') as mock_session_service:
+                        mock_instance = MagicMock()
+                        mock_instance.revoke_all_sessions = AsyncMock()
+                        mock_session_service.return_value = mock_instance
                         
-                        response = client.post(
-                            "/api/v1/auth/change-password",
-                            headers={"Authorization": f"Bearer {access_token}"},
-                            json={
-                                "current_password": "TestPass123!",
-                                "new_password": "NewSecurePass123!"
-                            }
-                        )
-                        
-                        assert response.status_code == status.HTTP_200_OK
-                        data = response.json()
-                        assert data["success"] is True
+                        with patch('app.routers.auth_routes.email_service') as mock_email:
+                            mock_email.send_password_change_notification = AsyncMock()
+                            
+                            response = client.post(
+                                "/api/v1/auth/change-password",
+                                headers={"Authorization": f"Bearer {access_token}"},
+                                json={
+                                    "current_password": "TestPass123!",
+                                    "new_password": "NewSecurePass123!"
+                                }
+                            )
+                            
+                            assert response.status_code == status.HTTP_200_OK
+                            data = response.json()
+                            assert data["success"] is True
         
         app.dependency_overrides.clear()
     

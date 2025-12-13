@@ -31,7 +31,7 @@ class TestGetKycStatus:
     @pytest.mark.asyncio
     async def test_get_kyc_status_existing_session(self, client, mock_user):
         """Test getting KYC status with existing session"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()
@@ -61,7 +61,7 @@ class TestGetKycStatus:
     @pytest.mark.asyncio
     async def test_get_kyc_status_no_session(self, client, mock_user):
         """Test getting KYC status when no session exists"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()
@@ -100,7 +100,7 @@ class TestGetKycLink:
     @pytest.mark.asyncio
     async def test_get_kyc_link_not_started(self, client, mock_user):
         """Test getting KYC link when status is NOT_STARTED"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()
@@ -143,7 +143,7 @@ class TestGetKycLink:
     @pytest.mark.asyncio
     async def test_get_kyc_link_already_initiated(self, client, mock_user):
         """Test getting KYC link when already initiated"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()
@@ -168,7 +168,7 @@ class TestGetKycLink:
     @pytest.mark.asyncio
     async def test_get_kyc_link_approved(self, client, mock_user):
         """Test getting KYC link when already approved"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()
@@ -194,7 +194,7 @@ class TestGetKycLink:
     @pytest.mark.asyncio
     async def test_get_kyc_link_no_zynk_entity_id(self, client, mock_user):
         """Test getting KYC link without zynk_entity_id"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         mock_user_no_zynk = MagicMock()
         mock_user_no_zynk.id = "test-user-id-123"
         mock_user_no_zynk.zynk_entity_id = None
@@ -214,7 +214,7 @@ class TestGetKycLink:
     @pytest.mark.asyncio
     async def test_get_kyc_link_kyc_already_completed(self, client, mock_user):
         """Test getting KYC link when KYC is already completed"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()

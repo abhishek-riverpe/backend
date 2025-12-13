@@ -56,7 +56,7 @@ class TestGetFundingAccount:
     @pytest.mark.asyncio
     async def test_get_funding_account_success(self, client, mock_user, mock_funding_account):
         """Test successful funding account retrieval"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()
@@ -83,7 +83,7 @@ class TestGetFundingAccount:
     @pytest.mark.asyncio
     async def test_get_funding_account_not_found(self, client, mock_user):
         """Test funding account not found"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()
@@ -108,7 +108,7 @@ class TestGetFundingAccount:
     @pytest.mark.asyncio
     async def test_get_funding_account_kyc_not_completed(self, client, mock_user):
         """Test funding account access without KYC completion"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         with patch('app.routers.funding_account_router.prisma') as mock_prisma:
@@ -128,7 +128,7 @@ class TestGetFundingAccount:
     @pytest.mark.asyncio
     async def test_get_funding_account_no_zynk_entity_id(self, client, mock_user):
         """Test funding account access without zynk_entity_id"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         mock_user_no_zynk = MagicMock()
         mock_user_no_zynk.id = "test-user-id-123"
         mock_user_no_zynk.zynk_entity_id = None
@@ -156,7 +156,7 @@ class TestCreateFundingAccount:
     @pytest.mark.asyncio
     async def test_create_funding_account_success(self, client, mock_user, mock_funding_account):
         """Test successful funding account creation"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()
@@ -199,7 +199,7 @@ class TestCreateFundingAccount:
     @pytest.mark.asyncio
     async def test_create_funding_account_already_exists(self, client, mock_user, mock_funding_account):
         """Test creating funding account when one already exists"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_kyc_session = MagicMock()
@@ -214,7 +214,7 @@ class TestCreateFundingAccount:
                 headers={"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user.id), 'type': 'access'})}"}
             )
             
-            assert response.status_code == status.HTTP_200_OK
+            assert response.status_code == status.HTTP_201_CREATED
             data = response.json()
             assert data["success"] is True
             assert data["data"] is not None
@@ -224,7 +224,7 @@ class TestCreateFundingAccount:
     @pytest.mark.asyncio
     async def test_create_funding_account_kyc_not_completed(self, client, mock_user):
         """Test creating funding account without KYC completion"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         with patch('app.routers.funding_account_router.prisma') as mock_prisma:

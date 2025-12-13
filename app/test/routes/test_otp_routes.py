@@ -81,7 +81,7 @@ class TestSendOtp:
             }
         )
         
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     
     @pytest.mark.asyncio
     async def test_send_otp_missing_fields(self, client):
@@ -224,7 +224,7 @@ class TestSendEmailOtp:
             }
         )
         
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
 class TestVerifyEmailOtp:

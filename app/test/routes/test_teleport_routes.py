@@ -32,6 +32,11 @@ def mock_funding_account():
         id="funding-account-123",
         entity_id="test-user-id-123",
         zynk_funding_account_id="zynk-funding-123",
+        bank_name="Test Bank",
+        bank_account_number="123456",
+        bank_routing_number="987654",
+        currency="USD",
+        status="ACTIVE",
         deleted_at=None,
     )
 
@@ -59,7 +64,7 @@ class TestGetTeleportDetails:
     @pytest.mark.asyncio
     async def test_get_teleport_details_success(self, client, mock_user, mock_funding_account, mock_wallet_account):
         """Test successful teleport details retrieval"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_wallet = MagicMock()
@@ -101,7 +106,7 @@ class TestGetTeleportDetails:
     @pytest.mark.asyncio
     async def test_get_teleport_details_no_funding_account(self, client, mock_user):
         """Test teleport details when no funding account exists"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         with patch('app.routers.teleport_router.prisma') as mock_prisma:
@@ -125,7 +130,7 @@ class TestCreateTeleport:
     @pytest.mark.asyncio
     async def test_create_teleport_success(self, client, mock_user, mock_funding_account, mock_wallet_account):
         """Test successful teleport creation"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         zynk_response = {
@@ -168,7 +173,7 @@ class TestCreateTeleport:
     @pytest.mark.asyncio
     async def test_create_teleport_no_funding_account(self, client, mock_user):
         """Test teleport creation without funding account"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         with patch('app.routers.teleport_router.prisma') as mock_prisma:
@@ -191,7 +196,7 @@ class TestCreateTeleport:
     @pytest.mark.asyncio
     async def test_create_teleport_no_zynk_funding_account_id(self, client, mock_user):
         """Test teleport creation without zynk_funding_account_id"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         mock_funding_account_no_zynk = MagicMock()
@@ -217,7 +222,7 @@ class TestCreateTeleport:
     @pytest.mark.asyncio
     async def test_create_teleport_wallet_account_not_found(self, client, mock_user, mock_funding_account):
         """Test teleport creation with non-existent wallet account"""
-        from ..core.auth import get_current_entity
+        from ...core.auth import get_current_entity
         app.dependency_overrides[get_current_entity] = lambda: mock_user
         
         with patch('app.routers.teleport_router.prisma') as mock_prisma:
