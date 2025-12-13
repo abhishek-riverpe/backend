@@ -54,7 +54,7 @@ class OTPService:
 
             await self._invalidate_existing_otps(phone_number, country_code)
 
-            otp_code = await self.generate_otp()
+            otp_code = self.generate_otp()
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.OTP_EXPIRY_MINUTES)
 
             otp_record = await self.prisma.otp_verifications.create(
@@ -167,7 +167,7 @@ class OTPService:
 
             await self._invalidate_existing_email_otps(email, OtpTypeEnum.EMAIL_VERIFICATION)
 
-            otp_code = await self.generate_otp()
+            otp_code = self.generate_otp()
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.OTP_EXPIRY_MINUTES)
 
             otp_record = await self.prisma.otp_verifications.create(
@@ -315,7 +315,7 @@ class OTPService:
 
             await self._invalidate_existing_email_otps(email, OtpTypeEnum.PASSWORD_RESET)
 
-            otp_code = await self.generate_otp()
+            otp_code = self.generate_otp()
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.OTP_EXPIRY_MINUTES)
 
             otp_record = await self.prisma.otp_verifications.create(
