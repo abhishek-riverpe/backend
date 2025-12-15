@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     # These are safe to commit as they are reserved for documentation/testing
     test_ip_address_1: str = "192.0.2.1"
     test_ip_address_2: str = "192.0.2.2"
+    test_ip_public: str = "192.0.2.10"  # Public IP for testing (RFC 5737)
+    test_ip_localhost: str = "127.0.0.1"  # Localhost (safe exception)
+    test_ip_localhost_v6: str = "::1"  # IPv6 localhost (safe exception)
+    test_ip_private_192: str = "192.168.1.1"  # Private network (RFC 1918)
+    test_ip_private_10: str = "10.0.0.1"  # Private network (RFC 1918)
 
     # Test-only device and location info
     test_device_type: str = "desktop"

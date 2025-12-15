@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 from ...utils.location_service import get_location_from_ip, get_location_from_client
+from ...core.config import settings
 
 
 class TestGetLocationFromIp:
@@ -20,7 +21,7 @@ class TestGetLocationFromIp:
     @pytest.mark.asyncio
     async def test_get_location_from_ip_localhost(self):
         """Test with localhost IP"""
-        result = await get_location_from_ip("127.0.0.1")
+        result = await get_location_from_ip(settings.test_ip_localhost)
         
         assert result["country"] is None
         assert result["city"] is None
@@ -30,7 +31,7 @@ class TestGetLocationFromIp:
     @pytest.mark.asyncio
     async def test_get_location_from_ip_private_network_192(self):
         """Test with private network IP (192.168.x.x)"""
-        result = await get_location_from_ip("192.168.1.1")
+        result = await get_location_from_ip(settings.test_ip_private_192)
         
         assert result["country"] is None
         assert result["city"] is None
@@ -40,7 +41,7 @@ class TestGetLocationFromIp:
     @pytest.mark.asyncio
     async def test_get_location_from_ip_private_network_10(self):
         """Test with private network IP (10.x.x.x)"""
-        result = await get_location_from_ip("10.0.0.1")
+        result = await get_location_from_ip(settings.test_ip_private_10)
         
         assert result["country"] is None
         assert result["city"] is None
@@ -50,7 +51,7 @@ class TestGetLocationFromIp:
     @pytest.mark.asyncio
     async def test_get_location_from_ip_localhost_v6(self):
         """Test with IPv6 localhost"""
-        result = await get_location_from_ip("::1")
+        result = await get_location_from_ip(settings.test_ip_localhost_v6)
         
         assert result["country"] is None
         assert result["city"] is None
@@ -62,10 +63,10 @@ class TestGetLocationFromIp:
         """Test successful location retrieval"""
         mock_response_data = {
             "status": "success",
-            "country": "United States",
-            "city": "New York",
-            "lat": 40.7128,
-            "lon": -74.0060
+            "country": settings.test_country,
+            "city": settings.test_city,
+            "lat": settings.test_latitude,
+            "lon": settings.test_longitude
         }
         
         with patch('httpx.AsyncClient') as mock_client_class:
@@ -76,12 +77,12 @@ class TestGetLocationFromIp:
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            result = await get_location_from_ip("8.8.8.8")
+            result = await get_location_from_ip(settings.test_ip_public)
             
-            assert result["country"] == "United States"
-            assert result["city"] == "New York"
-            assert result["latitude"] == pytest.approx(40.7128)
-            assert result["longitude"] == pytest.approx(-74.0060)
+            assert result["country"] == settings.test_country
+            assert result["city"] == settings.test_city
+            assert result["latitude"] == pytest.approx(settings.test_latitude)
+            assert result["longitude"] == pytest.approx(settings.test_longitude)
     
     @pytest.mark.asyncio
     async def test_get_location_from_ip_api_failure(self):
@@ -99,7 +100,7 @@ class TestGetLocationFromIp:
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            result = await get_location_from_ip("8.8.8.8")
+            result = await get_location_from_ip(settings.test_ip_public)
             
             assert result["country"] is None
             assert result["city"] is None
@@ -116,7 +117,7 @@ class TestGetLocationFromIp:
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            result = await get_location_from_ip("8.8.8.8")
+            result = await get_location_from_ip(settings.test_ip_public)
             
             assert result["country"] is None
             assert result["city"] is None
@@ -131,7 +132,7 @@ class TestGetLocationFromIp:
             mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            result = await get_location_from_ip("8.8.8.8")
+            result = await get_location_from_ip(settings.test_ip_public)
             
             assert result["country"] is None
             assert result["city"] is None
@@ -146,7 +147,7 @@ class TestGetLocationFromIp:
             mock_client.get = AsyncMock(side_effect=Exception("Network error"))
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            result = await get_location_from_ip("8.8.8.8")
+            result = await get_location_from_ip(settings.test_ip_public)
             
             assert result["country"] is None
             assert result["city"] is None
@@ -162,33 +163,33 @@ class TestGetLocationFromClient:
         """Test with location headers provided"""
         mock_request = MagicMock()
         mock_request.headers = {
-            "X-User-Latitude": "40.7128",
-            "X-User-Longitude": "-74.0060",
-            "X-User-City": "New York",
-            "X-User-Country": "United States"
+            "X-User-Latitude": str(settings.test_latitude),
+            "X-User-Longitude": str(settings.test_longitude),
+            "X-User-City": settings.test_city,
+            "X-User-Country": settings.test_country
         }
         
         result = await get_location_from_client(mock_request)
         
-        assert result["latitude"] == pytest.approx(40.7128)
-        assert result["longitude"] == pytest.approx(-74.0060)
-        assert result["city"] == "New York"
-        assert result["country"] == "United States"
+        assert result["latitude"] == pytest.approx(settings.test_latitude)
+        assert result["longitude"] == pytest.approx(settings.test_longitude)
+        assert result["city"] == settings.test_city
+        assert result["country"] == settings.test_country
     
     @pytest.mark.asyncio
     async def test_get_location_from_client_with_lat_lon_only(self):
         """Test with only latitude and longitude headers"""
         mock_request = MagicMock()
         mock_request.headers = {
-            "X-User-Latitude": "40.7128",
-            "X-User-Longitude": "-74.0060"
+            "X-User-Latitude": str(settings.test_latitude),
+            "X-User-Longitude": str(settings.test_longitude)
         }
-        mock_request.client.host = "127.0.0.1"
+        mock_request.client.host = settings.test_ip_localhost
         
         result = await get_location_from_client(mock_request)
         
-        assert result["latitude"] == pytest.approx(40.7128)
-        assert result["longitude"] == pytest.approx(-74.0060)
+        assert result["latitude"] == pytest.approx(settings.test_latitude)
+        assert result["longitude"] == pytest.approx(settings.test_longitude)
         assert result["city"] is None
         assert result["country"] is None
     
@@ -198,9 +199,9 @@ class TestGetLocationFromClient:
         mock_request = MagicMock()
         mock_request.headers = {
             "X-User-Latitude": "invalid",
-            "X-User-Longitude": "-74.0060"
+            "X-User-Longitude": str(settings.test_longitude)
         }
-        mock_request.client.host = "8.8.8.8"
+        mock_request.client.host = settings.test_ip_public
         
         with patch('httpx.AsyncClient') as mock_client_class:
             mock_client = AsyncMock()
@@ -208,10 +209,10 @@ class TestGetLocationFromClient:
             mock_response.status_code = 200
             mock_response.json.return_value = {
                 "status": "success",
-                "country": "United States",
-                "city": "New York",
-                "lat": 40.7128,
-                "lon": -74.0060
+                "country": settings.test_country,
+                "city": settings.test_city,
+                "lat": settings.test_latitude,
+                "lon": settings.test_longitude
             }
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_client_class.return_value.__aenter__.return_value = mock_client
@@ -219,14 +220,14 @@ class TestGetLocationFromClient:
             result = await get_location_from_client(mock_request)
             
             # Should fall back to IP lookup
-            assert result["country"] == "United States"
+            assert result["country"] == settings.test_country
     
     @pytest.mark.asyncio
     async def test_get_location_from_client_no_headers_falls_back_to_ip(self):
         """Test that function falls back to IP lookup when no headers"""
         mock_request = MagicMock()
         mock_request.headers = {}
-        mock_request.client.host = "8.8.8.8"
+        mock_request.client.host = settings.test_ip_public
         
         with patch('httpx.AsyncClient') as mock_client_class:
             mock_client = AsyncMock()
@@ -234,18 +235,18 @@ class TestGetLocationFromClient:
             mock_response.status_code = 200
             mock_response.json.return_value = {
                 "status": "success",
-                "country": "United States",
-                "city": "New York",
-                "lat": 40.7128,
-                "lon": -74.0060
+                "country": settings.test_country,
+                "city": settings.test_city,
+                "lat": settings.test_latitude,
+                "lon": settings.test_longitude
             }
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
             result = await get_location_from_client(mock_request)
             
-            assert result["country"] == "United States"
-            assert result["city"] == "New York"
+            assert result["country"] == settings.test_country
+            assert result["city"] == settings.test_city
     
     @pytest.mark.asyncio
     async def test_get_location_from_client_no_client_host(self):
