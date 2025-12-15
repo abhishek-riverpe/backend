@@ -69,6 +69,30 @@ class Settings(BaseSettings):
     test_password_wrong: str = "WrongPassword123!"
     test_password_weak: str = "weak"
 
+    # Test-only IP addresses (RFC 5737 documentation addresses)
+    # These are safe to commit as they are reserved for documentation/testing
+    test_ip_address_1: str = "192.0.2.1"
+    test_ip_address_2: str = "192.0.2.2"
+
+    # Test-only device and location info
+    test_device_type: str = "desktop"
+    test_device_name: str = "Test Device"
+    test_os_name: str = "Windows"
+    test_os_version: str = "10"
+    test_browser_name: str = "Chrome"
+    test_browser_version: str = "91.0"
+    test_user_agent: str = "Mozilla/5.0"
+    test_country: str = "United States"
+    test_city: str = "New York"
+    test_latitude: float = 40.7128
+    test_longitude: float = -74.0060
+    test_country_alt: str = "Canada"
+
+    # Test-only entity IDs
+    test_entity_id: str = "entity-123"
+    test_session_id: str = "session-123"
+    test_token: str = "token-123"
+
     # Pydantic v2 settings config
     model_config = SettingsConfigDict(
         env_file=".env",

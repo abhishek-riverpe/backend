@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timedelta, timezone
 from ...services.session_service import SessionService
 from ...utils.enums import SessionStatusEnum, LoginMethodEnum
+from ...core.config import settings
 
 
 class TestSessionService:
@@ -22,29 +23,29 @@ class TestSessionService:
     def device_info(self):
         """Sample device info"""
         return {
-            "device_type": "desktop",
-            "device_name": "Test Device",
-            "os_name": "Windows",
-            "os_version": "10",
-            "browser_name": "Chrome",
-            "browser_version": "91.0"
+            "device_type": settings.test_device_type,
+            "device_name": settings.test_device_name,
+            "os_name": settings.test_os_name,
+            "os_version": settings.test_os_version,
+            "browser_name": settings.test_browser_name,
+            "browser_version": settings.test_browser_version
         }
     
     @pytest.fixture
     def location_info(self):
         """Sample location info"""
         return {
-            "country": "United States",
-            "city": "New York",
-            "latitude": 40.7128,
-            "longitude": -74.0060
+            "country": settings.test_country,
+            "city": settings.test_city,
+            "latitude": settings.test_latitude,
+            "longitude": settings.test_longitude
         }
     
     @pytest.mark.asyncio
     async def test_create_session_success(self, session_service, mock_prisma, device_info, location_info):
         """Test successful session creation"""
         mock_session = MagicMock()
-        mock_session.id = "session-123"
+        mock_session.id = settings.test_session_id
         
         # Mock transaction context manager
         mock_tx = MagicMock()
@@ -55,16 +56,16 @@ class TestSessionService:
         mock_prisma.tx = MagicMock(return_value=mock_tx)
         
         result = await session_service.create_session(
-            entity_id="entity-123",
-            session_token="token-123",
+            entity_id=settings.test_entity_id,
+            session_token=settings.test_token,
             login_method=LoginMethodEnum.EMAIL_PASSWORD,
-            ip_address="192.168.1.1",
-            user_agent="Mozilla/5.0",
+            ip_address=settings.test_ip_address_1,
+            user_agent=settings.test_user_agent,
             device_info=device_info,
             location_info=location_info
         )
         
-        assert result["id"] == "session-123"
+        assert result["id"] == settings.test_session_id
         assert "expires_at" in result
         assert "is_suspicious" in result
         mock_tx.login_sessions.create.assert_called_once()
@@ -73,7 +74,7 @@ class TestSessionService:
     async def test_create_session_minimal_info(self, session_service, mock_prisma):
         """Test session creation with minimal information"""
         mock_session = MagicMock()
-        mock_session.id = "session-123"
+        mock_session.id = settings.test_session_id
         
         # Mock transaction context manager
         mock_tx = MagicMock()
@@ -84,11 +85,11 @@ class TestSessionService:
         mock_prisma.tx = MagicMock(return_value=mock_tx)
         
         result = await session_service.create_session(
-            entity_id="entity-123",
-            session_token="token-123"
+            entity_id=settings.test_entity_id,
+            session_token=settings.test_token
         )
         
-        assert result["id"] == "session-123"
+        assert result["id"] == settings.test_session_id
         mock_tx.login_sessions.create.assert_called_once()
     
     @pytest.mark.asyncio
@@ -113,7 +114,7 @@ class TestSessionService:
             mock_settings.max_active_sessions = 3
             
             await session_service.create_session(
-                entity_id="entity-123",
+                entity_id=settings.test_entity_id,
                 session_token="token-new"
             )
             
@@ -129,7 +130,7 @@ class TestSessionService:
         mock_prisma.login_sessions.find_unique = AsyncMock(return_value=mock_session)
         mock_prisma.login_sessions.update = AsyncMock()
         
-        result = await session_service.update_activity("token-123")
+        result = await session_service.update_activity(settings.test_token)
         
         assert result is True
         mock_prisma.login_sessions.update.assert_called_once()
@@ -155,7 +156,7 @@ class TestSessionService:
         with patch('app.services.session_service.settings') as mock_settings:
             mock_settings.inactivity_timeout_minutes = 15
             
-            result = await session_service.update_activity("token-123")
+            result = await session_service.update_activity(settings.test_token)
             
             assert result is False
             # Should update status to EXPIRED
@@ -167,7 +168,7 @@ class TestSessionService:
         """Test successful session logout"""
         mock_prisma.login_sessions.update = AsyncMock()
         
-        result = await session_service.logout_session("token-123")
+        result = await session_service.logout_session(settings.test_token)
         
         assert result is True
         mock_prisma.login_sessions.update.assert_called_once()
@@ -179,7 +180,7 @@ class TestSessionService:
         """Test logout when exception occurs"""
         mock_prisma.login_sessions.update = AsyncMock(side_effect=Exception("DB error"))
         
-        result = await session_service.logout_session("token-123")
+        result = await session_service.logout_session(settings.test_token)
         
         assert result is False
     
@@ -188,7 +189,7 @@ class TestSessionService:
         """Test successful session revocation"""
         mock_prisma.login_sessions.update = AsyncMock()
         
-        result = await session_service.revoke_session("session-123")
+        result = await session_service.revoke_session(settings.test_session_id)
         
         assert result is True
         mock_prisma.login_sessions.update.assert_called_once()
@@ -199,49 +200,49 @@ class TestSessionService:
     async def test_get_active_sessions(self, session_service, mock_prisma):
         """Test getting active sessions for entity"""
         mock_session = MagicMock()
-        mock_session.id = "session-123"
-        mock_session.device_type = "desktop"
-        mock_session.device_name = "Test Device"
-        mock_session.os_name = "Windows"
-        mock_session.browser_name = "Chrome"
-        mock_session.ip_address = "192.168.1.1"
-        mock_session.country = "United States"
-        mock_session.city = "New York"
+        mock_session.id = settings.test_session_id
+        mock_session.device_type = settings.test_device_type
+        mock_session.device_name = settings.test_device_name
+        mock_session.os_name = settings.test_os_name
+        mock_session.browser_name = settings.test_browser_name
+        mock_session.ip_address = settings.test_ip_address_1
+        mock_session.country = settings.test_country
+        mock_session.city = settings.test_city
         mock_session.login_at = datetime.now(timezone.utc)
         mock_session.last_activity_at = datetime.now(timezone.utc)
         mock_session.is_suspicious = False
         
         mock_prisma.login_sessions.find_many = AsyncMock(return_value=[mock_session])
         
-        result = await session_service.get_active_sessions("entity-123")
+        result = await session_service.get_active_sessions(settings.test_entity_id)
         
         assert len(result) == 1
-        assert result[0]["id"] == "session-123"
-        assert result[0]["device_type"] == "desktop"
+        assert result[0]["id"] == settings.test_session_id
+        assert result[0]["device_type"] == settings.test_device_type
     
     @pytest.mark.asyncio
     async def test_get_session_history(self, session_service, mock_prisma):
         """Test getting session history"""
         mock_session = MagicMock()
-        mock_session.id = "session-123"
+        mock_session.id = settings.test_session_id
         mock_session.status = SessionStatusEnum.ACTIVE
         mock_session.login_method = LoginMethodEnum.EMAIL_PASSWORD
-        mock_session.device_name = "Test Device"
-        mock_session.device_type = "desktop"
-        mock_session.os_name = "Windows"
-        mock_session.city = "New York"
-        mock_session.country = "United States"
-        mock_session.ip_address = "192.168.1.1"
+        mock_session.device_name = settings.test_device_name
+        mock_session.device_type = settings.test_device_type
+        mock_session.os_name = settings.test_os_name
+        mock_session.city = settings.test_city
+        mock_session.country = settings.test_country
+        mock_session.ip_address = settings.test_ip_address_1
         mock_session.login_at = datetime.now(timezone.utc)
         mock_session.logout_at = None
         mock_session.is_suspicious = False
         
         mock_prisma.login_sessions.find_many = AsyncMock(return_value=[mock_session])
         
-        result = await session_service.get_session_history("entity-123", limit=50)
+        result = await session_service.get_session_history(settings.test_entity_id, limit=50)
         
         assert len(result) == 1
-        assert result[0]["id"] == "session-123"
+        assert result[0]["id"] == settings.test_session_id
         assert result[0]["status"] == SessionStatusEnum.ACTIVE
     
     @pytest.mark.asyncio
@@ -259,7 +260,7 @@ class TestSessionService:
         """Test revoking all sessions for entity"""
         mock_prisma.login_sessions.update_many = AsyncMock(return_value=5)
         
-        result = await session_service.revoke_all_sessions("entity-123")
+        result = await session_service.revoke_all_sessions(settings.test_entity_id)
         
         assert result == 5
         mock_prisma.login_sessions.update_many.assert_called_once()
@@ -269,20 +270,20 @@ class TestSessionService:
         """Test revoking all sessions except specified token"""
         mock_prisma.login_sessions.update_many = AsyncMock(return_value=4)
         
-        result = await session_service.revoke_all_sessions("entity-123", except_token="token-keep")
+        result = await session_service.revoke_all_sessions(settings.test_entity_id, except_token="token-keep")
         
         assert result == 4
         update_call = mock_prisma.login_sessions.update_many.call_args
         where_clause = update_call[1]["where"]
-        assert where_clause["entity_id"] == "entity-123"
+        assert where_clause["entity_id"] == settings.test_entity_id
         assert "session_token" in where_clause
     
     @pytest.mark.asyncio
     async def test_check_suspicious_login_different_country(self, session_service, mock_prisma):
         """Test detection of suspicious login from different country"""
         existing_session = MagicMock()
-        existing_session.country = "United States"
-        existing_session.ip_address = "192.168.1.1"
+        existing_session.country = settings.test_country
+        existing_session.ip_address = settings.test_ip_address_1
         existing_session.login_at = datetime.now(timezone.utc) - timedelta(hours=1)
         
         mock_session = MagicMock()
@@ -300,10 +301,10 @@ class TestSessionService:
         mock_prisma.login_sessions.find_many = AsyncMock(return_value=[existing_session])
         
         result = await session_service.create_session(
-            entity_id="entity-123",
+            entity_id=settings.test_entity_id,
             session_token="token-new",
-            ip_address="192.168.1.2",
-            location_info={"country": "Canada"}  # Different country
+            ip_address=settings.test_ip_address_2,
+            location_info={"country": settings.test_country_alt}  # Different country
         )
         
         assert result["is_suspicious"] is True
@@ -323,7 +324,7 @@ class TestSessionService:
         mock_prisma.tx = MagicMock(return_value=mock_tx)
         
         result = await session_service.create_session(
-            entity_id="entity-123",
+            entity_id=settings.test_entity_id,
             session_token="token-new"
         )
         
