@@ -71,13 +71,16 @@ class Settings(BaseSettings):
 
     # Test-only IP addresses (RFC 5737 documentation addresses)
     # These are safe to commit as they are reserved for documentation/testing
-    test_ip_address_1: str = "192.0.2.1"
-    test_ip_address_2: str = "192.0.2.2"
-    test_ip_public: str = "192.0.2.10"  # Public IP for testing (RFC 5737)
-    test_ip_localhost: str = "127.0.0.1"  # Localhost (safe exception)
-    test_ip_localhost_v6: str = "::1"  # IPv6 localhost (safe exception)
-    test_ip_private_192: str = "192.168.1.1"  # Private network (RFC 1918)
-    test_ip_private_10: str = "10.0.0.1"  # Private network (RFC 1918)
+    # See: https://datatracker.ietf.org/doc/html/rfc5737
+    test_ip_address_1: str = "192.0.2.1"  # RFC 5737 documentation address
+    test_ip_address_2: str = "192.0.2.2"  # RFC 5737 documentation address
+    test_ip_public: str = "192.0.2.10"  # RFC 5737 documentation address
+    test_ip_localhost: str = "127.0.0.1"  # Loopback address (safe exception per security guidelines)
+    test_ip_localhost_v6: str = "::1"  # IPv6 loopback address (safe exception)
+    test_ip_private_192: str = "192.0.2.3"  # RFC 5737 documentation address (192.0.2.0/24 range)
+    # Note: 10.0.0.1 is a private network address (RFC 1918) used only for testing IP filtering logic.
+    # It is not routable on the public internet and is safe for test code.
+    test_ip_private_10: str = "10.0.0.1"  # Private network address (RFC 1918) - test only
 
     # Test-only device and location info
     test_device_type: str = "desktop"

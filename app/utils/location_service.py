@@ -12,7 +12,12 @@ async def get_location_from_ip(ip_address: Optional[str]) -> Dict[str, Optional[
             "longitude": None,
         }
     
-    if ip_address in ["127.0.0.1", "localhost", "::1"] or ip_address.startswith("192.168.") or ip_address.startswith("10."):
+    # Filter out localhost and private network addresses (RFC 1918)
+    # Note: RFC 5737 documentation addresses (192.0.2.x, 198.51.100.x, 203.0.113.x) are NOT filtered
+    # as they are safe for testing and may be used in mocked API calls
+    if (ip_address in ["127.0.0.1", "localhost", "::1"] or 
+        ip_address.startswith("192.168.") or 
+        ip_address.startswith("10.")):
         return {
             "country": None,
             "city": None,
