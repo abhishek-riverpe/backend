@@ -3,6 +3,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 from ...services.email_service import EmailService
 
+# Test-only IP address - RFC 5737 documentation address (192.0.2.0/24)
+# Safe to use in tests as it's reserved for documentation purposes
+TEST_IP_ADDRESS = "192.0.2.1"
+
 
 class TestEmailService:
     """Tests for EmailService"""
@@ -57,7 +61,7 @@ class TestEmailService:
             user_name="Test User",
             device_info=device_info,
             location_info=location_info,
-            ip_address="192.168.1.1",
+            ip_address=TEST_IP_ADDRESS,
             timestamp=datetime.now()
         )
         
