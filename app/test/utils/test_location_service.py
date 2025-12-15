@@ -80,8 +80,8 @@ class TestGetLocationFromIp:
             
             assert result["country"] == "United States"
             assert result["city"] == "New York"
-            assert result["latitude"] == 40.7128
-            assert result["longitude"] == -74.0060
+            assert result["latitude"] == pytest.approx(40.7128)
+            assert result["longitude"] == pytest.approx(-74.0060)
     
     @pytest.mark.asyncio
     async def test_get_location_from_ip_api_failure(self):
@@ -170,8 +170,8 @@ class TestGetLocationFromClient:
         
         result = await get_location_from_client(mock_request)
         
-        assert result["latitude"] == 40.7128
-        assert result["longitude"] == -74.0060
+        assert result["latitude"] == pytest.approx(40.7128)
+        assert result["longitude"] == pytest.approx(-74.0060)
         assert result["city"] == "New York"
         assert result["country"] == "United States"
     
@@ -187,8 +187,8 @@ class TestGetLocationFromClient:
         
         result = await get_location_from_client(mock_request)
         
-        assert result["latitude"] == 40.7128
-        assert result["longitude"] == -74.0060
+        assert result["latitude"] == pytest.approx(40.7128)
+        assert result["longitude"] == pytest.approx(-74.0060)
         assert result["city"] is None
         assert result["country"] is None
     

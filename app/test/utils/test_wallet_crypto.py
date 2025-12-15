@@ -126,8 +126,6 @@ class TestCompressPublicKey:
     
     def test_compress_public_key_valid(self):
         """Test compressing a valid uncompressed public key"""
-        # Uncompressed key: 0x04 + 32 bytes X + 32 bytes Y
-        uncompressed = bytes([0x04]) + b"x" * 32 + b"y" * 32
         # Make sure Y ends with even byte for 0x02 prefix
         uncompressed = bytes([0x04]) + b"x" * 32 + bytes([0] * 31 + [0])
         
@@ -147,7 +145,7 @@ class TestUncompressPublicKey:
     
     def test_uncompress_public_key_valid(self):
         """Test uncompressing a valid compressed public key"""
-        private_key, uncompressed_public = generate_keypair()
+        _, uncompressed_public = generate_keypair()
         compressed = compress_public_key(bytes.fromhex(uncompressed_public))
         
         result = uncompress_public_key(compressed)

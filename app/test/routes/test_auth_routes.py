@@ -7,6 +7,15 @@ from ...main import app
 from ...core import auth
 from ...core.database import prisma
 
+# Test-only passwords - not real credentials
+TEST_PASSWORD = "TestPass123!"
+TEST_PASSWORD_HASHED = "@Almamun2.O#@$"  # Mock hashed password for test user
+TEST_PASSWORD_SECURE = "SecurePass123!"
+TEST_PASSWORD_NEW = "NewSecurePass123!"
+TEST_PASSWORD_WRONG = "WrongPassword123!"
+TEST_PASSWORD_WEAK = "weak"
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -20,7 +29,7 @@ def mock_user():
         email="test@example.com",
         first_name="Test",
         last_name="User",
-        password="@Almamun2.O#@$",
+        password=TEST_PASSWORD_HASHED,
         email_verified=True,
         login_attempts=0,
         locked_until=None,
@@ -178,7 +187,7 @@ class TestSignup:
             "first_name": "John",
             "last_name": "Doe",
             "email": "newuser@example.com",
-            "password": "SecurePass123!",
+            "password": TEST_PASSWORD_SECURE,
             "date_of_birth": "01/15/1990",
             "nationality": "US",
             "phone_number": "1234567890",
@@ -233,7 +242,7 @@ class TestSignup:
             "first_name": "John",
             "last_name": "Doe",
             "email": "existing@example.com",
-            "password": "SecurePass123!",
+            "password": TEST_PASSWORD_SECURE,
             "date_of_birth": "01/15/1990",
             "nationality": "US",
             "phone_number": "1234567890",
@@ -260,7 +269,7 @@ class TestSignup:
             "first_name": "John",
             "last_name": "Doe",
             "email": "newuser@example.com",
-            "password": "SecurePass123!",
+            "password": TEST_PASSWORD_SECURE,
             "date_of_birth": "01/15/1990",
             "nationality": "US",
             "phone_number": "1234567890",
@@ -289,7 +298,7 @@ class TestSignup:
             "first_name": "John",
             "last_name": "Doe",
             "email": "newuser@example.com",
-            "password": "weak",
+            "password": TEST_PASSWORD_WEAK,
             "date_of_birth": "01/15/1990",
             "nationality": "US",
             "phone_number": "1234567890",
@@ -315,7 +324,7 @@ class TestSignin:
     async def test_signin_success(self, client, mock_user):
         signin_data = {
             "email": "test@example.com",
-            "password": "TestPass123!"
+            "password": TEST_PASSWORD
         }
         
         with patch('app.routers.auth_routes.prisma') as mock_prisma:
@@ -340,7 +349,7 @@ class TestSignin:
     async def test_signin_invalid_credentials(self, client, mock_user):
         signin_data = {
             "email": "test@example.com",
-            "password": "WrongPassword123!"
+            "password": TEST_PASSWORD_WRONG
         }
         
         with patch('app.routers.auth_routes.prisma') as mock_prisma:
@@ -360,7 +369,7 @@ class TestSignin:
     async def test_signin_user_not_found(self, client):
         signin_data = {
             "email": "nonexistent@example.com",
-            "password": "SomePassword123!"
+            "password": TEST_PASSWORD_WRONG
         }
         
         with patch('app.routers.auth_routes.prisma') as mock_prisma:
@@ -379,7 +388,7 @@ class TestSignin:
         
         signin_data = {
             "email": "test@example.com",
-            "password": "TestPass123!"
+            "password": TEST_PASSWORD
         }
         
         with patch('app.routers.auth_routes.prisma') as mock_prisma:
@@ -432,7 +441,7 @@ class TestForgotPassword:
                         json={
                             "email": "test@example.com",
                             "otp_code": "123456",
-                            "new_password": "NewSecurePass123!"
+                            "new_password": TEST_PASSWORD_NEW
                         }
                     )
                     
@@ -453,7 +462,7 @@ class TestForgotPassword:
                 json={
                     "email": "test@example.com",
                     "otp_code": "000000",
-                    "new_password": "NewSecurePass123!"
+                    "new_password": TEST_PASSWORD_NEW
                 }
             )
             
@@ -548,8 +557,8 @@ class TestChangePassword:
                                 "/api/v1/auth/change-password",
                                 headers={"Authorization": f"Bearer {access_token}"},
                                 json={
-                                    "current_password": "TestPass123!",
-                                    "new_password": "NewSecurePass123!"
+                                    "current_password": TEST_PASSWORD,
+                                    "new_password": TEST_PASSWORD_NEW
                                 }
                             )
                             
@@ -570,8 +579,8 @@ class TestChangePassword:
                 "/api/v1/auth/change-password",
                 headers={"Authorization": f"Bearer {access_token}"},
                 json={
-                    "current_password": "WrongPassword123!",
-                    "new_password": "NewSecurePass123!"
+                    "current_password": TEST_PASSWORD_WRONG,
+                    "new_password": TEST_PASSWORD_NEW
                 }
             )
             
@@ -591,8 +600,8 @@ class TestChangePassword:
                 "/api/v1/auth/change-password",
                 headers={"Authorization": f"Bearer {access_token}"},
                 json={
-                    "current_password": "TestPass123!",
-                    "new_password": "TestPass123!"
+                    "current_password": TEST_PASSWORD,
+                    "new_password": TEST_PASSWORD
                 }
             )
             

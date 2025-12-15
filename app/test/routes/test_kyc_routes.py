@@ -27,12 +27,29 @@ def mock_user():
     )
 
 
+@pytest.fixture(autouse=True)
+def cleanup_dependency_overrides():
+    """Automatically clean up dependency overrides after each test"""
+    yield
+    app.dependency_overrides.clear()
+
+
+def get_auth_headers(user):
+    """Helper function to create authorization headers"""
+    return {"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(user.id), 'type': 'access'})}"}
+
+
+def setup_dependency_override(user):
+    """Helper function to set up dependency override"""
+    from ...core.auth import get_current_entity
+    app.dependency_overrides[get_current_entity] = lambda: user
+
+
 class TestGetKycStatus:
     @pytest.mark.asyncio
     async def test_get_kyc_status_existing_session(self, client, mock_user):
         """Test getting KYC status with existing session"""
-        from ...core.auth import get_current_entity
-        app.dependency_overrides[get_current_entity] = lambda: mock_user
+        setup_dependency_override(mock_user)
         
         mock_kyc_session = MagicMock()
         mock_kyc_session.status = "INITIATED"
@@ -47,7 +64,7 @@ class TestGetKycStatus:
             
             response = client.get(
                 "/api/v1/kyc/status",
-                headers={"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user.id), 'type': 'access'})}"}
+                headers=get_auth_headers(mock_user)
             )
             
             assert response.status_code == status.HTTP_200_OK
@@ -55,14 +72,11 @@ class TestGetKycStatus:
             assert data["success"] is True
             assert data["data"]["status"] == "INITIATED"
             assert data["data"]["routing_id"] == "routing-123"
-        
-        app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
     async def test_get_kyc_status_no_session(self, client, mock_user):
         """Test getting KYC status when no session exists"""
-        from ...core.auth import get_current_entity
-        app.dependency_overrides[get_current_entity] = lambda: mock_user
+        setup_dependency_override(mock_user)
         
         mock_kyc_session = MagicMock()
         mock_kyc_session.status = "NOT_STARTED"
@@ -78,15 +92,13 @@ class TestGetKycStatus:
             
             response = client.get(
                 "/api/v1/kyc/status",
-                headers={"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user.id), 'type': 'access'})}"}
+                headers=get_auth_headers(mock_user)
             )
             
             assert response.status_code == status.HTTP_200_OK
             data = response.json()
             assert data["success"] is True
             assert data["data"]["status"] == "NOT_STARTED"
-        
-        app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
     async def test_get_kyc_status_unauthorized(self, client):
@@ -100,8 +112,7 @@ class TestGetKycLink:
     @pytest.mark.asyncio
     async def test_get_kyc_link_not_started(self, client, mock_user):
         """Test getting KYC link when status is NOT_STARTED"""
-        from ...core.auth import get_current_entity
-        app.dependency_overrides[get_current_entity] = lambda: mock_user
+        setup_dependency_override(mock_user)
         
         mock_kyc_session = MagicMock()
         mock_kyc_session.id = "session-123"
@@ -130,21 +141,18 @@ class TestGetKycLink:
                     
                     response = client.get(
                         "/api/v1/kyc/link",
-                        headers={"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user.id), 'type': 'access'})}"}
+                        headers=get_auth_headers(mock_user)
                     )
                     
                     assert response.status_code == status.HTTP_200_OK
                     data = response.json()
                     assert data["success"] is True
                     assert data["data"]["kycLink"] == "https://kyc.example.com/link"
-        
-        app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
     async def test_get_kyc_link_already_initiated(self, client, mock_user):
         """Test getting KYC link when already initiated"""
-        from ...core.auth import get_current_entity
-        app.dependency_overrides[get_current_entity] = lambda: mock_user
+        setup_dependency_override(mock_user)
         
         mock_kyc_session = MagicMock()
         mock_kyc_session.status = "INITIATED"
@@ -155,21 +163,18 @@ class TestGetKycLink:
             
             response = client.get(
                 "/api/v1/kyc/link",
-                headers={"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user.id), 'type': 'access'})}"}
+                headers=get_auth_headers(mock_user)
             )
             
             assert response.status_code == status.HTTP_200_OK
             data = response.json()
             assert data["success"] is True
             assert data["data"]["kycLink"] == "https://kyc.example.com/existing-link"
-        
-        app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
     async def test_get_kyc_link_approved(self, client, mock_user):
         """Test getting KYC link when already approved"""
-        from ...core.auth import get_current_entity
-        app.dependency_overrides[get_current_entity] = lambda: mock_user
+        setup_dependency_override(mock_user)
         
         mock_kyc_session = MagicMock()
         mock_kyc_session.status = "APPROVED"
@@ -180,7 +185,7 @@ class TestGetKycLink:
             
             response = client.get(
                 "/api/v1/kyc/link",
-                headers={"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user.id), 'type': 'access'})}"}
+                headers=get_auth_headers(mock_user)
             )
             
             assert response.status_code == status.HTTP_200_OK
@@ -188,34 +193,28 @@ class TestGetKycLink:
             assert data["success"] is True
             assert data["data"]["kycStatus"] == "approved"
             assert data["data"]["kycLink"] is None
-        
-        app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
     async def test_get_kyc_link_no_zynk_entity_id(self, client, mock_user):
         """Test getting KYC link without zynk_entity_id"""
-        from ...core.auth import get_current_entity
         mock_user_no_zynk = MagicMock()
         mock_user_no_zynk.id = "test-user-id-123"
         mock_user_no_zynk.zynk_entity_id = None
-        app.dependency_overrides[get_current_entity] = lambda: mock_user_no_zynk
+        setup_dependency_override(mock_user_no_zynk)
         
         response = client.get(
             "/api/v1/kyc/link",
-            headers={"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user_no_zynk.id), 'type': 'access'})}"}
+            headers=get_auth_headers(mock_user_no_zynk)
         )
         
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         data = response.json()
         assert "profile setup" in data["detail"]["error"]["message"].lower()
-        
-        app.dependency_overrides.clear()
     
     @pytest.mark.asyncio
     async def test_get_kyc_link_kyc_already_completed(self, client, mock_user):
         """Test getting KYC link when KYC is already completed"""
-        from ...core.auth import get_current_entity
-        app.dependency_overrides[get_current_entity] = lambda: mock_user
+        setup_dependency_override(mock_user)
         
         mock_kyc_session = MagicMock()
         mock_kyc_session.id = "session-123"
@@ -235,13 +234,11 @@ class TestGetKycLink:
                 
                 response = client.get(
                     "/api/v1/kyc/link",
-                    headers={"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user.id), 'type': 'access'})}"}
+                    headers=get_auth_headers(mock_user)
                 )
                 
                 assert response.status_code == status.HTTP_200_OK
                 data = response.json()
                 assert data["success"] is True
                 assert data["data"]["kycStatus"] == "approved"
-        
-        app.dependency_overrides.clear()
 

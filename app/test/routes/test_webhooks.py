@@ -18,6 +18,10 @@ def client():
     return TestClient(app)
 
 
+# Test-only webhook secret - not a real secret
+TEST_WEBHOOK_SECRET = "test-webhook-secret-for-testing-only"
+
+
 def generate_webhook_signature(payload: dict, secret: str) -> str:
     """Helper function to generate webhook signature for testing"""
     timestamp = str(int(time.time()))
@@ -51,11 +55,10 @@ class TestZynkWebhook:
             }
         }
         
-        secret = "test-webhook-secret"
-        signature = generate_webhook_signature(payload, secret)
+        signature = generate_webhook_signature(payload, TEST_WEBHOOK_SECRET)
         
         with patch('app.routers.webhooks.settings') as mock_settings:
-            mock_settings.zynk_webhook_secret = secret
+            mock_settings.zynk_webhook_secret = TEST_WEBHOOK_SECRET
             
             with patch('app.routers.webhooks.prisma') as mock_prisma:
                 mock_entity = MagicMock()
@@ -106,7 +109,7 @@ class TestZynkWebhook:
         }
         
         with patch('app.routers.webhooks.settings') as mock_settings:
-            mock_settings.zynk_webhook_secret = "test-webhook-secret"
+            mock_settings.zynk_webhook_secret = TEST_WEBHOOK_SECRET
             
             response = client.post(
                 "/api/v1/webhooks/zynk",
@@ -126,11 +129,10 @@ class TestZynkWebhook:
             "signedAt": str(int(time.time()) - 400)  # 400 seconds ago
         }
         
-        secret = "test-webhook-secret"
-        signature = generate_webhook_signature(payload, secret)
+        signature = generate_webhook_signature(payload, TEST_WEBHOOK_SECRET)
         
         with patch('app.routers.webhooks.settings') as mock_settings:
-            mock_settings.zynk_webhook_secret = secret
+            mock_settings.zynk_webhook_secret = TEST_WEBHOOK_SECRET
             
             response = client.post(
                 "/api/v1/webhooks/zynk",
@@ -144,10 +146,8 @@ class TestZynkWebhook:
     @pytest.mark.asyncio
     async def test_receive_webhook_invalid_json(self, client):
         """Test webhook reception with invalid JSON"""
-        secret = "test-webhook-secret"
-        
         with patch('app.routers.webhooks.settings') as mock_settings:
-            mock_settings.zynk_webhook_secret = secret
+            mock_settings.zynk_webhook_secret = TEST_WEBHOOK_SECRET
             
             response = client.post(
                 "/api/v1/webhooks/zynk",
@@ -167,11 +167,10 @@ class TestZynkWebhook:
             "eventStatus": "completed"
         }
         
-        secret = "test-webhook-secret"
-        signature = generate_webhook_signature(payload, secret)
+        signature = generate_webhook_signature(payload, TEST_WEBHOOK_SECRET)
         
         with patch('app.routers.webhooks.settings') as mock_settings:
-            mock_settings.zynk_webhook_secret = secret
+            mock_settings.zynk_webhook_secret = TEST_WEBHOOK_SECRET
             
             with patch('app.routers.webhooks.prisma') as mock_prisma:
                 mock_prisma.query_raw = AsyncMock(return_value=[{"id": "webhook-event-123"}])
@@ -202,11 +201,10 @@ class TestZynkWebhook:
             }
         }
         
-        secret = "test-webhook-secret"
-        signature = generate_webhook_signature(payload, secret)
+        signature = generate_webhook_signature(payload, TEST_WEBHOOK_SECRET)
         
         with patch('app.routers.webhooks.settings') as mock_settings:
-            mock_settings.zynk_webhook_secret = secret
+            mock_settings.zynk_webhook_secret = TEST_WEBHOOK_SECRET
             
             with patch('app.routers.webhooks.prisma') as mock_prisma:
                 mock_entity = MagicMock()

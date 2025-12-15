@@ -129,7 +129,7 @@ class TestGetCodeCount:
         data = {"user_id": "123"}
         
         with patch('time.time', return_value=1000):
-            code = generate_oauth_code(data)
+            generate_oauth_code(data)
             count_before = get_code_count()
             assert count_before >= 1
         

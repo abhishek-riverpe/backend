@@ -61,7 +61,7 @@ class TestSaveFundingAccountToDb:
         with patch('app.services.funding_account_service.prisma') as mock_prisma:
             mock_prisma.funding_accounts.create = AsyncMock(return_value=mock_account)
             
-            result = await save_funding_account_to_db("entity-123", zynk_response_data)
+            await save_funding_account_to_db("entity-123", zynk_response_data)
             
             create_call = mock_prisma.funding_accounts.create.call_args
             data = create_call[1]["data"]
