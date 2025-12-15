@@ -40,9 +40,9 @@ def auth_headers(mock_user):
     return {"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user.id), 'type': 'access'})}"}
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def setup_dependency_override(mock_user):
-    """Automatically set up dependency override for each test"""
+    """Set up dependency override for tests that need authentication"""
     from ...core.auth import get_current_entity
     app.dependency_overrides[get_current_entity] = lambda: mock_user
 
@@ -97,18 +97,86 @@ def assert_error_response(response, expected_status_code, error_message_contains
     return data
 
 
+@pytest.fixture
+def mock_user_no_zynk():
+    """Fixture for user without zynk_entity_id"""
+    mock_user = MagicMock()
+    mock_user.id = "test-user-id-123"
+    mock_user.zynk_entity_id = None
+    return mock_user
+
+
+@pytest.fixture
+def auth_headers_no_zynk(mock_user_no_zynk):
+    """Fixture for auth headers without zynk entity"""
+    from ...core.auth import get_current_entity
+    app.dependency_overrides[get_current_entity] = lambda: mock_user_no_zynk
+    return {"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user_no_zynk.id), 'type': 'access'})}"}
+
+
+@pytest.fixture
+def mock_kyc_session_initiated():
+    """Fixture for initiated KYC session"""
+    return create_mock_kyc_session(
+        status="INITIATED",
+        routing_id="routing-123",
+        kyc_link="https://kyc.example.com/link",
+        initiated_at=datetime.now(timezone.utc)
+    )
+
+
+@pytest.fixture
+def mock_kyc_session_not_started():
+    """Fixture for NOT_STARTED KYC session"""
+    return create_mock_kyc_session(
+        id="session-123",
+        status="NOT_STARTED"
+    )
+
+
+def setup_mock_prisma_kyc_with_update(mock_prisma, kyc_session):
+    """Helper function to set up mock KYC session with update mock"""
+    setup_mock_prisma_kyc(mock_prisma, kyc_session)
+    mock_prisma.kyc_sessions.update = AsyncMock(return_value=kyc_session)
+
+
+@pytest.fixture
+def kyc_data():
+    """Fixture for KYC data response"""
+    return {
+        "kycLink": "https://kyc.example.com/link",
+        "tosLink": "https://tos.example.com/link",
+        "kycStatus": "initiated",
+        "tosStatus": "pending",
+        "message": "KYC link generated",
+        "kycCompleted": False
+    }
+
+
+@pytest.fixture
+def kyc_data_completed():
+    """Fixture for completed KYC data response"""
+    return {
+        "kycCompleted": True,
+        "message": "KYC already completed"
+    }
+
+
+@pytest.fixture
+def mock_zynk_patches(kyc_data):
+    """Fixture that provides patched Zynk functions"""
+    with patch('app.routers.kyc_router.get_kyc_link_from_zynk', new_callable=AsyncMock) as mock_get_link, \
+         patch('app.routers.kyc_router.email_service') as mock_email:
+        mock_get_link.return_value = kyc_data
+        mock_email.send_kyc_link_email = AsyncMock()
+        yield mock_get_link, mock_email
+
+
 class TestGetKycStatus:
     @pytest.mark.asyncio
-    async def test_get_kyc_status_existing_session(self, client, mock_user, auth_headers, mock_prisma_context):
+    async def test_get_kyc_status_existing_session(self, client, auth_headers, mock_prisma_context, mock_kyc_session_initiated, setup_dependency_override):
         """Test getting KYC status with existing session"""
-        mock_kyc_session = create_mock_kyc_session(
-            status="INITIATED",
-            routing_id="routing-123",
-            kyc_link="https://kyc.example.com/link",
-            initiated_at=datetime.now(timezone.utc)
-        )
-        
-        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
+        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session_initiated)
         
         response = make_get_request(client, "/api/v1/kyc/status", auth_headers)
         
@@ -117,7 +185,7 @@ class TestGetKycStatus:
         assert data["data"]["routing_id"] == "routing-123"
     
     @pytest.mark.asyncio
-    async def test_get_kyc_status_no_session(self, client, mock_user, auth_headers, mock_prisma_context):
+    async def test_get_kyc_status_no_session(self, client, auth_headers, mock_prisma_context, setup_dependency_override):
         """Test getting KYC status when no session exists"""
         mock_kyc_session = create_mock_kyc_session(status="NOT_STARTED")
         
@@ -137,42 +205,18 @@ class TestGetKycStatus:
 
 
 class TestGetKycLink:
-    @pytest.fixture
-    def kyc_data(self):
-        """Fixture for KYC data response"""
-        return {
-            "kycLink": "https://kyc.example.com/link",
-            "tosLink": "https://tos.example.com/link",
-            "kycStatus": "initiated",
-            "tosStatus": "pending",
-            "message": "KYC link generated",
-            "kycCompleted": False
-        }
-    
     @pytest.mark.asyncio
-    async def test_get_kyc_link_not_started(self, client, mock_user, auth_headers, mock_prisma_context, kyc_data):
+    async def test_get_kyc_link_not_started(self, client, auth_headers, mock_prisma_context, mock_kyc_session_not_started, kyc_data, mock_zynk_patches, setup_dependency_override):
         """Test getting KYC link when status is NOT_STARTED"""
-        mock_kyc_session = create_mock_kyc_session(
-            id="session-123",
-            status="NOT_STARTED"
-        )
+        setup_mock_prisma_kyc_with_update(mock_prisma_context, mock_kyc_session_not_started)
         
-        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
-        mock_prisma_context.kyc_sessions.update = AsyncMock(return_value=mock_kyc_session)
+        response = make_get_request(client, "/api/v1/kyc/link", auth_headers)
         
-        with patch('app.routers.kyc_router.get_kyc_link_from_zynk', new_callable=AsyncMock) as mock_get_link:
-            mock_get_link.return_value = kyc_data
-            
-            with patch('app.routers.kyc_router.email_service') as mock_email:
-                mock_email.send_kyc_link_email = AsyncMock()
-                
-                response = make_get_request(client, "/api/v1/kyc/link", auth_headers)
-                
-                data = assert_success_response(response)
-                assert data["data"]["kycLink"] == "https://kyc.example.com/link"
+        data = assert_success_response(response)
+        assert data["data"]["kycLink"] == "https://kyc.example.com/link"
     
     @pytest.mark.asyncio
-    async def test_get_kyc_link_already_initiated(self, client, mock_user, auth_headers, mock_prisma_context):
+    async def test_get_kyc_link_already_initiated(self, client, auth_headers, mock_prisma_context, setup_dependency_override):
         """Test getting KYC link when already initiated"""
         mock_kyc_session = create_mock_kyc_session(
             status="INITIATED",
@@ -187,7 +231,7 @@ class TestGetKycLink:
         assert data["data"]["kycLink"] == "https://kyc.example.com/existing-link"
     
     @pytest.mark.asyncio
-    async def test_get_kyc_link_approved(self, client, mock_user, auth_headers, mock_prisma_context):
+    async def test_get_kyc_link_approved(self, client, auth_headers, mock_prisma_context, setup_dependency_override):
         """Test getting KYC link when already approved"""
         mock_kyc_session = create_mock_kyc_session(
             status="APPROVED",
@@ -203,37 +247,19 @@ class TestGetKycLink:
         assert data["data"]["kycLink"] is None
     
     @pytest.mark.asyncio
-    async def test_get_kyc_link_no_zynk_entity_id(self, client, mock_prisma_context):
+    async def test_get_kyc_link_no_zynk_entity_id(self, client, mock_prisma_context, auth_headers_no_zynk):
         """Test getting KYC link without zynk_entity_id"""
-        mock_user_no_zynk = MagicMock()
-        mock_user_no_zynk.id = "test-user-id-123"
-        mock_user_no_zynk.zynk_entity_id = None
-        from ...core.auth import get_current_entity
-        app.dependency_overrides[get_current_entity] = lambda: mock_user_no_zynk
-        headers = {"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user_no_zynk.id), 'type': 'access'})}"}
-        
-        response = make_get_request(client, "/api/v1/kyc/link", headers)
+        response = make_get_request(client, "/api/v1/kyc/link", auth_headers_no_zynk)
         
         assert_error_response(response, status.HTTP_400_BAD_REQUEST, "profile setup")
     
     @pytest.mark.asyncio
-    async def test_get_kyc_link_kyc_already_completed(self, client, mock_user, auth_headers, mock_prisma_context):
+    async def test_get_kyc_link_kyc_already_completed(self, client, auth_headers, mock_prisma_context, mock_kyc_session_not_started, kyc_data_completed, setup_dependency_override):
         """Test getting KYC link when KYC is already completed"""
-        mock_kyc_session = create_mock_kyc_session(
-            id="session-123",
-            status="NOT_STARTED"
-        )
-        
-        kyc_data = {
-            "kycCompleted": True,
-            "message": "KYC already completed"
-        }
-        
-        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
-        mock_prisma_context.kyc_sessions.update = AsyncMock(return_value=mock_kyc_session)
+        setup_mock_prisma_kyc_with_update(mock_prisma_context, mock_kyc_session_not_started)
         
         with patch('app.routers.kyc_router.get_kyc_link_from_zynk', new_callable=AsyncMock) as mock_get_link:
-            mock_get_link.return_value = kyc_data
+            mock_get_link.return_value = kyc_data_completed
             
             response = make_get_request(client, "/api/v1/kyc/link", auth_headers)
             

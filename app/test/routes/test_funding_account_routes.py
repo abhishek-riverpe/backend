@@ -97,6 +97,12 @@ def setup_mock_prisma_funding_account(mock_prisma, funding_account=None):
     mock_prisma.funding_accounts.find_first = AsyncMock(return_value=funding_account)
 
 
+def setup_mock_prisma_for_funding_account(mock_prisma, kyc_session=None, funding_account=None):
+    """Helper function to set up both KYC and funding account mocks"""
+    setup_mock_prisma_kyc(mock_prisma, kyc_session)
+    setup_mock_prisma_funding_account(mock_prisma, funding_account)
+
+
 def make_get_request(client, endpoint, headers):
     """Helper function to make GET request"""
     return client.get(endpoint, headers=headers)
@@ -124,12 +130,28 @@ def assert_error_response(response, expected_status_code, error_message_contains
     return data
 
 
+@pytest.fixture
+def mock_user_no_zynk():
+    """Fixture for user without zynk_entity_id"""
+    mock_user = MagicMock()
+    mock_user.id = "test-user-id-123"
+    mock_user.zynk_entity_id = None
+    return mock_user
+
+
+@pytest.fixture
+def auth_headers_no_zynk(mock_user_no_zynk):
+    """Fixture for auth headers without zynk entity"""
+    from ...core.auth import get_current_entity
+    app.dependency_overrides[get_current_entity] = lambda: mock_user_no_zynk
+    return {"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user_no_zynk.id), 'type': 'access'})}"}
+
+
 class TestGetFundingAccount:
     @pytest.mark.asyncio
-    async def test_get_funding_account_success(self, client, mock_user, mock_funding_account, mock_kyc_session, auth_headers, mock_prisma_context):
+    async def test_get_funding_account_success(self, client, mock_funding_account, mock_kyc_session, auth_headers, mock_prisma_context):
         """Test successful funding account retrieval"""
-        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
-        setup_mock_prisma_funding_account(mock_prisma_context, mock_funding_account)
+        setup_mock_prisma_for_funding_account(mock_prisma_context, mock_kyc_session, mock_funding_account)
         
         response = make_get_request(client, "/api/v1/account/funding", auth_headers)
         
@@ -139,10 +161,9 @@ class TestGetFundingAccount:
         assert data["data"]["currency"] == "USD"
     
     @pytest.mark.asyncio
-    async def test_get_funding_account_not_found(self, client, mock_user, mock_kyc_session, auth_headers, mock_prisma_context):
+    async def test_get_funding_account_not_found(self, client, mock_kyc_session, auth_headers, mock_prisma_context):
         """Test funding account not found"""
-        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
-        setup_mock_prisma_funding_account(mock_prisma_context, None)
+        setup_mock_prisma_for_funding_account(mock_prisma_context, mock_kyc_session, None)
         
         response = make_get_request(client, "/api/v1/account/funding", auth_headers)
         
@@ -150,7 +171,7 @@ class TestGetFundingAccount:
         assert data["data"] is None
     
     @pytest.mark.asyncio
-    async def test_get_funding_account_kyc_not_completed(self, client, mock_user, auth_headers, mock_prisma_context):
+    async def test_get_funding_account_kyc_not_completed(self, client, auth_headers, mock_prisma_context):
         """Test funding account access without KYC completion"""
         setup_mock_prisma_kyc(mock_prisma_context, None)
         
@@ -159,60 +180,45 @@ class TestGetFundingAccount:
         assert_error_response(response, status.HTTP_403_FORBIDDEN, "KYC verification")
     
     @pytest.mark.asyncio
-    async def test_get_funding_account_no_zynk_entity_id(self, client, mock_kyc_session, mock_prisma_context):
+    async def test_get_funding_account_no_zynk_entity_id(self, client, mock_kyc_session, mock_prisma_context, auth_headers_no_zynk):
         """Test funding account access without zynk_entity_id"""
-        mock_user_no_zynk = MagicMock()
-        mock_user_no_zynk.id = "test-user-id-123"
-        mock_user_no_zynk.zynk_entity_id = None
-        from ...core.auth import get_current_entity
-        app.dependency_overrides[get_current_entity] = lambda: mock_user_no_zynk
-        headers = {"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user_no_zynk.id), 'type': 'access'})}"}
-        
         setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
         
-        response = make_get_request(client, "/api/v1/account/funding", headers)
+        response = make_get_request(client, "/api/v1/account/funding", auth_headers_no_zynk)
         
         assert_error_response(response, status.HTTP_400_BAD_REQUEST, "profile setup")
 
 
-class TestCreateFundingAccount:
-    @pytest.fixture
-    def zynk_response(self):
-        """Fixture for Zynk API response"""
-        return {
-            "accountInfo": {
-                "bank_name": "Test Bank",
-                "bank_account_number": "987654321",
-                "bank_routing_number": "123456789",
-                "currency": "USD"
-            }
+@pytest.fixture
+def zynk_response():
+    """Fixture for Zynk API response"""
+    return {
+        "accountInfo": {
+            "bank_name": "Test Bank",
+            "bank_account_number": "987654321",
+            "bank_routing_number": "123456789",
+            "currency": "USD"
         }
-    
+    }
+
+
+@pytest.fixture
+def mock_zynk_patches(zynk_response, mock_funding_account):
+    """Fixture that provides patched Zynk functions"""
+    with patch('app.routers.funding_account_router.create_funding_account_from_zynk', new_callable=AsyncMock) as mock_create, \
+         patch('app.routers.funding_account_router.save_funding_account_to_db', new_callable=AsyncMock) as mock_save, \
+         patch('app.routers.funding_account_router.email_service') as mock_email:
+        mock_create.return_value = zynk_response
+        mock_save.return_value = mock_funding_account
+        mock_email.send_funding_account_created_notification = AsyncMock()
+        yield mock_create, mock_save, mock_email
+
+
+class TestCreateFundingAccount:
     @pytest.mark.asyncio
-    async def test_create_funding_account_success(self, client, mock_user, mock_funding_account, mock_kyc_session, auth_headers, mock_prisma_context, zynk_response):
+    async def test_create_funding_account_success(self, client, mock_kyc_session, auth_headers, mock_prisma_context, mock_zynk_patches):
         """Test successful funding account creation"""
-        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
-        setup_mock_prisma_funding_account(mock_prisma_context, None)
-        
-        with patch('app.routers.funding_account_router.create_funding_account_from_zynk', new_callable=AsyncMock) as mock_create:
-            mock_create.return_value = zynk_response
-            
-            with patch('app.routers.funding_account_router.save_funding_account_to_db', new_callable=AsyncMock) as mock_save:
-                mock_save.return_value = mock_funding_account
-                
-                with patch('app.routers.funding_account_router.email_service') as mock_email:
-                    mock_email.send_funding_account_created_notification = AsyncMock()
-                    
-                    response = make_post_request(client, "/api/v1/account/funding/create", auth_headers)
-                    
-                    data = assert_success_response(response, status.HTTP_201_CREATED)
-                    assert data["data"] is not None
-    
-    @pytest.mark.asyncio
-    async def test_create_funding_account_already_exists(self, client, mock_user, mock_funding_account, mock_kyc_session, auth_headers, mock_prisma_context):
-        """Test creating funding account when one already exists"""
-        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
-        setup_mock_prisma_funding_account(mock_prisma_context, mock_funding_account)
+        setup_mock_prisma_for_funding_account(mock_prisma_context, mock_kyc_session, None)
         
         response = make_post_request(client, "/api/v1/account/funding/create", auth_headers)
         
@@ -220,7 +226,17 @@ class TestCreateFundingAccount:
         assert data["data"] is not None
     
     @pytest.mark.asyncio
-    async def test_create_funding_account_kyc_not_completed(self, client, mock_user, auth_headers, mock_prisma_context):
+    async def test_create_funding_account_already_exists(self, client, mock_funding_account, mock_kyc_session, auth_headers, mock_prisma_context):
+        """Test creating funding account when one already exists"""
+        setup_mock_prisma_for_funding_account(mock_prisma_context, mock_kyc_session, mock_funding_account)
+        
+        response = make_post_request(client, "/api/v1/account/funding/create", auth_headers)
+        
+        data = assert_success_response(response, status.HTTP_201_CREATED)
+        assert data["data"] is not None
+    
+    @pytest.mark.asyncio
+    async def test_create_funding_account_kyc_not_completed(self, client, auth_headers, mock_prisma_context):
         """Test creating funding account without KYC completion"""
         setup_mock_prisma_kyc(mock_prisma_context, None)
         
