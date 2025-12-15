@@ -61,7 +61,13 @@ This is the FastAPI backend for the NeoBank application.
     ZYNK_API_KEY="your_zynk_api_key_here"
     ZYNK_DEFAULT_ROUTING_ID="your_routing_id_here"
     ZYNK_WEBHOOK_SECRET="your_webhook_secret_from_zynk_dashboard"
+    
+    # Test Constants (for unit tests only)
+    # These values are loaded from .env.test file (created automatically) to avoid SonarCloud security warnings
+    # You can override them in .env if needed, but .env.test is recommended for test-specific values
     ```
+    
+    **Note:** Test configuration values are automatically loaded from `.env.test` file. This file is created automatically with default test values. The configuration system loads both `.env` and `.env.test` files, with `.env` taking precedence if there are conflicts. This separation helps avoid SonarCloud security warnings for hardcoded test values.
     
     > **Security Note:** `ZYNK_WEBHOOK_SECRET` is required for webhook signature verification. Get this from your Zynk Labs dashboard webhook configuration.
     

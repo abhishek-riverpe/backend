@@ -21,8 +21,25 @@ class SessionService:
         user_agent: Optional[str] = None,
         device_info: Optional[Dict[str, Any]] = None,
         location_info: Optional[Dict[str, Any]] = None,
+        client=None,
     ) -> Dict[str, Any]:
-            expires_at = datetime.now() + timedelta(days=self.SESSION_EXPIRY_DAYS)
+            """
+            Create a login session.
+            
+            Args:
+                entity_id: The entity ID
+                session_token: The session token
+                login_method: The login method used
+                ip_address: Optional IP address
+                user_agent: Optional user agent string
+                device_info: Optional device information dict
+                location_info: Optional location information dict
+                client: Optional Prisma client (for transactions). If None, creates its own transaction.
+            
+            Returns:
+                Dict with session id, expires_at, and is_suspicious flag
+            """
+            expires_at = datetime.now(timezone.utc) + timedelta(days=self.SESSION_EXPIRY_DAYS)
             
             device_data = device_info or {}
             device_type = device_data.get('device_type')
@@ -43,31 +60,61 @@ class SessionService:
                 entity_id, ip_address, country
             )
             
-            await self._enforce_concurrent_limit(entity_id)
+            # If client is provided (for transactions), use it directly
+            # Otherwise, create our own transaction for atomicity
+            if client is not None:
+                await self._enforce_concurrent_limit_with_client(client, entity_id)
+                session = await client.login_sessions.create(
+                    data={
+                        "entity_id": entity_id,
+                        "session_token": session_token,
+                        "login_method": login_method,
+                        "status": SessionStatusEnum.ACTIVE,
+                        "ip_address": ip_address,
+                        "user_agent": user_agent,
+                        "device_type": device_type,
+                        "device_name": device_name,
+                        "os_name": os_name,
+                        "os_version": os_version,
+                        "browser_name": browser_name,
+                        "browser_version": browser_version,
+                        "app_version": app_version,
+                        "country": country,
+                        "city": city,
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "expires_at": expires_at,
+                        "is_suspicious": is_suspicious,
+                    }
+                )
+            else:
+                # Enforce concurrent limit and create session atomically in a transaction
+                async with self.prisma.tx() as tx:
+                    await self._enforce_concurrent_limit_with_client(tx, entity_id)
 
-            session = await self.prisma.login_sessions.create(
-                data={
-                    "entity_id": entity_id,
-                    "session_token": session_token,
-                    "login_method": login_method,
-                    "status": SessionStatusEnum.ACTIVE,
-                    "ip_address": ip_address,
-                    "user_agent": user_agent,
-                    "device_type": device_type,
-                    "device_name": device_name,
-                    "os_name": os_name,
-                    "os_version": os_version,
-                    "browser_name": browser_name,
-                    "browser_version": browser_version,
-                    "app_version": app_version,
-                    "country": country,
-                    "city": city,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "expires_at": expires_at,
-                    "is_suspicious": is_suspicious,
-                }
-            )
+                    session = await tx.login_sessions.create(
+                        data={
+                            "entity_id": entity_id,
+                            "session_token": session_token,
+                            "login_method": login_method,
+                            "status": SessionStatusEnum.ACTIVE,
+                            "ip_address": ip_address,
+                            "user_agent": user_agent,
+                            "device_type": device_type,
+                            "device_name": device_name,
+                            "os_name": os_name,
+                            "os_version": os_version,
+                            "browser_name": browser_name,
+                            "browser_version": browser_version,
+                            "app_version": app_version,
+                            "country": country,
+                            "city": city,
+                            "latitude": latitude,
+                            "longitude": longitude,
+                            "expires_at": expires_at,
+                            "is_suspicious": is_suspicious,
+                        }
+                    )
             
             return {
                 "id": session.id,
@@ -76,12 +123,17 @@ class SessionService:
             }
 
     async def _enforce_concurrent_limit(self, entity_id: str) -> None:
+        """Enforce concurrent session limit using the default prisma client."""
+        await self._enforce_concurrent_limit_with_client(self.prisma, entity_id)
+    
+    async def _enforce_concurrent_limit_with_client(self, client, entity_id: str) -> None:
+        """Enforce concurrent session limit using the provided client (supports transactions)."""
         try:
             max_sessions = settings.max_active_sessions
             if max_sessions is None or max_sessions <= 0:
                 return
 
-            active = await self.prisma.login_sessions.find_many(
+            active = await client.login_sessions.find_many(
                 where={
                     "entity_id": entity_id,
                     "status": SessionStatusEnum.ACTIVE,
@@ -93,7 +145,7 @@ class SessionService:
                 to_evict = len(active) - (max_sessions - 1)
                 to_evict = max(1, to_evict)
                 old_ids = [s.id for s in active[:to_evict]]
-                await self.prisma.login_sessions.update_many(
+                await client.login_sessions.update_many(
                     where={"id": {"in": old_ids}},
                     data={"status": SessionStatusEnum.REVOKED},
                 )
@@ -137,7 +189,7 @@ class SessionService:
                 where={"session_token": session_token},
                 data={
                     "status": SessionStatusEnum.LOGGED_OUT,
-                    "logout_at": datetime.now(),
+                    "logout_at": datetime.now(timezone.utc),
                 }
             )
             return True
@@ -163,7 +215,7 @@ class SessionService:
                 where={
                     "entity_id": entity_id,
                     "status": SessionStatusEnum.ACTIVE,
-                    "expires_at": {"gt": datetime.now()},
+                    "expires_at": {"gt": datetime.now(timezone.utc)},
                 },
                 order={"login_at": "desc"}
             )
@@ -221,7 +273,7 @@ class SessionService:
             result = await self.prisma.login_sessions.update_many(
                 where={
                     "status": SessionStatusEnum.ACTIVE,
-                    "expires_at": {"lt": datetime.now()},
+                    "expires_at": {"lt": datetime.now(timezone.utc)},
                 },
                 data={"status": SessionStatusEnum.EXPIRED}
             )
@@ -230,8 +282,21 @@ class SessionService:
         except Exception:
             return 0
 
-    async def revoke_all_sessions(self, entity_id: str, except_token: Optional[str] = None) -> int:
+    async def revoke_all_sessions(self, entity_id: str, except_token: Optional[str] = None, client=None) -> int:
+        """
+        Revoke all active sessions for an entity.
+        
+        Args:
+            entity_id: The entity ID
+            except_token: Optional session token to exclude from revocation
+            client: Optional Prisma client (for transactions). If None, uses self.prisma.
+        
+        Returns:
+            Number of sessions revoked
+        """
         try:
+            prisma_client = client if client is not None else self.prisma
+            
             where_clause: Dict[str, Any] = {
                 "entity_id": entity_id,
                 "status": SessionStatusEnum.ACTIVE,
@@ -240,7 +305,7 @@ class SessionService:
             if except_token:
                 where_clause["session_token"] = {"not": except_token}
             
-            result = await self.prisma.login_sessions.update_many(
+            result = await prisma_client.login_sessions.update_many(
                 where=where_clause,
                 data={
                     "status": SessionStatusEnum.REVOKED,
@@ -280,7 +345,7 @@ class SessionService:
                 recent_ips = [s.ip_address for s in recent_sessions[:5] if s.ip_address]
                 if recent_ips and ip_address not in recent_ips:
                     latest_login = recent_sessions[0].login_at
-                    if latest_login and (datetime.now() - latest_login).total_seconds() < 300:
+                    if latest_login and (datetime.now(timezone.utc) - latest_login).total_seconds() < 300:
                         return True
             
             return False

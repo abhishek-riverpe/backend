@@ -290,6 +290,7 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
             if not zynk_entity_id:
                 raise HTTPException(status_code=502, detail="Failed to get entity ID from Zynk Labs")
 
+            # Update entity and create kyc_session atomically in a single transaction
             async with prisma.tx() as tx:
                 entity = await tx.entities.update(
                     where={"id": entity.id},
@@ -298,22 +299,26 @@ async def signup(user_in: schemas.UserCreate, response: Response, request: Reque
                         "status": "ACTIVE",
                     }
                 )
-
-            try:
-                await prisma.kyc_sessions.create(
-                    data={
-                        "entity_id": entity.id,
-                        "status": "NOT_STARTED",
-                        "routing_enabled": False,
-                    }
-                )
-            except Exception:
-                pass
+                
+                # Create kyc_session within the same transaction
+                try:
+                    await tx.kyc_sessions.create(
+                        data={
+                            "entity_id": entity.id,
+                            "status": "NOT_STARTED",
+                            "routing_enabled": False,
+                        }
+                    )
+                except Exception:
+                    # If kyc_session creation fails, transaction will rollback
+                    pass
         except Exception as e:
-            try:
-                await prisma.entities.delete(where={"id": entity.id})
-            except Exception:
-                pass
+            # If transaction fails or zynk call fails, clean up the entity
+            if entity and entity.id:
+                try:
+                    await prisma.entities.delete(where={"id": entity.id})
+                except Exception:
+                    pass
             if isinstance(e, HTTPException):
                 raise
             raise upstream_error(
@@ -489,24 +494,48 @@ async def signin(payload: schemas.SignInInput, request: Request, response: Respo
 
         invalid_credentials()
 
-    try:
-        await prisma.entities.update(
-            where={"id": user.id},
-            data={
-                "login_attempts": 0,
-                "locked_until": None,
-                "last_login_at": now,
-                "updated_at": now,
-            },
-        )
-    except PrismaError:
-        pass
-
+    # Update entity login info and create session atomically
     access_token = auth.create_access_token(data={"sub": str(user.id), "type": "access"})
     refresh_token = auth.create_refresh_token(data={"sub": str(user.id), "type": "refresh"})
     
+    try:
+        async with prisma.tx() as tx:
+            # Update entity login information
+            await tx.entities.update(
+                where={"id": user.id},
+                data={
+                    "login_attempts": 0,
+                    "locked_until": None,
+                    "last_login_at": now,
+                    "updated_at": now,
+                },
+            )
+            
+            # Create session within the same transaction for atomicity
+            user_agent = request.headers.get("user-agent")
+            ip_address = getattr(request.client, "host", None)
+            device_info = parse_device_from_headers(request)
+            location_info = await get_location_from_client(request)
+            
+            session_service = SessionService(prisma)
+            await session_service.create_session(
+                entity_id=str(user.id),
+                session_token=access_token,
+                login_method=LoginMethodEnum.EMAIL_PASSWORD,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                device_info=device_info,
+                location_info=location_info,
+                client=tx  # Use transaction client for atomicity
+            )
+    except PrismaError:
+        # If transaction fails, still try to create session (best effort)
+        try:
+            await _create_session_for_user(user, access_token, request)
+        except Exception:
+            pass
+    
     _set_auth_cookies(response, access_token, refresh_token)
-    await _create_session_for_user(user, access_token, request)
     safe_user = _create_safe_user_dict(user)
    
     return {
@@ -701,34 +730,38 @@ async def change_password(
         )
 
     new_password_hash = hash_password(payload.new_password)
+    current_session_token = _extract_bearer_token(request)
 
+    # Update password and revoke sessions atomically
     try:
-        await prisma.entities.update(
-            where={"id": current_user.id},
-            data={
-                "password": new_password_hash,
-                "login_attempts": 0,
-                "locked_until": None,
-                "updated_at": now,
-            },
-        )
+        async with prisma.tx() as tx:
+            # Update password
+            await tx.entities.update(
+                where={"id": current_user.id},
+                data={
+                    "password": new_password_hash,
+                    "login_attempts": 0,
+                    "locked_until": None,
+                    "updated_at": now,
+                },
+            )
+            
+            # Revoke all sessions except current one within the same transaction
+            session_service = SessionService(prisma)
+            await session_service.revoke_all_sessions(
+                entity_id=str(current_user.id),
+                except_token=current_session_token,
+                client=tx
+            )
     except PrismaError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to change password. Please try again later."
         )
-
-    try:
-        current_session_token = _extract_bearer_token(request)
-        session_service = SessionService(prisma)
-        await session_service.revoke_all_sessions(
-            entity_id=str(current_user.id),
-            except_token=current_session_token
-        )
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to revoke active sessions after password change."
+            detail="Failed to change password and revoke sessions."
         )
 
     try:
