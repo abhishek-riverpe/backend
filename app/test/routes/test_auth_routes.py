@@ -7,7 +7,8 @@ from ...main import app
 from ...core import auth
 from ...core.database import prisma
 
-# Test-only passwords - not real credentials
+# Test-only password constants - NOT real production credentials
+# These are used exclusively for unit testing and are safe to commit
 TEST_PASSWORD = "TestPass123!"
 TEST_PASSWORD_HASHED = "@Almamun2.O#@$"  # Mock hashed password for test user
 TEST_PASSWORD_SECURE = "SecurePass123!"
