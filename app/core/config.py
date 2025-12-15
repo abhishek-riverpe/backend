@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     test_ip_localhost: str = Field(default="127.0.0.1")
     test_ip_localhost_v6: str = Field(default="::1")
     test_ip_private_192: str = Field(default="192.0.2.3")
-    test_ip_private_10: str = Field(default="10.0.0.1")
+    test_ip_private_10: str = Field(default="10.0.0.1")  # NOSONAR: Test-only private network IP (RFC 1918) for testing IP filtering logic. Override via TEST_IP_PRIVATE_10 env var.
 
     test_device_type: str = Field(default="desktop")
     test_device_name: str = Field(default="Test Device")
