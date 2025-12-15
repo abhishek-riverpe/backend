@@ -150,18 +150,25 @@ class OTPService:
             }
         )
 
-    async def send_otp(
-        self, 
-        phone_number: str, 
-        country_code: str
+    async def _send_otp_common(
+        self,
+        recent_otp: Optional[any],
+        invalidate_callback: callable,
+        otp_type: OtpTypeEnum,
+        send_callback: callable,
+        otp_data: dict,
+        success_data: dict,
+        success_message: str = "OTP sent successfully",
+        failure_message: str = "Failed to send OTP. Please try again.",
+        error_message: str = "An error occurred while sending OTP"
     ) -> Tuple[bool, str, Optional[dict]]:
+        """Common OTP sending logic"""
         try:
-            recent_otp = await self._check_rate_limit(phone_number, country_code)
             rate_limit_error = self._check_and_handle_rate_limit(recent_otp)
             if rate_limit_error:
                 return rate_limit_error
 
-            await self._invalidate_existing_otps(phone_number, country_code)
+            await invalidate_callback()
 
             otp_code = self.generate_otp()
             expires_at = self._calculate_expires_at()
@@ -170,28 +177,89 @@ class OTPService:
                 data=self._create_otp_data(
                     otp_code=otp_code,
                     expires_at=expires_at,
-                    otp_type=OtpTypeEnum.PHONE_VERIFICATION,
-                    phone_number=phone_number,
-                    country_code=country_code
+                    otp_type=otp_type,
+                    **otp_data
                 )
             )
 
-            sms_sent = await self._send_sms()
+            sent = await send_callback(otp_code)
             
-            if not sms_sent:
-                return False, "Failed to send OTP. Please try again.", None
+            if not sent:
+                return False, failure_message, None
 
-            return True, "OTP sent successfully", {
+            return True, success_message, {
                 "id": otp_record.id,
-                "phone_number": phone_number,
-                "country_code": country_code,
                 "expires_at": expires_at.isoformat(),
                 "attempts_remaining": self.MAX_ATTEMPTS,
                 "can_resend": False,
+                **success_data
             }
 
         except Exception:
-            return False, "An error occurred while sending OTP", None
+            return False, error_message, None
+
+    async def send_otp(
+        self, 
+        phone_number: str, 
+        country_code: str
+    ) -> Tuple[bool, str, Optional[dict]]:
+        recent_otp = await self._check_rate_limit(phone_number, country_code)
+        return await self._send_otp_common(
+            recent_otp=recent_otp,
+            invalidate_callback=lambda: self._invalidate_existing_otps(phone_number, country_code),
+            otp_type=OtpTypeEnum.PHONE_VERIFICATION,
+            send_callback=lambda code: self._send_sms(),
+            otp_data={
+                "phone_number": phone_number,
+                "country_code": country_code
+            },
+            success_data={
+                "phone_number": phone_number,
+                "country_code": country_code,
+            }
+        )
+
+    async def _find_pending_otp(self, where_clause: dict) -> Optional[any]:
+        """Find pending OTP record with given where clause"""
+        return await self.prisma.otp_verifications.find_first(
+            where={**where_clause, "status": OtpStatusEnum.PENDING},
+            order={"created_at": "desc"}
+        )
+
+    async def _verify_otp_common(
+        self,
+        otp_record: any,
+        otp_code: str,
+        success_message: str,
+        success_data: dict,
+        not_found_message: str = "No pending OTP found. Please request a new one.",
+        expired_message: str = "OTP has expired. Please request a new one.",
+        max_attempts_message: str = "Maximum verification attempts exceeded. Please request a new OTP.",
+        invalid_prefix: str = "Invalid OTP"
+    ) -> Tuple[bool, str, Optional[dict]]:
+        """Common OTP verification logic"""
+        if not otp_record:
+            return False, not_found_message, None
+
+        now = datetime.now(timezone.utc)
+        
+        if now > otp_record.expires_at:
+            async with self.prisma.tx() as tx:
+                return await self._handle_expired_otp(otp_record, tx, expired_message)
+
+        if otp_record.attempts >= otp_record.max_attempts:
+            async with self.prisma.tx() as tx:
+                return await self._handle_max_attempts_exceeded(otp_record, tx, max_attempts_message)
+
+        updated_attempts = otp_record.attempts + 1
+        
+        async with self.prisma.tx() as tx:
+            if otp_record.otp_code != otp_code:
+                return await self._handle_invalid_otp(otp_record, updated_attempts, tx, invalid_prefix)
+            else:
+                await self._handle_valid_otp(otp_record, updated_attempts, now, tx)
+
+        return True, success_message, success_data
 
     async def verify_otp(
         self,
@@ -200,123 +268,51 @@ class OTPService:
         otp_code: str
     ) -> Tuple[bool, str, Optional[dict]]:
         try:
-            otp_record = await self.prisma.otp_verifications.find_first(
-                where={
-                    "phone_number": phone_number,
-                    "country_code": country_code,
-                    "status": OtpStatusEnum.PENDING,
-                },
-                order={"created_at": "desc"}
-            )
-
-            if not otp_record:
-                return False, "No pending OTP found. Please request a new one.", None
-
-            now = datetime.now(timezone.utc)
-            
-            # Check expiration and max attempts before starting transaction
-            if now > otp_record.expires_at:
-                async with self.prisma.tx() as tx:
-                    return await self._handle_expired_otp(otp_record, tx)
-
-            if otp_record.attempts >= otp_record.max_attempts:
-                async with self.prisma.tx() as tx:
-                    return await self._handle_max_attempts_exceeded(otp_record, tx)
-
-            # Update attempts and verify OTP atomically
-            updated_attempts = otp_record.attempts + 1
-            
-            async with self.prisma.tx() as tx:
-                if otp_record.otp_code != otp_code:
-                    return await self._handle_invalid_otp(otp_record, updated_attempts, tx)
-                else:
-                    await self._handle_valid_otp(otp_record, updated_attempts, now, tx)
-
-            return True, "Phone number verified successfully", {
-                "verified": True,
+            otp_record = await self._find_pending_otp({
                 "phone_number": phone_number,
                 "country_code": country_code,
-            }
-
+            })
+            
+            return await self._verify_otp_common(
+                otp_record=otp_record,
+                otp_code=otp_code,
+                success_message="Phone number verified successfully",
+                success_data={
+                    "verified": True,
+                    "phone_number": phone_number,
+                    "country_code": country_code,
+                }
+            )
         except Exception:
             return False, "An error occurred while verifying OTP", None
 
     async def send_email_otp(self, email: str) -> Tuple[bool, str, Optional[dict]]:
-        try:
-            recent_otp = await self._check_email_rate_limit(email)
-            rate_limit_error = self._check_and_handle_rate_limit(recent_otp)
-            if rate_limit_error:
-                return rate_limit_error
-
-            await self._invalidate_existing_email_otps(email, OtpTypeEnum.EMAIL_VERIFICATION)
-
-            otp_code = self.generate_otp()
-            expires_at = self._calculate_expires_at()
-
-            otp_record = await self.prisma.otp_verifications.create(
-                data=self._create_otp_data(
-                    otp_code=otp_code,
-                    expires_at=expires_at,
-                    otp_type=OtpTypeEnum.EMAIL_VERIFICATION,
-                    email=email
-                )
-            )
-
-            email_sent = await self._send_email(email, otp_code)
-            
-            if not email_sent:
-                return False, "Failed to send OTP. Please try again.", None
-
-            return True, "OTP sent successfully", {
-                "id": otp_record.id,
-                "email": email,
-                "expires_at": expires_at.isoformat(),
-                "attempts_remaining": self.MAX_ATTEMPTS,
-                "can_resend": False,
-            }
-
-        except Exception:
-            return False, "An error occurred while sending OTP", None
+        recent_otp = await self._check_email_rate_limit(email)
+        return await self._send_otp_common(
+            recent_otp=recent_otp,
+            invalidate_callback=lambda: self._invalidate_existing_email_otps(email, OtpTypeEnum.EMAIL_VERIFICATION),
+            otp_type=OtpTypeEnum.EMAIL_VERIFICATION,
+            send_callback=lambda code: self._send_email(email, code),
+            otp_data={"email": email},
+            success_data={"email": email}
+        )
 
     async def verify_email_otp(self, email: str, otp_code: str) -> Tuple[bool, str, Optional[dict]]:
         try:
-            otp_record = await self.prisma.otp_verifications.find_first(
-                where={
-                    "email": email,
-                    "status": OtpStatusEnum.PENDING,
-                    "otp_type": OtpTypeEnum.EMAIL_VERIFICATION,
-                },
-                order={"created_at": "desc"}
-            )
-
-            if not otp_record:
-                return False, "No pending OTP found. Please request a new one.", None
-
-            now = datetime.now(timezone.utc)
-            
-            # Check expiration and max attempts before starting transaction
-            if now > otp_record.expires_at:
-                async with self.prisma.tx() as tx:
-                    return await self._handle_expired_otp(otp_record, tx)
-
-            if otp_record.attempts >= otp_record.max_attempts:
-                async with self.prisma.tx() as tx:
-                    return await self._handle_max_attempts_exceeded(otp_record, tx)
-
-            # Update attempts and verify OTP atomically
-            updated_attempts = otp_record.attempts + 1
-            
-            async with self.prisma.tx() as tx:
-                if otp_record.otp_code != otp_code:
-                    return await self._handle_invalid_otp(otp_record, updated_attempts, tx)
-                else:
-                    await self._handle_valid_otp(otp_record, updated_attempts, now, tx)
-
-            return True, "Email verified successfully", {
-                "verified": True,
+            otp_record = await self._find_pending_otp({
                 "email": email,
-            }
-
+                "otp_type": OtpTypeEnum.EMAIL_VERIFICATION,
+            })
+            
+            return await self._verify_otp_common(
+                otp_record=otp_record,
+                otp_code=otp_code,
+                success_message="Email verified successfully",
+                success_data={
+                    "verified": True,
+                    "email": email,
+                }
+            )
         except Exception:
             return False, "An error occurred while verifying OTP", None
 
@@ -364,96 +360,45 @@ class OTPService:
         return recent_otp
 
     async def send_password_reset_otp(self, email: str) -> Tuple[bool, str, Optional[dict]]:
-        try:
-            recent_otp = await self._check_email_rate_limit(email)
-            rate_limit_error = self._check_and_handle_rate_limit(recent_otp)
-            if rate_limit_error:
-                # Customize message for password reset
-                if rate_limit_error[0] is False:
-                    return False, rate_limit_error[1].replace("requesting a new OTP", "requesting another code"), None
-                return rate_limit_error
-
-            await self._invalidate_existing_email_otps(email, OtpTypeEnum.PASSWORD_RESET)
-
-            otp_code = self.generate_otp()
-            expires_at = self._calculate_expires_at()
-
-            otp_record = await self.prisma.otp_verifications.create(
-                data=self._create_otp_data(
-                    otp_code=otp_code,
-                    expires_at=expires_at,
-                    otp_type=OtpTypeEnum.PASSWORD_RESET,
-                    email=email
-                )
-            )
-
-            email_sent = await self._send_email(email, otp_code)
-
-            if not email_sent:
-                return False, "Failed to send password reset code. Please try again.", None
-
-            return True, "Password reset code sent successfully", {
-                "id": otp_record.id,
-                "email": email,
-                "expires_at": expires_at.isoformat(),
-                "attempts_remaining": self.MAX_ATTEMPTS,
-            }
-
-        except Exception:
-            return False, "An error occurred while sending reset code", None
+        recent_otp = await self._check_email_rate_limit(email)
+        rate_limit_error = self._check_and_handle_rate_limit(recent_otp)
+        if rate_limit_error:
+            if rate_limit_error[0] is False:
+                return False, rate_limit_error[1].replace("requesting a new OTP", "requesting another code"), None
+            return rate_limit_error
+        
+        return await self._send_otp_common(
+            recent_otp=None,
+            invalidate_callback=lambda: self._invalidate_existing_email_otps(email, OtpTypeEnum.PASSWORD_RESET),
+            otp_type=OtpTypeEnum.PASSWORD_RESET,
+            send_callback=lambda code: self._send_email(email, code),
+            otp_data={"email": email},
+            success_data={"email": email},
+            success_message="Password reset code sent successfully",
+            failure_message="Failed to send password reset code. Please try again.",
+            error_message="An error occurred while sending reset code"
+        )
 
     async def verify_password_reset_otp(self, email: str, otp_code: str) -> Tuple[bool, str, Optional[dict]]:
         try:
-            otp_record = await self.prisma.otp_verifications.find_first(
-                where={
-                    "email": email,
-                    "status": OtpStatusEnum.PENDING,
-                    "otp_type": OtpTypeEnum.PASSWORD_RESET,
-                },
-                order={"created_at": "desc"}
-            )
-
-            if not otp_record:
-                return False, "No pending password reset request found. Please request a new code.", None
-
-            now = datetime.now(timezone.utc)
-            
-            # Check expiration and max attempts before starting transaction
-            if now > otp_record.expires_at:
-                async with self.prisma.tx() as tx:
-                    return await self._handle_expired_otp(
-                        otp_record, 
-                        tx,
-                        "Password reset code has expired. Please request a new one."
-                    )
-
-            if otp_record.attempts >= otp_record.max_attempts:
-                async with self.prisma.tx() as tx:
-                    return await self._handle_max_attempts_exceeded(
-                        otp_record, 
-                        tx,
-                        "Maximum attempts exceeded. Please request a new password reset code."
-                    )
-
-            # Update attempts and verify OTP atomically
-            updated_attempts = otp_record.attempts + 1
-            
-            async with self.prisma.tx() as tx:
-                if otp_record.otp_code != otp_code:
-                    return await self._handle_invalid_otp(
-                        otp_record, 
-                        updated_attempts, 
-                        tx,
-                        "Invalid code"
-                    )
-                else:
-                    await self._handle_valid_otp(otp_record, updated_attempts, now, tx)
-
-            return True, "Password reset code verified", {
-                "verified": True,
+            otp_record = await self._find_pending_otp({
                 "email": email,
-            }
-
+                "otp_type": OtpTypeEnum.PASSWORD_RESET,
+            })
+            
+            return await self._verify_otp_common(
+                otp_record=otp_record,
+                otp_code=otp_code,
+                success_message="Password reset code verified",
+                success_data={
+                    "verified": True,
+                    "email": email,
+                },
+                not_found_message="No pending password reset request found. Please request a new code.",
+                expired_message="Password reset code has expired. Please request a new one.",
+                max_attempts_message="Maximum attempts exceeded. Please request a new password reset code.",
+                invalid_prefix="Invalid code"
+            )
         except Exception:
             return False, "An error occurred while verifying reset code", None
 

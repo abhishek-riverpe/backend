@@ -67,15 +67,24 @@ def cleanup_dependency_overrides():
     app.dependency_overrides.clear()
 
 
-def get_auth_headers(user):
-    """Helper function to create authorization headers"""
-    return {"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(user.id), 'type': 'access'})}"}
+@pytest.fixture
+def auth_headers(mock_user):
+    """Fixture to create authorization headers"""
+    return {"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user.id), 'type': 'access'})}"}
 
 
-def setup_dependency_override(user):
-    """Helper function to set up dependency override"""
+@pytest.fixture(autouse=True)
+def setup_dependency_override(mock_user):
+    """Automatically set up dependency override for each test"""
     from ...core.auth import get_current_entity
-    app.dependency_overrides[get_current_entity] = lambda: user
+    app.dependency_overrides[get_current_entity] = lambda: mock_user
+
+
+@pytest.fixture
+def mock_prisma_context():
+    """Fixture that provides a patched prisma context"""
+    with patch('app.routers.funding_account_router.prisma') as mock_prisma:
+        yield mock_prisma
 
 
 def setup_mock_prisma_kyc(mock_prisma, kyc_session=None):
@@ -86,6 +95,16 @@ def setup_mock_prisma_kyc(mock_prisma, kyc_session=None):
 def setup_mock_prisma_funding_account(mock_prisma, funding_account=None):
     """Helper function to set up mock funding account"""
     mock_prisma.funding_accounts.find_first = AsyncMock(return_value=funding_account)
+
+
+def make_get_request(client, endpoint, headers):
+    """Helper function to make GET request"""
+    return client.get(endpoint, headers=headers)
+
+
+def make_post_request(client, endpoint, headers, json_data=None):
+    """Helper function to make POST request"""
+    return client.post(endpoint, headers=headers, json=json_data)
 
 
 def assert_success_response(response, expected_status_code):
@@ -107,82 +126,60 @@ def assert_error_response(response, expected_status_code, error_message_contains
 
 class TestGetFundingAccount:
     @pytest.mark.asyncio
-    async def test_get_funding_account_success(self, client, mock_user, mock_funding_account, mock_kyc_session):
+    async def test_get_funding_account_success(self, client, mock_user, mock_funding_account, mock_kyc_session, auth_headers, mock_prisma_context):
         """Test successful funding account retrieval"""
-        setup_dependency_override(mock_user)
+        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
+        setup_mock_prisma_funding_account(mock_prisma_context, mock_funding_account)
         
-        with patch('app.routers.funding_account_router.prisma') as mock_prisma:
-            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
-            setup_mock_prisma_funding_account(mock_prisma, mock_funding_account)
-            
-            response = client.get(
-                "/api/v1/account/funding",
-                headers=get_auth_headers(mock_user)
-            )
-            
-            data = assert_success_response(response, status.HTTP_200_OK)
-            assert data["data"] is not None
-            assert data["data"]["bank_name"] == "Test Bank"
-            assert data["data"]["currency"] == "USD"
+        response = make_get_request(client, "/api/v1/account/funding", auth_headers)
+        
+        data = assert_success_response(response, status.HTTP_200_OK)
+        assert data["data"] is not None
+        assert data["data"]["bank_name"] == "Test Bank"
+        assert data["data"]["currency"] == "USD"
     
     @pytest.mark.asyncio
-    async def test_get_funding_account_not_found(self, client, mock_user, mock_kyc_session):
+    async def test_get_funding_account_not_found(self, client, mock_user, mock_kyc_session, auth_headers, mock_prisma_context):
         """Test funding account not found"""
-        setup_dependency_override(mock_user)
+        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
+        setup_mock_prisma_funding_account(mock_prisma_context, None)
         
-        with patch('app.routers.funding_account_router.prisma') as mock_prisma:
-            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
-            setup_mock_prisma_funding_account(mock_prisma, None)
-            
-            response = client.get(
-                "/api/v1/account/funding",
-                headers=get_auth_headers(mock_user)
-            )
-            
-            data = assert_success_response(response, status.HTTP_200_OK)
-            assert data["data"] is None
+        response = make_get_request(client, "/api/v1/account/funding", auth_headers)
+        
+        data = assert_success_response(response, status.HTTP_200_OK)
+        assert data["data"] is None
     
     @pytest.mark.asyncio
-    async def test_get_funding_account_kyc_not_completed(self, client, mock_user):
+    async def test_get_funding_account_kyc_not_completed(self, client, mock_user, auth_headers, mock_prisma_context):
         """Test funding account access without KYC completion"""
-        setup_dependency_override(mock_user)
+        setup_mock_prisma_kyc(mock_prisma_context, None)
         
-        with patch('app.routers.funding_account_router.prisma') as mock_prisma:
-            setup_mock_prisma_kyc(mock_prisma, None)
-            
-            response = client.get(
-                "/api/v1/account/funding",
-                headers=get_auth_headers(mock_user)
-            )
-            
-            assert_error_response(response, status.HTTP_403_FORBIDDEN, "KYC verification")
+        response = make_get_request(client, "/api/v1/account/funding", auth_headers)
+        
+        assert_error_response(response, status.HTTP_403_FORBIDDEN, "KYC verification")
     
     @pytest.mark.asyncio
-    async def test_get_funding_account_no_zynk_entity_id(self, client, mock_user, mock_kyc_session):
+    async def test_get_funding_account_no_zynk_entity_id(self, client, mock_kyc_session, mock_prisma_context):
         """Test funding account access without zynk_entity_id"""
         mock_user_no_zynk = MagicMock()
         mock_user_no_zynk.id = "test-user-id-123"
         mock_user_no_zynk.zynk_entity_id = None
-        setup_dependency_override(mock_user_no_zynk)
+        from ...core.auth import get_current_entity
+        app.dependency_overrides[get_current_entity] = lambda: mock_user_no_zynk
+        headers = {"Authorization": f"Bearer {auth.create_access_token(data={'sub': str(mock_user_no_zynk.id), 'type': 'access'})}"}
         
-        with patch('app.routers.funding_account_router.prisma') as mock_prisma:
-            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
-            
-            response = client.get(
-                "/api/v1/account/funding",
-                headers=get_auth_headers(mock_user_no_zynk)
-            )
-            
-            assert_error_response(response, status.HTTP_400_BAD_REQUEST, "profile setup")
+        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
+        
+        response = make_get_request(client, "/api/v1/account/funding", headers)
+        
+        assert_error_response(response, status.HTTP_400_BAD_REQUEST, "profile setup")
 
 
 class TestCreateFundingAccount:
-    @pytest.mark.asyncio
-    async def test_create_funding_account_success(self, client, mock_user, mock_funding_account, mock_kyc_session):
-        """Test successful funding account creation"""
-        setup_dependency_override(mock_user)
-        
-        zynk_response = {
+    @pytest.fixture
+    def zynk_response(self):
+        """Fixture for Zynk API response"""
+        return {
             "accountInfo": {
                 "bank_name": "Test Bank",
                 "bank_account_number": "987654321",
@@ -190,57 +187,44 @@ class TestCreateFundingAccount:
                 "currency": "USD"
             }
         }
+    
+    @pytest.mark.asyncio
+    async def test_create_funding_account_success(self, client, mock_user, mock_funding_account, mock_kyc_session, auth_headers, mock_prisma_context, zynk_response):
+        """Test successful funding account creation"""
+        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
+        setup_mock_prisma_funding_account(mock_prisma_context, None)
         
-        with patch('app.routers.funding_account_router.prisma') as mock_prisma:
-            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
-            setup_mock_prisma_funding_account(mock_prisma, None)
+        with patch('app.routers.funding_account_router.create_funding_account_from_zynk', new_callable=AsyncMock) as mock_create:
+            mock_create.return_value = zynk_response
             
-            with patch('app.routers.funding_account_router.create_funding_account_from_zynk', new_callable=AsyncMock) as mock_create:
-                mock_create.return_value = zynk_response
+            with patch('app.routers.funding_account_router.save_funding_account_to_db', new_callable=AsyncMock) as mock_save:
+                mock_save.return_value = mock_funding_account
                 
-                with patch('app.routers.funding_account_router.save_funding_account_to_db', new_callable=AsyncMock) as mock_save:
-                    mock_save.return_value = mock_funding_account
+                with patch('app.routers.funding_account_router.email_service') as mock_email:
+                    mock_email.send_funding_account_created_notification = AsyncMock()
                     
-                    with patch('app.routers.funding_account_router.email_service') as mock_email:
-                        mock_email.send_funding_account_created_notification = AsyncMock()
-                        
-                        response = client.post(
-                            "/api/v1/account/funding/create",
-                            headers=get_auth_headers(mock_user)
-                        )
-                        
-                        data = assert_success_response(response, status.HTTP_201_CREATED)
-                        assert data["data"] is not None
+                    response = make_post_request(client, "/api/v1/account/funding/create", auth_headers)
+                    
+                    data = assert_success_response(response, status.HTTP_201_CREATED)
+                    assert data["data"] is not None
     
     @pytest.mark.asyncio
-    async def test_create_funding_account_already_exists(self, client, mock_user, mock_funding_account, mock_kyc_session):
+    async def test_create_funding_account_already_exists(self, client, mock_user, mock_funding_account, mock_kyc_session, auth_headers, mock_prisma_context):
         """Test creating funding account when one already exists"""
-        setup_dependency_override(mock_user)
+        setup_mock_prisma_kyc(mock_prisma_context, mock_kyc_session)
+        setup_mock_prisma_funding_account(mock_prisma_context, mock_funding_account)
         
-        with patch('app.routers.funding_account_router.prisma') as mock_prisma:
-            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
-            setup_mock_prisma_funding_account(mock_prisma, mock_funding_account)
-            
-            response = client.post(
-                "/api/v1/account/funding/create",
-                headers=get_auth_headers(mock_user)
-            )
-            
-            data = assert_success_response(response, status.HTTP_201_CREATED)
-            assert data["data"] is not None
+        response = make_post_request(client, "/api/v1/account/funding/create", auth_headers)
+        
+        data = assert_success_response(response, status.HTTP_201_CREATED)
+        assert data["data"] is not None
     
     @pytest.mark.asyncio
-    async def test_create_funding_account_kyc_not_completed(self, client, mock_user):
+    async def test_create_funding_account_kyc_not_completed(self, client, mock_user, auth_headers, mock_prisma_context):
         """Test creating funding account without KYC completion"""
-        setup_dependency_override(mock_user)
+        setup_mock_prisma_kyc(mock_prisma_context, None)
         
-        with patch('app.routers.funding_account_router.prisma') as mock_prisma:
-            setup_mock_prisma_kyc(mock_prisma, None)
-            
-            response = client.post(
-                "/api/v1/account/funding/create",
-                headers=get_auth_headers(mock_user)
-            )
-            
-            assert_error_response(response, status.HTTP_403_FORBIDDEN, "KYC verification")
+        response = make_post_request(client, "/api/v1/account/funding/create", auth_headers)
+        
+        assert_error_response(response, status.HTTP_403_FORBIDDEN, "KYC verification")
 
