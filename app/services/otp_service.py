@@ -42,7 +42,7 @@ class OTPService:
         """Calculate OTP expiration time"""
         return datetime.now(timezone.utc) + timedelta(minutes=self.OTP_EXPIRY_MINUTES)
 
-    async def _check_and_handle_rate_limit(
+    def _check_and_handle_rate_limit(
         self, 
         recent_otp: Optional[any]
     ) -> Optional[Tuple[bool, str, Optional[dict]]]:
@@ -157,7 +157,7 @@ class OTPService:
     ) -> Tuple[bool, str, Optional[dict]]:
         try:
             recent_otp = await self._check_rate_limit(phone_number, country_code)
-            rate_limit_error = await self._check_and_handle_rate_limit(recent_otp)
+            rate_limit_error = self._check_and_handle_rate_limit(recent_otp)
             if rate_limit_error:
                 return rate_limit_error
 
@@ -244,7 +244,7 @@ class OTPService:
     async def send_email_otp(self, email: str) -> Tuple[bool, str, Optional[dict]]:
         try:
             recent_otp = await self._check_email_rate_limit(email)
-            rate_limit_error = await self._check_and_handle_rate_limit(recent_otp)
+            rate_limit_error = self._check_and_handle_rate_limit(recent_otp)
             if rate_limit_error:
                 return rate_limit_error
 
@@ -366,7 +366,7 @@ class OTPService:
     async def send_password_reset_otp(self, email: str) -> Tuple[bool, str, Optional[dict]]:
         try:
             recent_otp = await self._check_email_rate_limit(email)
-            rate_limit_error = await self._check_and_handle_rate_limit(recent_otp)
+            rate_limit_error = self._check_and_handle_rate_limit(recent_otp)
             if rate_limit_error:
                 # Customize message for password reset
                 if rate_limit_error[0] is False:
