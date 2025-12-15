@@ -1,5 +1,4 @@
 import secrets
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -54,40 +53,40 @@ class Settings(BaseSettings):
 
     max_active_sessions: int = 3  
 
-    test_password: str = Field(default="TestPass123!")
-    test_password_hashed: str = Field(default="@Almamun2.O#@$")
-    test_password_secure: str = Field(default="SecurePass123!")
-    test_password_new: str = Field(default="NewSecurePass123!")
-    test_password_wrong: str = Field(default="WrongPassword123!")
-    test_password_weak: str = Field(default="weak")
+    test_password: str | None = None
+    test_password_hashed: str | None = None
+    test_password_secure: str | None = None
+    test_password_new: str | None = None
+    test_password_wrong: str | None = None
+    test_password_weak: str | None = None
 
-    test_ip_address_1: str = Field(default="192.0.2.1")
-    test_ip_address_2: str = Field(default="192.0.2.2")
-    test_ip_public: str = Field(default="192.0.2.10")
-    test_ip_localhost: str = Field(default="127.0.0.1")
-    test_ip_localhost_v6: str = Field(default="::1")
-    test_ip_private_192: str = Field(default="192.0.2.3")
-    test_ip_private_10: str = Field(default="10.0.0.1")  # NOSONAR: Test-only private network IP (RFC 1918) for testing IP filtering logic. Override via TEST_IP_PRIVATE_10 env var.
+    test_ip_address_1: str | None = None
+    test_ip_address_2: str | None = None
+    test_ip_public: str | None = None
+    test_ip_localhost: str | None = None
+    test_ip_localhost_v6: str | None = None
+    test_ip_private_192: str | None = None
+    test_ip_private_10: str | None = None
 
-    test_device_type: str = Field(default="desktop")
-    test_device_name: str = Field(default="Test Device")
-    test_os_name: str = Field(default="Windows")
-    test_os_version: str = Field(default="10")
-    test_browser_name: str = Field(default="Chrome")
-    test_browser_version: str = Field(default="91.0")
-    test_user_agent: str = Field(default="Mozilla/5.0")
-    test_country: str = Field(default="United States")
-    test_city: str = Field(default="New York")
-    test_latitude: float = Field(default=40.7128)
-    test_longitude: float = Field(default=-74.0060)
-    test_country_alt: str = Field(default="Canada")
+    test_device_type: str | None = None
+    test_device_name: str | None = None
+    test_os_name: str | None = None
+    test_os_version: str | None = None
+    test_browser_name: str | None = None
+    test_browser_version: str | None = None
+    test_user_agent: str | None = None
+    test_country: str | None = None
+    test_city: str | None = None
+    test_latitude: float | None = None
+    test_longitude: float | None = None
+    test_country_alt: str | None = None
 
-    test_entity_id: str = Field(default="entity-123")
-    test_session_id: str = Field(default="session-123")
-    test_token: str = Field(default="token-123")
+    test_entity_id: str | None = None
+    test_session_id: str | None = None
+    test_token: str | None = None
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[".env", ".env.test"],
         env_prefix="",
         case_sensitive=False,
         extra="ignore",       
