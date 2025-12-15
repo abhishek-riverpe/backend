@@ -1,5 +1,6 @@
 import secrets
-from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str
@@ -10,21 +11,18 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     backend_url: str | None = None
 
-    # Zynk API settings - MUST be set via environment variables
     zynk_base_url: str | None = None
     zynk_api_key: str | None = None
     zynk_timeout_s: int = 30
     zynk_default_routing_id: str | None = None
     zynk_webhook_secret: str | None = None 
 
-    # AWS S3 settings
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region: str | None = None
     aws_s3_bucket_name: str | None = None
     aws_s3_bucket_owner: str | None = None
 
-    # Max request size in megabytes (used by custom middleware)
     max_request_size_mb: int = 10
 
  
@@ -32,13 +30,11 @@ class Settings(BaseSettings):
     jwt_allowed_algorithms: list[str] = ["HS256"] 
     access_token_expire_minutes: int = 15
 
-    # SMS/OTP settings
     sms_provider: str = "mock"  
     twilio_account_sid: str | None = None
     twilio_auth_token: str | None = None
     twilio_phone_number: str | None = None
 
-    # Email/SMTP settings
     mail_username: str | None = None
     mail_password: str | None = None
     mail_from: str | None = None
@@ -50,58 +46,46 @@ class Settings(BaseSettings):
     use_credentials: bool = True
     validate_certs: bool = True
 
-    # Password breach check (Have I Been Pwned)
     hibp_enabled: bool = True
     hibp_timeout_s: int = 5
 
 
     inactivity_timeout_minutes: int = 15
 
-    # Concurrent session controls
     max_active_sessions: int = 3  
 
-    # Test-only password constants (for unit tests)
-    # These are safe to commit as they are only used in test environments
-    test_password: str = "TestPass123!"
-    test_password_hashed: str = "@Almamun2.O#@$"  # Mock hashed password for test user
-    test_password_secure: str = "SecurePass123!"
-    test_password_new: str = "NewSecurePass123!"
-    test_password_wrong: str = "WrongPassword123!"
-    test_password_weak: str = "weak"
+    test_password: str = Field(default="TestPass123!")
+    test_password_hashed: str = Field(default="@Almamun2.O#@$")
+    test_password_secure: str = Field(default="SecurePass123!")
+    test_password_new: str = Field(default="NewSecurePass123!")
+    test_password_wrong: str = Field(default="WrongPassword123!")
+    test_password_weak: str = Field(default="weak")
 
-    # Test-only IP addresses (RFC 5737 documentation addresses)
-    # These are safe to commit as they are reserved for documentation/testing
-    # See: https://datatracker.ietf.org/doc/html/rfc5737
-    test_ip_address_1: str = "192.0.2.1"  # RFC 5737 documentation address
-    test_ip_address_2: str = "192.0.2.2"  # RFC 5737 documentation address
-    test_ip_public: str = "192.0.2.10"  # RFC 5737 documentation address
-    test_ip_localhost: str = "127.0.0.1"  # Loopback address (safe exception per security guidelines)
-    test_ip_localhost_v6: str = "::1"  # IPv6 loopback address (safe exception)
-    test_ip_private_192: str = "192.0.2.3"  # RFC 5737 documentation address (192.0.2.0/24 range)
-    # Note: 10.0.0.1 is a private network address (RFC 1918) used only for testing IP filtering logic.
-    # It is not routable on the public internet and is safe for test code.
-    test_ip_private_10: str = "10.0.0.1"  # Private network address (RFC 1918) - test only
+    test_ip_address_1: str = Field(default="192.0.2.1")
+    test_ip_address_2: str = Field(default="192.0.2.2")
+    test_ip_public: str = Field(default="192.0.2.10")
+    test_ip_localhost: str = Field(default="127.0.0.1")
+    test_ip_localhost_v6: str = Field(default="::1")
+    test_ip_private_192: str = Field(default="192.0.2.3")
+    test_ip_private_10: str = Field(default="10.0.0.1")
 
-    # Test-only device and location info
-    test_device_type: str = "desktop"
-    test_device_name: str = "Test Device"
-    test_os_name: str = "Windows"
-    test_os_version: str = "10"
-    test_browser_name: str = "Chrome"
-    test_browser_version: str = "91.0"
-    test_user_agent: str = "Mozilla/5.0"
-    test_country: str = "United States"
-    test_city: str = "New York"
-    test_latitude: float = 40.7128
-    test_longitude: float = -74.0060
-    test_country_alt: str = "Canada"
+    test_device_type: str = Field(default="desktop")
+    test_device_name: str = Field(default="Test Device")
+    test_os_name: str = Field(default="Windows")
+    test_os_version: str = Field(default="10")
+    test_browser_name: str = Field(default="Chrome")
+    test_browser_version: str = Field(default="91.0")
+    test_user_agent: str = Field(default="Mozilla/5.0")
+    test_country: str = Field(default="United States")
+    test_city: str = Field(default="New York")
+    test_latitude: float = Field(default=40.7128)
+    test_longitude: float = Field(default=-74.0060)
+    test_country_alt: str = Field(default="Canada")
 
-    # Test-only entity IDs
-    test_entity_id: str = "entity-123"
-    test_session_id: str = "session-123"
-    test_token: str = "token-123"
+    test_entity_id: str = Field(default="entity-123")
+    test_session_id: str = Field(default="session-123")
+    test_token: str = Field(default="token-123")
 
-    # Pydantic v2 settings config
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="",

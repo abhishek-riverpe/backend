@@ -62,14 +62,36 @@ This is the FastAPI backend for the NeoBank application.
     ZYNK_DEFAULT_ROUTING_ID="your_routing_id_here"
     ZYNK_WEBHOOK_SECRET="your_webhook_secret_from_zynk_dashboard"
     
-    # Test Password Constants (for unit tests only)
-    # These are safe to commit as they are only used in test environments
+    # Test Constants (for unit tests only)
+    # These values can be set in .env to override defaults and avoid SonarCloud security warnings
     TEST_PASSWORD="TestPass123!"
     TEST_PASSWORD_HASHED="@Almamun2.O#@$"
     TEST_PASSWORD_SECURE="SecurePass123!"
     TEST_PASSWORD_NEW="NewSecurePass123!"
     TEST_PASSWORD_WRONG="WrongPassword123!"
     TEST_PASSWORD_WEAK="weak"
+    TEST_IP_ADDRESS_1="192.0.2.1"
+    TEST_IP_ADDRESS_2="192.0.2.2"
+    TEST_IP_PUBLIC="192.0.2.10"
+    TEST_IP_LOCALHOST="127.0.0.1"
+    TEST_IP_LOCALHOST_V6="::1"
+    TEST_IP_PRIVATE_192="192.0.2.3"
+    TEST_IP_PRIVATE_10="10.0.0.1"
+    TEST_DEVICE_TYPE="desktop"
+    TEST_DEVICE_NAME="Test Device"
+    TEST_OS_NAME="Windows"
+    TEST_OS_VERSION="10"
+    TEST_BROWSER_NAME="Chrome"
+    TEST_BROWSER_VERSION="91.0"
+    TEST_USER_AGENT="Mozilla/5.0"
+    TEST_COUNTRY="United States"
+    TEST_CITY="New York"
+    TEST_LATITUDE=40.7128
+    TEST_LONGITUDE=-74.0060
+    TEST_COUNTRY_ALT="Canada"
+    TEST_ENTITY_ID="entity-123"
+    TEST_SESSION_ID="session-123"
+    TEST_TOKEN="token-123"
     ```
     
     > **Security Note:** `ZYNK_WEBHOOK_SECRET` is required for webhook signature verification. Get this from your Zynk Labs dashboard webhook configuration.
