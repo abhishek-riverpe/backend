@@ -45,31 +45,66 @@ def setup_dependency_override(user):
     app.dependency_overrides[get_current_entity] = lambda: user
 
 
+def create_mock_kyc_session(**kwargs):
+    """Helper function to create a mock KYC session with specified attributes"""
+    mock_session = MagicMock()
+    mock_session.status = kwargs.get("status", "NOT_STARTED")
+    mock_session.routing_id = kwargs.get("routing_id", None)
+    mock_session.kyc_link = kwargs.get("kyc_link", None)
+    mock_session.initiated_at = kwargs.get("initiated_at", None)
+    mock_session.completed_at = kwargs.get("completed_at", None)
+    mock_session.rejection_reason = kwargs.get("rejection_reason", None)
+    if "id" in kwargs:
+        mock_session.id = kwargs["id"]
+    return mock_session
+
+
+def setup_mock_prisma_kyc(mock_prisma, kyc_session=None, create_return_value=None):
+    """Helper function to set up mock KYC session in prisma"""
+    mock_prisma.kyc_sessions.find_first = AsyncMock(return_value=kyc_session)
+    if create_return_value is not None:
+        mock_prisma.kyc_sessions.create = AsyncMock(return_value=create_return_value)
+
+
+def assert_success_response(response, expected_status_code=status.HTTP_200_OK):
+    """Helper function to assert successful response"""
+    assert response.status_code == expected_status_code
+    data = response.json()
+    assert data["success"] is True
+    return data
+
+
+def assert_error_response(response, expected_status_code, error_message_contains=None):
+    """Helper function to assert error response"""
+    assert response.status_code == expected_status_code
+    data = response.json()
+    if error_message_contains:
+        assert error_message_contains.lower() in data["detail"]["error"]["message"].lower()
+    return data
+
+
 class TestGetKycStatus:
     @pytest.mark.asyncio
     async def test_get_kyc_status_existing_session(self, client, mock_user):
         """Test getting KYC status with existing session"""
         setup_dependency_override(mock_user)
         
-        mock_kyc_session = MagicMock()
-        mock_kyc_session.status = "INITIATED"
-        mock_kyc_session.routing_id = "routing-123"
-        mock_kyc_session.kyc_link = "https://kyc.example.com/link"
-        mock_kyc_session.initiated_at = datetime.now(timezone.utc)
-        mock_kyc_session.completed_at = None
-        mock_kyc_session.rejection_reason = None
+        mock_kyc_session = create_mock_kyc_session(
+            status="INITIATED",
+            routing_id="routing-123",
+            kyc_link="https://kyc.example.com/link",
+            initiated_at=datetime.now(timezone.utc)
+        )
         
         with patch('app.routers.kyc_router.prisma') as mock_prisma:
-            mock_prisma.kyc_sessions.find_first = AsyncMock(return_value=mock_kyc_session)
+            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
             
             response = client.get(
                 "/api/v1/kyc/status",
                 headers=get_auth_headers(mock_user)
             )
             
-            assert response.status_code == status.HTTP_200_OK
-            data = response.json()
-            assert data["success"] is True
+            data = assert_success_response(response)
             assert data["data"]["status"] == "INITIATED"
             assert data["data"]["routing_id"] == "routing-123"
     
@@ -78,26 +113,17 @@ class TestGetKycStatus:
         """Test getting KYC status when no session exists"""
         setup_dependency_override(mock_user)
         
-        mock_kyc_session = MagicMock()
-        mock_kyc_session.status = "NOT_STARTED"
-        mock_kyc_session.routing_id = None
-        mock_kyc_session.kyc_link = None
-        mock_kyc_session.initiated_at = None
-        mock_kyc_session.completed_at = None
-        mock_kyc_session.rejection_reason = None
+        mock_kyc_session = create_mock_kyc_session(status="NOT_STARTED")
         
         with patch('app.routers.kyc_router.prisma') as mock_prisma:
-            mock_prisma.kyc_sessions.find_first = AsyncMock(return_value=None)
-            mock_prisma.kyc_sessions.create = AsyncMock(return_value=mock_kyc_session)
+            setup_mock_prisma_kyc(mock_prisma, None, create_return_value=mock_kyc_session)
             
             response = client.get(
                 "/api/v1/kyc/status",
                 headers=get_auth_headers(mock_user)
             )
             
-            assert response.status_code == status.HTTP_200_OK
-            data = response.json()
-            assert data["success"] is True
+            data = assert_success_response(response)
             assert data["data"]["status"] == "NOT_STARTED"
     
     @pytest.mark.asyncio
@@ -114,11 +140,10 @@ class TestGetKycLink:
         """Test getting KYC link when status is NOT_STARTED"""
         setup_dependency_override(mock_user)
         
-        mock_kyc_session = MagicMock()
-        mock_kyc_session.id = "session-123"
-        mock_kyc_session.status = "NOT_STARTED"
-        mock_kyc_session.routing_id = None
-        mock_kyc_session.kyc_link = None
+        mock_kyc_session = create_mock_kyc_session(
+            id="session-123",
+            status="NOT_STARTED"
+        )
         
         kyc_data = {
             "kycLink": "https://kyc.example.com/link",
@@ -130,7 +155,7 @@ class TestGetKycLink:
         }
         
         with patch('app.routers.kyc_router.prisma') as mock_prisma:
-            mock_prisma.kyc_sessions.find_first = AsyncMock(return_value=mock_kyc_session)
+            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
             mock_prisma.kyc_sessions.update = AsyncMock(return_value=mock_kyc_session)
             
             with patch('app.routers.kyc_router.get_kyc_link_from_zynk', new_callable=AsyncMock) as mock_get_link:
@@ -144,9 +169,7 @@ class TestGetKycLink:
                         headers=get_auth_headers(mock_user)
                     )
                     
-                    assert response.status_code == status.HTTP_200_OK
-                    data = response.json()
-                    assert data["success"] is True
+                    data = assert_success_response(response)
                     assert data["data"]["kycLink"] == "https://kyc.example.com/link"
     
     @pytest.mark.asyncio
@@ -154,21 +177,20 @@ class TestGetKycLink:
         """Test getting KYC link when already initiated"""
         setup_dependency_override(mock_user)
         
-        mock_kyc_session = MagicMock()
-        mock_kyc_session.status = "INITIATED"
-        mock_kyc_session.kyc_link = "https://kyc.example.com/existing-link"
+        mock_kyc_session = create_mock_kyc_session(
+            status="INITIATED",
+            kyc_link="https://kyc.example.com/existing-link"
+        )
         
         with patch('app.routers.kyc_router.prisma') as mock_prisma:
-            mock_prisma.kyc_sessions.find_first = AsyncMock(return_value=mock_kyc_session)
+            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
             
             response = client.get(
                 "/api/v1/kyc/link",
                 headers=get_auth_headers(mock_user)
             )
             
-            assert response.status_code == status.HTTP_200_OK
-            data = response.json()
-            assert data["success"] is True
+            data = assert_success_response(response)
             assert data["data"]["kycLink"] == "https://kyc.example.com/existing-link"
     
     @pytest.mark.asyncio
@@ -176,21 +198,20 @@ class TestGetKycLink:
         """Test getting KYC link when already approved"""
         setup_dependency_override(mock_user)
         
-        mock_kyc_session = MagicMock()
-        mock_kyc_session.status = "APPROVED"
-        mock_kyc_session.kyc_link = None
+        mock_kyc_session = create_mock_kyc_session(
+            status="APPROVED",
+            kyc_link=None
+        )
         
         with patch('app.routers.kyc_router.prisma') as mock_prisma:
-            mock_prisma.kyc_sessions.find_first = AsyncMock(return_value=mock_kyc_session)
+            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
             
             response = client.get(
                 "/api/v1/kyc/link",
                 headers=get_auth_headers(mock_user)
             )
             
-            assert response.status_code == status.HTTP_200_OK
-            data = response.json()
-            assert data["success"] is True
+            data = assert_success_response(response)
             assert data["data"]["kycStatus"] == "approved"
             assert data["data"]["kycLink"] is None
     
@@ -207,18 +228,17 @@ class TestGetKycLink:
             headers=get_auth_headers(mock_user_no_zynk)
         )
         
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        data = response.json()
-        assert "profile setup" in data["detail"]["error"]["message"].lower()
+        assert_error_response(response, status.HTTP_400_BAD_REQUEST, "profile setup")
     
     @pytest.mark.asyncio
     async def test_get_kyc_link_kyc_already_completed(self, client, mock_user):
         """Test getting KYC link when KYC is already completed"""
         setup_dependency_override(mock_user)
         
-        mock_kyc_session = MagicMock()
-        mock_kyc_session.id = "session-123"
-        mock_kyc_session.status = "NOT_STARTED"
+        mock_kyc_session = create_mock_kyc_session(
+            id="session-123",
+            status="NOT_STARTED"
+        )
         
         kyc_data = {
             "kycCompleted": True,
@@ -226,7 +246,7 @@ class TestGetKycLink:
         }
         
         with patch('app.routers.kyc_router.prisma') as mock_prisma:
-            mock_prisma.kyc_sessions.find_first = AsyncMock(return_value=mock_kyc_session)
+            setup_mock_prisma_kyc(mock_prisma, mock_kyc_session)
             mock_prisma.kyc_sessions.update = AsyncMock(return_value=mock_kyc_session)
             
             with patch('app.routers.kyc_router.get_kyc_link_from_zynk', new_callable=AsyncMock) as mock_get_link:
@@ -237,8 +257,6 @@ class TestGetKycLink:
                     headers=get_auth_headers(mock_user)
                 )
                 
-                assert response.status_code == status.HTTP_200_OK
-                data = response.json()
-                assert data["success"] is True
+                data = assert_success_response(response)
                 assert data["data"]["kycStatus"] == "approved"
 
