@@ -283,11 +283,7 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
         if kyc_status == KycStatusEnum.INITIATED and not kyc_session.initiated_at:
             update_data["initiated_at"] = datetime.now(timezone.utc)
         
-        await prisma.kyc_sessions.update(
-            where={"id": kyc_session.id},
-            data=update_data
-        )
-        
+        # Update KYC status and create funding account atomically if KYC is approved
         if kyc_status == KycStatusEnum.APPROVED:
             try:
                 existing_funding_account = await prisma.funding_accounts.find_first(
@@ -299,13 +295,22 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
                     from ..services.funding_account_service import save_funding_account_to_db, US_FUNDING_JURISDICTION_ID
                     from ..services.email_service import email_service
                     
+                    # Create funding account via Zynk API first (external call)
                     zynk_response_data = await create_funding_account_from_zynk(
                         entity.zynk_entity_id,
                         US_FUNDING_JURISDICTION_ID
                     )
                     
-                    await save_funding_account_to_db(str(entity.id), zynk_response_data)
+                    # Update KYC status and save funding account atomically
+                    async with prisma.tx() as tx:
+                        await tx.kyc_sessions.update(
+                            where={"id": kyc_session.id},
+                            data=update_data
+                        )
+                        
+                        await save_funding_account_to_db(str(entity.id), zynk_response_data, client=tx)
                     
+                    # Send email notification after transaction commits
                     try:
                         account_info = zynk_response_data.get("accountInfo", {})
                         user_name = f"{entity.first_name or ''} {entity.last_name or ''}".strip() or "User"
@@ -321,8 +326,25 @@ async def _update_kyc_status_from_webhook(payload: Dict[str, Any]) -> None:
                         )
                     except Exception:
                         pass
+                else:
+                    # Funding account already exists, just update KYC status
+                    await prisma.kyc_sessions.update(
+                        where={"id": kyc_session.id},
+                        data=update_data
+                    )
             except Exception:
-                pass
+                # If funding account creation fails, still update KYC status
+                # This ensures KYC status is updated even if funding account creation fails
+                await prisma.kyc_sessions.update(
+                    where={"id": kyc_session.id},
+                    data=update_data
+                )
+        else:
+            # For non-APPROVED statuses, just update KYC session
+            await prisma.kyc_sessions.update(
+                where={"id": kyc_session.id},
+                data=update_data
+            )
         
     except Exception:
         raise

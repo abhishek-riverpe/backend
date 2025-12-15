@@ -11,8 +11,20 @@ US_FUNDING_JURISDICTION_ID = "jurisdiction_51607ba7_c0b2_428c_a8c5_75ad94c9ffb1"
 
 async def save_funding_account_to_db(
     entity_id: str,
-    zynk_response_data: Dict[str, Any]
+    zynk_response_data: Dict[str, Any],
+    client=None
 ) -> Any:
+    """
+    Save funding account to database.
+    
+    Args:
+        entity_id: The entity ID
+        zynk_response_data: The response data from Zynk API
+        client: Optional Prisma client (for transactions). If None, uses prisma.
+    
+    Returns:
+        The created or existing funding account
+    """
     account_info = zynk_response_data.get("accountInfo", {})
     
     status_value = zynk_response_data.get("status", "active").lower()
@@ -37,11 +49,13 @@ async def save_funding_account_to_db(
         "payment_rail": account_info.get("payment_rail", ""),
     }
     
+    prisma_client = client if client is not None else prisma
+    
     try:
-        funding_account = await prisma.funding_accounts.create(data=funding_account_data)
+        funding_account = await prisma_client.funding_accounts.create(data=funding_account_data)
         return funding_account
     except UniqueViolationError:
-        existing = await prisma.funding_accounts.find_first(
+        existing = await prisma_client.funding_accounts.find_first(
             where={"entity_id": entity_id, "deleted_at": None}
         )
         if existing:

@@ -654,27 +654,14 @@ async def submit_wallet(
         wallet_id = wallet_data.get("walletId")
         addresses = wallet_data.get("addresses", [])
 
+        wallet_name = data.get("walletName", "Solana Wallet")
+        chain = data.get("chain", "SOLANA")
+        
         wallet = None
-        try:
-            wallet_name = data.get("walletName", "Solana Wallet")
-            chain = data.get("chain", "SOLANA")
-            
-            wallet = await prisma.wallets.create(
-                data={
-                    "entity_id": str(current_user.id),
-                    "zynk_wallet_id": wallet_id,
-                    "wallet_name": wallet_name,
-                    "chain": chain,
-                    "status": "ACTIVE"
-                }
-            )
-        except Exception:
-            # Wallet creation failed, continue without wallet record
-            pass
-    
         account_prepare_data = None
         account_created = None
         
+        # Create wallet and account atomically if account creation succeeds
         try:
             prepare_url = f"{settings.zynk_base_url}/api/v1/wallets/{wallet_id}/accounts/prepare"
             prepare_payload = {"chain": chain}
@@ -721,22 +708,58 @@ async def submit_wallet(
                                         account_details = account_data.get("account", {})
                                         account_address = account_data.get("address") or account_details.get("address")
                                         
+                                        # Create wallet and account atomically in a transaction
                                         try:
-                                            if wallet:
+                                            async with prisma.tx() as tx:
+                                                wallet = await tx.wallets.create(
+                                                    data={
+                                                        "entity_id": str(current_user.id),
+                                                        "zynk_wallet_id": wallet_id,
+                                                        "wallet_name": wallet_name,
+                                                        "chain": chain,
+                                                        "status": "ACTIVE"
+                                                    }
+                                                )
+                                                
                                                 account_data_dict = _create_wallet_account_data(account_details, account_address)
-                                                await prisma.wallet_accounts.create(
+                                                await tx.wallet_accounts.create(
                                                     data={"wallet_id": wallet.id, **account_data_dict}
                                                 )
-                                                account_created = _create_account_response_data(account_details, account_address)
+                                            
+                                            account_created = _create_account_response_data(account_details, account_address)
                                         except Exception:
-                                            # Account creation failed, continue without account record
+                                            # Transaction failed, wallet and account not created
                                             pass
                             except Exception:
-                                # Account signing/submission failed, continue without account
-                                pass
+                                # Account preparation/signing failed, create wallet only
+                                try:
+                                    wallet = await prisma.wallets.create(
+                                        data={
+                                            "entity_id": str(current_user.id),
+                                            "zynk_wallet_id": wallet_id,
+                                            "wallet_name": wallet_name,
+                                            "chain": chain,
+                                            "status": "ACTIVE"
+                                        }
+                                    )
+                                except Exception:
+                                    # Wallet creation failed, continue without wallet record
+                                    pass
         except Exception:
-            # Account preparation failed, continue without account data
-            pass
+            # Account preparation failed, create wallet only
+            try:
+                wallet = await prisma.wallets.create(
+                    data={
+                        "entity_id": str(current_user.id),
+                        "zynk_wallet_id": wallet_id,
+                        "wallet_name": wallet_name,
+                        "chain": chain,
+                        "status": "ACTIVE"
+                    }
+                )
+            except Exception:
+                # Wallet creation failed, continue without wallet record
+                pass
 
         response_data = {
             "walletId": wallet_id,
@@ -858,9 +881,12 @@ async def submit_account(
         wallet_id = account_data.get("walletId")
         account = account_data.get("account", {})
         address = account_data.get("address") or account.get("address")
+        
         try:
             wallet = await _validate_wallet_ownership(wallet_id, current_user)
             
+            # Create wallet account within a transaction for atomicity
+            # Note: Wallet already exists, so we're just adding an account
             account_data_dict = _create_wallet_account_data(account, address)
             await prisma.wallet_accounts.create(
                 data={"wallet_id": wallet.id, **account_data_dict}

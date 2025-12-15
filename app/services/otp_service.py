@@ -106,45 +106,58 @@ class OTPService:
             if not otp_record:
                 return False, "No pending OTP found. Please request a new one.", None
 
-            if datetime.now(timezone.utc) > otp_record.expires_at:
-                await self.prisma.otp_verifications.update(
-                    where={"id": otp_record.id},
-                    data={"status": OtpStatusEnum.EXPIRED}
-                )
+            now = datetime.now(timezone.utc)
+            
+            # Check expiration and max attempts before starting transaction
+            if now > otp_record.expires_at:
+                async with self.prisma.tx() as tx:
+                    await tx.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={"status": OtpStatusEnum.EXPIRED}
+                    )
                 return False, "OTP has expired. Please request a new one.", None
 
             if otp_record.attempts >= otp_record.max_attempts:
-                await self.prisma.otp_verifications.update(
-                    where={"id": otp_record.id},
-                    data={"status": OtpStatusEnum.FAILED}
-                )
-                return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
-
-            updated_attempts = otp_record.attempts + 1
-            await self.prisma.otp_verifications.update(
-                where={"id": otp_record.id},
-                data={"attempts": updated_attempts}
-            )
-
-            if otp_record.otp_code != otp_code:
-                attempts_remaining = otp_record.max_attempts - updated_attempts
-                
-                if attempts_remaining <= 0:
-                    await self.prisma.otp_verifications.update(
+                async with self.prisma.tx() as tx:
+                    await tx.otp_verifications.update(
                         where={"id": otp_record.id},
                         data={"status": OtpStatusEnum.FAILED}
                     )
-                    return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
-                
-                return False, f"Invalid OTP. {attempts_remaining} attempts remaining.", None
+                return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
 
-            await self.prisma.otp_verifications.update(
-                where={"id": otp_record.id},
-                data={
-                    "status": OtpStatusEnum.VERIFIED,
-                    "verified_at": datetime.now(timezone.utc)
-                }
-            )
+            # Update attempts and verify OTP atomically
+            updated_attempts = otp_record.attempts + 1
+            
+            async with self.prisma.tx() as tx:
+                if otp_record.otp_code != otp_code:
+                    # Invalid OTP - update attempts atomically
+                    attempts_remaining = otp_record.max_attempts - updated_attempts
+                    
+                    if attempts_remaining <= 0:
+                        await tx.otp_verifications.update(
+                            where={"id": otp_record.id},
+                            data={
+                                "attempts": updated_attempts,
+                                "status": OtpStatusEnum.FAILED
+                            }
+                        )
+                        return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
+                    
+                    await tx.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={"attempts": updated_attempts}
+                    )
+                    return False, f"Invalid OTP. {attempts_remaining} attempts remaining.", None
+                else:
+                    # Valid OTP - mark as verified atomically
+                    await tx.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={
+                            "attempts": updated_attempts,
+                            "status": OtpStatusEnum.VERIFIED,
+                            "verified_at": now
+                        }
+                    )
 
             return True, "Phone number verified successfully", {
                 "verified": True,
@@ -212,45 +225,58 @@ class OTPService:
             if not otp_record:
                 return False, "No pending OTP found. Please request a new one.", None
 
-            if datetime.now(timezone.utc) > otp_record.expires_at:
-                await self.prisma.otp_verifications.update(
-                    where={"id": otp_record.id},
-                    data={"status": OtpStatusEnum.EXPIRED}
-                )
+            now = datetime.now(timezone.utc)
+            
+            # Check expiration and max attempts before starting transaction
+            if now > otp_record.expires_at:
+                async with self.prisma.tx() as tx:
+                    await tx.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={"status": OtpStatusEnum.EXPIRED}
+                    )
                 return False, "OTP has expired. Please request a new one.", None
 
             if otp_record.attempts >= otp_record.max_attempts:
-                await self.prisma.otp_verifications.update(
-                    where={"id": otp_record.id},
-                    data={"status": OtpStatusEnum.FAILED}
-                )
-                return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
-
-            updated_attempts = otp_record.attempts + 1
-            await self.prisma.otp_verifications.update(
-                where={"id": otp_record.id},
-                data={"attempts": updated_attempts}
-            )
-
-            if otp_record.otp_code != otp_code:
-                attempts_remaining = otp_record.max_attempts - updated_attempts
-                
-                if attempts_remaining <= 0:
-                    await self.prisma.otp_verifications.update(
+                async with self.prisma.tx() as tx:
+                    await tx.otp_verifications.update(
                         where={"id": otp_record.id},
                         data={"status": OtpStatusEnum.FAILED}
                     )
-                    return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
-                
-                return False, f"Invalid OTP. {attempts_remaining} attempts remaining.", None
+                return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
 
-            await self.prisma.otp_verifications.update(
-                where={"id": otp_record.id},
-                data={
-                    "status": OtpStatusEnum.VERIFIED,
-                    "verified_at": datetime.now(timezone.utc)
-                }
-            )
+            # Update attempts and verify OTP atomically
+            updated_attempts = otp_record.attempts + 1
+            
+            async with self.prisma.tx() as tx:
+                if otp_record.otp_code != otp_code:
+                    # Invalid OTP - update attempts atomically
+                    attempts_remaining = otp_record.max_attempts - updated_attempts
+                    
+                    if attempts_remaining <= 0:
+                        await tx.otp_verifications.update(
+                            where={"id": otp_record.id},
+                            data={
+                                "attempts": updated_attempts,
+                                "status": OtpStatusEnum.FAILED
+                            }
+                        )
+                        return False, "Maximum verification attempts exceeded. Please request a new OTP.", None
+                    
+                    await tx.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={"attempts": updated_attempts}
+                    )
+                    return False, f"Invalid OTP. {attempts_remaining} attempts remaining.", None
+                else:
+                    # Valid OTP - mark as verified atomically
+                    await tx.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={
+                            "attempts": updated_attempts,
+                            "status": OtpStatusEnum.VERIFIED,
+                            "verified_at": now
+                        }
+                    )
 
             return True, "Email verified successfully", {
                 "verified": True,
@@ -359,45 +385,58 @@ class OTPService:
             if not otp_record:
                 return False, "No pending password reset request found. Please request a new code.", None
 
-            if datetime.now(timezone.utc) > otp_record.expires_at:
-                await self.prisma.otp_verifications.update(
-                    where={"id": otp_record.id},
-                    data={"status": OtpStatusEnum.EXPIRED}
-                )
+            now = datetime.now(timezone.utc)
+            
+            # Check expiration and max attempts before starting transaction
+            if now > otp_record.expires_at:
+                async with self.prisma.tx() as tx:
+                    await tx.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={"status": OtpStatusEnum.EXPIRED}
+                    )
                 return False, "Password reset code has expired. Please request a new one.", None
 
             if otp_record.attempts >= otp_record.max_attempts:
-                await self.prisma.otp_verifications.update(
-                    where={"id": otp_record.id},
-                    data={"status": OtpStatusEnum.FAILED}
-                )
-                return False, "Maximum attempts exceeded. Please request a new password reset code.", None
-
-            updated_attempts = otp_record.attempts + 1
-            await self.prisma.otp_verifications.update(
-                where={"id": otp_record.id},
-                data={"attempts": updated_attempts}
-                )
-
-            if otp_record.otp_code != otp_code:
-                attempts_remaining = otp_record.max_attempts - updated_attempts
-
-                if attempts_remaining <= 0:
-                    await self.prisma.otp_verifications.update(
+                async with self.prisma.tx() as tx:
+                    await tx.otp_verifications.update(
                         where={"id": otp_record.id},
                         data={"status": OtpStatusEnum.FAILED}
                     )
-                    return False, "Maximum attempts exceeded. Please request a new password reset code.", None
+                return False, "Maximum attempts exceeded. Please request a new password reset code.", None
 
-                return False, f"Invalid code. {attempts_remaining} attempts remaining.", None
+            # Update attempts and verify OTP atomically
+            updated_attempts = otp_record.attempts + 1
+            
+            async with self.prisma.tx() as tx:
+                if otp_record.otp_code != otp_code:
+                    # Invalid OTP - update attempts atomically
+                    attempts_remaining = otp_record.max_attempts - updated_attempts
 
-            await self.prisma.otp_verifications.update(
-                where={"id": otp_record.id},
-                data={
-                    "status": OtpStatusEnum.VERIFIED,
-                    "verified_at": datetime.now(timezone.utc)
-                }
-            )
+                    if attempts_remaining <= 0:
+                        await tx.otp_verifications.update(
+                            where={"id": otp_record.id},
+                            data={
+                                "attempts": updated_attempts,
+                                "status": OtpStatusEnum.FAILED
+                            }
+                        )
+                        return False, "Maximum attempts exceeded. Please request a new password reset code.", None
+
+                    await tx.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={"attempts": updated_attempts}
+                    )
+                    return False, f"Invalid code. {attempts_remaining} attempts remaining.", None
+                else:
+                    # Valid OTP - mark as verified atomically
+                    await tx.otp_verifications.update(
+                        where={"id": otp_record.id},
+                        data={
+                            "attempts": updated_attempts,
+                            "status": OtpStatusEnum.VERIFIED,
+                            "verified_at": now
+                        }
+                    )
 
             return True, "Password reset code verified", {
                 "verified": True,

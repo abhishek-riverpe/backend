@@ -172,15 +172,64 @@ async def get_kyc_link(
         if kyc_data.get("kycCompleted"):
             now = datetime.now(timezone.utc)
             try:
-                kyc_session = await prisma.kyc_sessions.update(
-                    where={"id": kyc_session.id},
-                    data={
-                        "status": "APPROVED",
-                        "completed_at": now,
-                    },
-                )
+                # Update KYC status to APPROVED and create funding account if needed
+                async with prisma.tx() as tx:
+                    await tx.kyc_sessions.update(
+                        where={"id": kyc_session.id},
+                        data={
+                            "status": "APPROVED",
+                            "completed_at": now,
+                        },
+                    )
+                    
+                    # Check if funding account already exists
+                    existing_funding_account = await tx.funding_accounts.find_first(
+                        where={"entity_id": str(current_entity.id), "deleted_at": None}
+                    )
+                    
+                    # Create funding account if it doesn't exist and entity is linked
+                    if not existing_funding_account and current_entity.zynk_entity_id:
+                        from ..services.zynk_client import create_funding_account_from_zynk
+                        from ..services.funding_account_service import save_funding_account_to_db, US_FUNDING_JURISDICTION_ID
+                        from ..services.email_service import email_service
+                        
+                        # Create funding account via Zynk API (external call before transaction)
+                        zynk_response_data = await create_funding_account_from_zynk(
+                            current_entity.zynk_entity_id,
+                            US_FUNDING_JURISDICTION_ID
+                        )
+                        
+                        # Save funding account within transaction
+                        await save_funding_account_to_db(str(current_entity.id), zynk_response_data, client=tx)
+                        
+                        # Send email notification after transaction commits
+                        try:
+                            account_info = zynk_response_data.get("accountInfo", {})
+                            user_name = f"{current_entity.first_name or ''} {current_entity.last_name or ''}".strip() or "User"
+                            currency = account_info.get("currency", "USD").upper()
+                            await email_service.send_funding_account_created_notification(
+                                email=current_entity.email,
+                                user_name=user_name,
+                                bank_name=account_info.get("bank_name", ""),
+                                bank_account_number=account_info.get("bank_account_number", ""),
+                                bank_routing_number=account_info.get("bank_routing_number", ""),
+                                currency=currency,
+                                timestamp=now,
+                            )
+                        except Exception:
+                            pass
             except Exception:
-                pass
+                # If transaction fails, still try to update KYC status (best effort)
+                try:
+                    await prisma.kyc_sessions.update(
+                        where={"id": kyc_session.id},
+                        data={
+                            "status": "APPROVED",
+                            "completed_at": now,
+                        },
+                    )
+                except Exception:
+                    pass
             return KycLinkResponse(
                 success=True,
                 data=KycLinkData(

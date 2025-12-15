@@ -45,8 +45,14 @@ class TestSessionService:
         """Test successful session creation"""
         mock_session = MagicMock()
         mock_session.id = "session-123"
-        mock_prisma.login_sessions.create = AsyncMock(return_value=mock_session)
-        mock_prisma.login_sessions.find_many = AsyncMock(return_value=[])
+        
+        # Mock transaction context manager
+        mock_tx = MagicMock()
+        mock_tx.login_sessions.create = AsyncMock(return_value=mock_session)
+        mock_tx.login_sessions.find_many = AsyncMock(return_value=[])
+        mock_tx.__aenter__ = AsyncMock(return_value=mock_tx)
+        mock_tx.__aexit__ = AsyncMock(return_value=None)
+        mock_prisma.tx = MagicMock(return_value=mock_tx)
         
         result = await session_service.create_session(
             entity_id="entity-123",
@@ -61,15 +67,21 @@ class TestSessionService:
         assert result["id"] == "session-123"
         assert "expires_at" in result
         assert "is_suspicious" in result
-        mock_prisma.login_sessions.create.assert_called_once()
+        mock_tx.login_sessions.create.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_create_session_minimal_info(self, session_service, mock_prisma):
         """Test session creation with minimal information"""
         mock_session = MagicMock()
         mock_session.id = "session-123"
-        mock_prisma.login_sessions.create = AsyncMock(return_value=mock_session)
-        mock_prisma.login_sessions.find_many = AsyncMock(return_value=[])
+        
+        # Mock transaction context manager
+        mock_tx = MagicMock()
+        mock_tx.login_sessions.create = AsyncMock(return_value=mock_session)
+        mock_tx.login_sessions.find_many = AsyncMock(return_value=[])
+        mock_tx.__aenter__ = AsyncMock(return_value=mock_tx)
+        mock_tx.__aexit__ = AsyncMock(return_value=None)
+        mock_prisma.tx = MagicMock(return_value=mock_tx)
         
         result = await session_service.create_session(
             entity_id="entity-123",
@@ -77,19 +89,25 @@ class TestSessionService:
         )
         
         assert result["id"] == "session-123"
-        mock_prisma.login_sessions.create.assert_called_once()
+        mock_tx.login_sessions.create.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_create_session_enforces_concurrent_limit(self, session_service, mock_prisma):
         """Test that concurrent session limit is enforced"""
         # Create existing active sessions
         existing_sessions = [MagicMock(id=f"session-{i}") for i in range(3)]
-        mock_prisma.login_sessions.find_many = AsyncMock(return_value=existing_sessions)
-        mock_prisma.login_sessions.update_many = AsyncMock()
         
         mock_session = MagicMock()
         mock_session.id = "session-new"
-        mock_prisma.login_sessions.create = AsyncMock(return_value=mock_session)
+        
+        # Mock transaction context manager
+        mock_tx = MagicMock()
+        mock_tx.login_sessions.find_many = AsyncMock(return_value=existing_sessions)
+        mock_tx.login_sessions.update_many = AsyncMock()
+        mock_tx.login_sessions.create = AsyncMock(return_value=mock_session)
+        mock_tx.__aenter__ = AsyncMock(return_value=mock_tx)
+        mock_tx.__aexit__ = AsyncMock(return_value=None)
+        mock_prisma.tx = MagicMock(return_value=mock_tx)
         
         with patch('app.services.session_service.settings') as mock_settings:
             mock_settings.max_active_sessions = 3
@@ -100,7 +118,7 @@ class TestSessionService:
             )
             
             # Should revoke old sessions
-            mock_prisma.login_sessions.update_many.assert_called()
+            mock_tx.login_sessions.update_many.assert_called()
     
     @pytest.mark.asyncio
     async def test_update_activity_success(self, session_service, mock_prisma):
@@ -267,8 +285,19 @@ class TestSessionService:
         existing_session.ip_address = "192.168.1.1"
         existing_session.login_at = datetime.now(timezone.utc) - timedelta(hours=1)
         
+        mock_session = MagicMock()
+        mock_session.id = "session-new"
+        
+        # Mock transaction context manager
+        mock_tx = MagicMock()
+        mock_tx.login_sessions.find_many = AsyncMock(return_value=[existing_session])
+        mock_tx.login_sessions.create = AsyncMock(return_value=mock_session)
+        mock_tx.__aenter__ = AsyncMock(return_value=mock_tx)
+        mock_tx.__aexit__ = AsyncMock(return_value=None)
+        mock_prisma.tx = MagicMock(return_value=mock_tx)
+        
+        # Mock _check_suspicious_login to use mock_prisma (not mock_tx)
         mock_prisma.login_sessions.find_many = AsyncMock(return_value=[existing_session])
-        mock_prisma.login_sessions.create = AsyncMock(return_value=MagicMock(id="session-new"))
         
         result = await session_service.create_session(
             entity_id="entity-123",
@@ -282,8 +311,16 @@ class TestSessionService:
     @pytest.mark.asyncio
     async def test_check_suspicious_login_no_history(self, session_service, mock_prisma):
         """Test that login is not suspicious when no previous sessions"""
-        mock_prisma.login_sessions.find_many = AsyncMock(return_value=[])
-        mock_prisma.login_sessions.create = AsyncMock(return_value=MagicMock(id="session-new"))
+        mock_session = MagicMock()
+        mock_session.id = "session-new"
+        
+        # Mock transaction context manager
+        mock_tx = MagicMock()
+        mock_tx.login_sessions.find_many = AsyncMock(return_value=[])
+        mock_tx.login_sessions.create = AsyncMock(return_value=mock_session)
+        mock_tx.__aenter__ = AsyncMock(return_value=mock_tx)
+        mock_tx.__aexit__ = AsyncMock(return_value=None)
+        mock_prisma.tx = MagicMock(return_value=mock_tx)
         
         result = await session_service.create_session(
             entity_id="entity-123",
