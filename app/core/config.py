@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     # Concurrent session controls
     max_active_sessions: int = 3  
 
+    # Test-only password constants (for unit tests)
+    # These are safe to commit as they are only used in test environments
+    test_password: str = "TestPass123!"
+    test_password_hashed: str = "@Almamun2.O#@$"  # Mock hashed password for test user
+    test_password_secure: str = "SecurePass123!"
+    test_password_new: str = "NewSecurePass123!"
+    test_password_wrong: str = "WrongPassword123!"
+    test_password_weak: str = "weak"
+
     # Pydantic v2 settings config
     model_config = SettingsConfigDict(
         env_file=".env",

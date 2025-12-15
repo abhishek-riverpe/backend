@@ -6,15 +6,16 @@ from datetime import datetime, timezone, timedelta
 from ...main import app
 from ...core import auth
 from ...core.database import prisma
+from ...core.config import settings
 
-# Test-only password constants - NOT real production credentials
-# These are used exclusively for unit testing and are safe to commit
-TEST_PASSWORD = "TestPass123!"
-TEST_PASSWORD_HASHED = "@Almamun2.O#@$"  # Mock hashed password for test user
-TEST_PASSWORD_SECURE = "SecurePass123!"
-TEST_PASSWORD_NEW = "NewSecurePass123!"
-TEST_PASSWORD_WRONG = "WrongPassword123!"
-TEST_PASSWORD_WEAK = "weak"
+# Test password constants from config - NOT real production credentials
+# These are loaded from environment variables via settings
+TEST_PASSWORD = settings.test_password
+TEST_PASSWORD_HASHED = settings.test_password_hashed
+TEST_PASSWORD_SECURE = settings.test_password_secure
+TEST_PASSWORD_NEW = settings.test_password_new
+TEST_PASSWORD_WRONG = settings.test_password_wrong
+TEST_PASSWORD_WEAK = settings.test_password_weak
 
 
 @pytest.fixture

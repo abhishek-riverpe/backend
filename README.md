@@ -61,6 +61,15 @@ This is the FastAPI backend for the NeoBank application.
     ZYNK_API_KEY="your_zynk_api_key_here"
     ZYNK_DEFAULT_ROUTING_ID="your_routing_id_here"
     ZYNK_WEBHOOK_SECRET="your_webhook_secret_from_zynk_dashboard"
+    
+    # Test Password Constants (for unit tests only)
+    # These are safe to commit as they are only used in test environments
+    TEST_PASSWORD="TestPass123!"
+    TEST_PASSWORD_HASHED="@Almamun2.O#@$"
+    TEST_PASSWORD_SECURE="SecurePass123!"
+    TEST_PASSWORD_NEW="NewSecurePass123!"
+    TEST_PASSWORD_WRONG="WrongPassword123!"
+    TEST_PASSWORD_WEAK="weak"
     ```
     
     > **Security Note:** `ZYNK_WEBHOOK_SECRET` is required for webhook signature verification. Get this from your Zynk Labs dashboard webhook configuration.
