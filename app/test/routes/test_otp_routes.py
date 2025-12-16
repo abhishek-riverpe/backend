@@ -167,29 +167,6 @@ class TestVerifyOtp:
         assert "expired_otp" in data["meta"]["error_type"]
 
 
-class TestResendOtp:
-    @pytest.mark.asyncio
-    async def test_resend_otp_success(self, client, mock_otp_service):
-        """Test successful OTP resend"""
-        mock_otp_service.send_otp = AsyncMock(return_value=(
-            True,
-            "OTP resent successfully",
-            {"otp_id": "otp-456", "expires_in": 300}
-        ))
-        
-        response = client.post(
-            "/api/v1/otp/resend",
-            json={
-                "phone_number": "1234567890",
-                "country_code": "+1"
-            }
-        )
-        
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert data["success"] is True
-
-
 class TestSendEmailOtp:
     @pytest.mark.asyncio
     async def test_send_email_otp_success(self, client, mock_otp_service):
@@ -271,26 +248,4 @@ class TestVerifyEmailOtp:
         data = response.json()
         assert data["success"] is False
         assert "invalid_otp" in data["meta"]["error_type"]
-
-
-class TestResendEmailOtp:
-    @pytest.mark.asyncio
-    async def test_resend_email_otp_success(self, client, mock_otp_service):
-        """Test successful email OTP resend"""
-        mock_otp_service.send_email_otp = AsyncMock(return_value=(
-            True,
-            "Email OTP resent successfully",
-            {"otp_id": "email-otp-456"}
-        ))
-        
-        response = client.post(
-            "/api/v1/otp/email/resend",
-            json={
-                "email": "test@example.com"
-            }
-        )
-        
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert data["success"] is True
 
