@@ -89,11 +89,6 @@ async def verify_otp(request: OtpVerifyRequest):
         )
 
 
-@router.post("/resend", response_model=OtpSendResponse)
-async def resend_otp(request: OtpSendRequest):
-    return await send_otp(request)
-
-
 @router.post("/email/send", response_model=OtpSendResponse)
 async def send_email_otp(request: EmailOtpSendRequest):
     try:
@@ -164,9 +159,4 @@ async def verify_email_otp(request: EmailOtpVerifyRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to verify OTP. Please try again later."
         )
-
-
-@router.post("/email/resend", response_model=OtpSendResponse)
-async def resend_email_otp(request: EmailOtpSendRequest):
-    return await send_email_otp(request)
 

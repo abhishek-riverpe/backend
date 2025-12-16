@@ -103,7 +103,6 @@ async def get_kyc_status(
     )
 
 
-@router.get("", response_model=KycLinkResponse, status_code=status.HTTP_200_OK)
 @router.get("/link", response_model=KycLinkResponse, status_code=status.HTTP_200_OK)
 @limiter.limit("30/minute")
 async def get_kyc_link(
