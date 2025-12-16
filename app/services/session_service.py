@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from prisma import Prisma
-from prisma.enums import SessionStatusEnum, LoginMethodEnum # type: ignore
+from app.utils.enums import SessionStatusEnum, LoginMethodEnum
 from app.core.config import settings
 
 

@@ -4,11 +4,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str
     jwt_secret: str
-    session_secret: str 
+    session_secret: str
     google_client_id: str | None = None
     google_client_secret: str | None = None
     frontend_url: str = "http://localhost:5173"
     backend_url: str | None = None
+
+    # Auth0 Configuration
+    auth0_domain: str | None = None  # e.g., "your-tenant.auth0.com"
+    auth0_audience: str | None = None  # Your Auth0 API identifier
+    auth0_algorithms: list[str] = ["RS256"]
 
     zynk_base_url: str | None = None
     zynk_api_key: str | None = None

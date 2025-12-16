@@ -1,6 +1,7 @@
 from enum import Enum
 
-class EntityStatusEnum(str, Enum):
+class UserStatusEnum(str, Enum):
+    REGISTERED = "REGISTERED"
     PENDING = "PENDING"
     ACTIVE = "ACTIVE"
     SUSPENDED = "SUSPENDED"
@@ -46,11 +47,13 @@ class SessionStatusEnum(str, Enum):
     LOGGED_OUT = "LOGGED_OUT"
     REVOKED = "REVOKED"
 
+
 class LoginMethodEnum(str, Enum):
     EMAIL_PASSWORD = "EMAIL_PASSWORD"
     GOOGLE_OAUTH = "GOOGLE_OAUTH"
     PHONE_OTP = "PHONE_OTP"
     APPLE_ID = "APPLE_ID"
+
 
 class AccountStatusEnum(str, Enum):
     INACTIVE = "INACTIVE"

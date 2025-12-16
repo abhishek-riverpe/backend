@@ -1,6 +1,6 @@
 import pytest
 from ...utils.enums import (
-    EntityStatusEnum,
+    UserStatusEnum,
     EntityTypeEnum,
     KycStatusEnum,
     WebhookEventCategory,
@@ -13,19 +13,20 @@ from ...utils.enums import (
 )
 
 
-class TestEntityStatusEnum:
-    """Tests for EntityStatusEnum"""
-    
-    def test_entity_status_enum_values(self):
-        """Test EntityStatusEnum has correct values"""
-        assert EntityStatusEnum.PENDING == "PENDING"
-        assert EntityStatusEnum.ACTIVE == "ACTIVE"
-        assert EntityStatusEnum.SUSPENDED == "SUSPENDED"
-        assert EntityStatusEnum.CLOSED == "CLOSED"
-    
-    def test_entity_status_enum_string_inheritance(self):
-        """Test EntityStatusEnum values are strings"""
-        assert isinstance(EntityStatusEnum.PENDING, str)
+class TestUserStatusEnum:
+    """Tests for UserStatusEnum"""
+
+    def test_user_status_enum_values(self):
+        """Test UserStatusEnum has correct values"""
+        assert UserStatusEnum.REGISTERED == "REGISTERED"
+        assert UserStatusEnum.PENDING == "PENDING"
+        assert UserStatusEnum.ACTIVE == "ACTIVE"
+        assert UserStatusEnum.SUSPENDED == "SUSPENDED"
+        assert UserStatusEnum.CLOSED == "CLOSED"
+
+    def test_user_status_enum_string_inheritance(self):
+        """Test UserStatusEnum values are strings"""
+        assert isinstance(UserStatusEnum.PENDING, str)
 
 
 class TestEntityTypeEnum:
@@ -94,7 +95,7 @@ class TestOtpStatusEnum:
 
 class TestSessionStatusEnum:
     """Tests for SessionStatusEnum"""
-    
+
     def test_session_status_enum_values(self):
         """Test SessionStatusEnum has correct values"""
         assert SessionStatusEnum.ACTIVE == "ACTIVE"
@@ -105,7 +106,7 @@ class TestSessionStatusEnum:
 
 class TestLoginMethodEnum:
     """Tests for LoginMethodEnum"""
-    
+
     def test_login_method_enum_values(self):
         """Test LoginMethodEnum has correct values"""
         assert LoginMethodEnum.EMAIL_PASSWORD == "EMAIL_PASSWORD"
@@ -116,7 +117,7 @@ class TestLoginMethodEnum:
 
 class TestAccountStatusEnum:
     """Tests for AccountStatusEnum"""
-    
+
     def test_account_status_enum_values(self):
         """Test AccountStatusEnum has correct values"""
         assert AccountStatusEnum.INACTIVE == "INACTIVE"
